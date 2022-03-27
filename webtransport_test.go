@@ -3,6 +3,7 @@ package webtransport_test
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"io"
 	"math/rand"
@@ -133,4 +134,49 @@ func TestMultipleClients(t *testing.T) {
 		}()
 	}
 	wg.Wait()
+}
+
+func TestStreamResetError(t *testing.T) {
+	tlsConf, certPool := getTLSConf(t)
+	s := webtransport.Server{
+		H3: http3.Server{Server: &http.Server{TLSConfig: tlsConf}},
+	}
+	defer s.Close()
+	const errorCode webtransport.ErrorCode = 127
+	addHandler(t, &s, func(conn *webtransport.Conn) {
+		for {
+			str, err := conn.AcceptStream(context.Background())
+			if err != nil {
+				return
+			}
+			str.CancelRead(errorCode)
+			str.CancelWrite(errorCode)
+		}
+	})
+
+	udpConn := getConn(t)
+	servErr := make(chan error, 1)
+	go func() {
+		servErr <- s.Serve(udpConn)
+	}()
+	// TODO: check err
+
+	d := webtransport.Dialer{
+		// TODO: don't use InsecureSkipVerify
+		TLSClientConf: &tls.Config{ClientCAs: certPool, InsecureSkipVerify: true},
+	}
+	url := fmt.Sprintf("https://localhost:%d/webtransport", udpConn.LocalAddr().(*net.UDPAddr).Port)
+	rsp, conn, err := d.Dial(context.Background(), url, nil)
+	require.NoError(t, err)
+	require.Equal(t, 200, rsp.StatusCode)
+
+	str, err := conn.OpenStream()
+	require.NoError(t, err)
+	_, err = str.Write([]byte("foobar"))
+	require.NoError(t, err)
+	_, err = str.Read([]byte{0})
+	require.Error(t, err)
+	var strErr *webtransport.StreamError
+	require.True(t, errors.As(err, &strErr))
+	require.Equal(t, strErr.ErrorCode, errorCode)
 }

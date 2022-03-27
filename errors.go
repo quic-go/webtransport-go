@@ -2,6 +2,8 @@ package webtransport
 
 import (
 	"errors"
+	"fmt"
+
 	"github.com/lucas-clemente/quic-go"
 )
 
@@ -25,4 +27,18 @@ func httpCodeToWebtransportCode(h quic.StreamErrorCode) (ErrorCode, error) {
 	}
 	shifted := h - firstErrorCode
 	return ErrorCode(shifted - shifted/0x1f), nil
+}
+
+// StreamError is the error that is returned from stream operations (Read, Write) when the stream is canceled.
+type StreamError struct {
+	ErrorCode ErrorCode
+}
+
+func (e *StreamError) Is(target error) bool {
+	_, ok := target.(*StreamError)
+	return ok
+}
+
+func (e *StreamError) Error() string {
+	return fmt.Sprintf("stream canceled with error code %d", e.ErrorCode)
 }
