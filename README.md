@@ -1,0 +1,40 @@
+# webtransport-go
+
+[![PkgGoDev](https://pkg.go.dev/badge/github.com/marten-seemann/webtransport-go)](https://pkg.go.dev/github.com/marten-seemann/webtransport-go)
+[![Code Coverage](https://img.shields.io/codecov/c/github/marten-seemann/webtransport-go/master.svg?style=flat-square)](https://codecov.io/gh/marten-seemann/webtransport-go/)
+
+webtransport-go is an implementation of the WebTransport protocol, based on [quic-go](https://github.com/lucas-clemente/quic-go). It currently implements [draft-02](https://www.ietf.org/archive/id/draft-ietf-webtrans-http3-02.html) of the specification.
+
+## Running a Server
+
+```go
+// Create a new HTTP endpoint /webtransport.
+http.HandleFunc("/webtransport", func(w http.ResponseWriter, r *http.Request) {
+    conn, err := s.Upgrade(w, r)
+    if err != nil {
+        t.Logf("upgrading failed: %s", err)
+        w.WriteHeader(500)
+        return
+    }
+    // Handle the connection. Here goes the application logic.
+})
+
+// create a new webtransport.Server, listening on (UDP) port 443
+s := webtransport.Server{
+    H3: http3.Server{
+        Server: &http.Server{Addr: ":443"},
+    },
+}
+s.ListenAndServeTLS(certFile, keyFile)
+```
+
+Now that the server is running, Chrome can be used to establish a new WebTransport session as described in [this tutorial](https://web.dev/webtransport/).
+
+## Running a Client
+
+```go
+var d webtransport.Dialer
+rsp, conn, err := d.Dial(ctx, "https://example.com/webtransport", nil)
+// err is only nil if rsp.StatusCode is a 2xx
+// Handle the connection. Here goes the application logic.
+```
