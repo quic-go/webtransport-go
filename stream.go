@@ -7,8 +7,6 @@ import (
 	"github.com/lucas-clemente/quic-go"
 )
 
-type ErrorCode uint8
-
 type Stream interface {
 	io.Reader
 	io.Writer
@@ -37,13 +35,11 @@ func (s *stream) Write(b []byte) (int, error) {
 }
 
 func (s *stream) CancelRead(e ErrorCode) {
-	// TODO: calculate correct error code
-	s.str.CancelRead(quic.StreamErrorCode(e))
+	s.str.CancelRead(webtransportCodeToHTTPCode(e))
 }
 
 func (s *stream) CancelWrite(e ErrorCode) {
-	// TODO: calculate correct error code
-	s.str.CancelWrite(quic.StreamErrorCode(e))
+	s.str.CancelWrite(webtransportCodeToHTTPCode(e))
 }
 
 func (s *stream) Close() error {
