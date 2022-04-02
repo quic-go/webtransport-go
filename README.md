@@ -8,23 +8,24 @@ webtransport-go is an implementation of the WebTransport protocol, based on [qui
 ## Running a Server
 
 ```go
-// Create a new HTTP endpoint /webtransport.
-http.HandleFunc("/webtransport", func(w http.ResponseWriter, r *http.Request) {
-    conn, err := s.Upgrade(w, r)
-    if err != nil {
-        t.Logf("upgrading failed: %s", err)
-        w.WriteHeader(500)
-        return
-    }
-    // Handle the connection. Here goes the application logic.
-})
-
 // create a new webtransport.Server, listening on (UDP) port 443
 s := webtransport.Server{
     H3: http3.Server{
         Server: &http.Server{Addr: ":443"},
     },
 }
+
+// Create a new HTTP endpoint /webtransport.
+http.HandleFunc("/webtransport", func(w http.ResponseWriter, r *http.Request) {
+    conn, err := s.Upgrade(w, r)
+    if err != nil {
+        log.Printf("upgrading failed: %s", err)
+        w.WriteHeader(500)
+        return
+    }
+    // Handle the connection. Here goes the application logic.
+})
+
 s.ListenAndServeTLS(certFile, keyFile)
 ```
 
