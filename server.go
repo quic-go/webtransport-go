@@ -124,9 +124,8 @@ func (s *Server) handleUnassociatedStream(str quic.Stream, sessions *sessions) {
 	case <-sessions.created:
 		sessions.conn.addStream(str)
 	case <-t.C:
-		// TODO: use correct error code
-		str.CancelRead(1337)
-		str.CancelWrite(1337)
+		str.CancelRead(WebTransportBufferedStreamRejectedErrorCode)
+		str.CancelWrite(WebTransportBufferedStreamRejectedErrorCode)
 	case <-s.ctx.Done():
 	}
 }

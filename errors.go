@@ -29,6 +29,10 @@ func httpCodeToWebtransportCode(h quic.StreamErrorCode) (ErrorCode, error) {
 	return ErrorCode(shifted - shifted/0x1f), nil
 }
 
+// WebTransportBufferedStreamRejectedErrorCode is the error code of the
+// H3_WEBTRANSPORT_BUFFERED_STREAM_REJECTED error.
+const WebTransportBufferedStreamRejectedErrorCode quic.StreamErrorCode = 0x3994bd84
+
 // StreamError is the error that is returned from stream operations (Read, Write) when the stream is canceled.
 type StreamError struct {
 	ErrorCode ErrorCode

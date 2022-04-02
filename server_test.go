@@ -167,7 +167,7 @@ func TestReorderedUpgradeRequestTimeout(t *testing.T) {
 	_, err = str.Read([]byte{0})
 	var streamErr *quic.StreamError
 	require.ErrorAs(t, err, &streamErr)
-	require.Equal(t, quic.StreamErrorCode(1337), streamErr.ErrorCode)
+	require.Equal(t, webtransport.WebTransportBufferedStreamRejectedErrorCode, streamErr.ErrorCode)
 
 	// Now establish the session. Make sure we don't accept the stream.
 	rsp, err = rt.RoundTrip(newWebTransportRequest(t, fmt.Sprintf("https://localhost:%d/webtransport", port)))
