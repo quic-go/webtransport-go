@@ -91,9 +91,9 @@ func TestSingleClient(t *testing.T) {
 	// TODO: check err
 
 	d := webtransport.Dialer{
-		// TODO: don't use InsecureSkipVerify
-		TLSClientConf: &tls.Config{ClientCAs: certPool, InsecureSkipVerify: true},
+		TLSClientConf: &tls.Config{RootCAs: certPool},
 	}
+	defer d.Close()
 	url := fmt.Sprintf("https://localhost:%d/webtransport", udpConn.LocalAddr().(*net.UDPAddr).Port)
 	rsp, conn, err := d.Dial(context.Background(), url, nil)
 	require.NoError(t, err)
@@ -123,9 +123,9 @@ func TestMultipleClients(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			d := webtransport.Dialer{
-				// TODO: don't use InsecureSkipVerify
-				TLSClientConf: &tls.Config{ClientCAs: certPool, InsecureSkipVerify: true},
+				TLSClientConf: &tls.Config{RootCAs: certPool},
 			}
+			defer d.Close()
 			url := fmt.Sprintf("https://localhost:%d/webtransport", udpConn.LocalAddr().(*net.UDPAddr).Port)
 			rsp, conn, err := d.Dial(context.Background(), url, nil)
 			require.NoError(t, err)
@@ -162,9 +162,9 @@ func TestStreamResetError(t *testing.T) {
 	// TODO: check err
 
 	d := webtransport.Dialer{
-		// TODO: don't use InsecureSkipVerify
-		TLSClientConf: &tls.Config{ClientCAs: certPool, InsecureSkipVerify: true},
+		TLSClientConf: &tls.Config{RootCAs: certPool},
 	}
+	defer d.Close()
 	url := fmt.Sprintf("https://localhost:%d/webtransport", udpConn.LocalAddr().(*net.UDPAddr).Port)
 	rsp, conn, err := d.Dial(context.Background(), url, nil)
 	require.NoError(t, err)

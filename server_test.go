@@ -76,7 +76,7 @@ func createStreamAndWrite(t *testing.T, qconn http3.StreamCreator, sessionID uin
 }
 
 func TestReorderedUpgradeRequest(t *testing.T) {
-	tlsConf, _ := getTLSConf(t)
+	tlsConf, certPool := getTLSConf(t)
 	s := webtransport.Server{
 		H3: http3.Server{
 			Server: &http.Server{TLSConfig: tlsConf},
@@ -93,8 +93,10 @@ func TestReorderedUpgradeRequest(t *testing.T) {
 	port := udpConn.LocalAddr().(*net.UDPAddr).Port
 	go s.Serve(udpConn)
 
-	var rt http3.RoundTripper
-	rt.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
+	rt := http3.RoundTripper{
+		TLSClientConfig: &tls.Config{RootCAs: certPool},
+	}
+	defer rt.Close()
 	// This sends a request, so that we can hijack the connection. Stream ID: 0.
 	req, err := http.NewRequest(http.MethodGet, fmt.Sprintf("https://localhost:%d/", port), nil)
 	require.NoError(t, err)
@@ -132,7 +134,7 @@ func TestReorderedUpgradeRequest(t *testing.T) {
 
 func TestReorderedUpgradeRequestTimeout(t *testing.T) {
 	const timeout = 100 * time.Millisecond
-	tlsConf, _ := getTLSConf(t)
+	tlsConf, certPool := getTLSConf(t)
 	s := webtransport.Server{
 		H3: http3.Server{
 			Server: &http.Server{TLSConfig: tlsConf},
@@ -150,8 +152,10 @@ func TestReorderedUpgradeRequestTimeout(t *testing.T) {
 	port := udpConn.LocalAddr().(*net.UDPAddr).Port
 	go s.Serve(udpConn)
 
-	var rt http3.RoundTripper
-	rt.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
+	rt := http3.RoundTripper{
+		TLSClientConfig: &tls.Config{RootCAs: certPool},
+	}
+	defer rt.Close()
 	// This sends a request, so that we can hijack the connection. Stream ID: 0.
 	req, err := http.NewRequest(http.MethodGet, fmt.Sprintf("https://localhost:%d/", port), nil)
 	require.NoError(t, err)
@@ -192,7 +196,7 @@ func TestReorderedUpgradeRequestTimeout(t *testing.T) {
 
 func TestReorderedMultipleStreams(t *testing.T) {
 	const timeout = 300 * time.Millisecond
-	tlsConf, _ := getTLSConf(t)
+	tlsConf, certPool := getTLSConf(t)
 	s := webtransport.Server{
 		H3: http3.Server{
 			Server: &http.Server{TLSConfig: tlsConf},
@@ -210,8 +214,10 @@ func TestReorderedMultipleStreams(t *testing.T) {
 	port := udpConn.LocalAddr().(*net.UDPAddr).Port
 	go s.Serve(udpConn)
 
-	var rt http3.RoundTripper
-	rt.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
+	rt := http3.RoundTripper{
+		TLSClientConfig: &tls.Config{RootCAs: certPool},
+	}
+	defer rt.Close()
 	// This sends a request, so that we can hijack the connection. Stream ID: 0.
 	req, err := http.NewRequest(http.MethodGet, fmt.Sprintf("https://localhost:%d/", port), nil)
 	require.NoError(t, err)
