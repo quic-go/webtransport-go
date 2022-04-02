@@ -3,10 +3,10 @@ package webtransport
 import (
 	"errors"
 	"fmt"
-	"log"
 	"net"
 	"net/http"
 	"sync"
+	"time"
 
 	"github.com/lucas-clemente/quic-go"
 	"github.com/lucas-clemente/quic-go/http3"
@@ -29,6 +29,18 @@ type streamIDGetter interface {
 
 var _ streamIDGetter = quic.Stream(nil)
 
+// sessionKey is used as a map key in the conns map
+type sessionKey struct {
+	qconn http3.StreamCreator
+	id    sessionID
+}
+
+// sessions is the map value in the conns map
+type sessions struct {
+	created chan struct{} // is closed once the sessions map has been initialized
+	conn    *Conn
+}
+
 type Server struct {
 	H3 http3.Server
 
@@ -36,7 +48,7 @@ type Server struct {
 	initErr  error
 
 	connMx sync.Mutex
-	conns  map[http3.StreamCreator]map[sessionID]*Conn
+	conns  map[sessionKey]*sessions
 }
 
 func (s *Server) initialize() error {
@@ -56,7 +68,7 @@ func (s *Server) init() error {
 	if s.H3.StreamHijacker != nil {
 		return errors.New("StreamHijacker already set")
 	}
-	s.H3.StreamHijacker = func(ft http3.FrameType, qconn quic.Connection, str quic.Stream) (hijacked bool, err error) {
+	s.H3.StreamHijacker = func(ft http3.FrameType, qconn quic.Connection, str quic.Stream) (bool /* hijacked */, error) {
 		if ft != webTransportFrameType {
 			return false, nil
 		}
@@ -66,26 +78,35 @@ func (s *Server) init() error {
 		}
 		s.connMx.Lock()
 		defer s.connMx.Unlock()
-		sessions, ok := s.conns[qconn]
-		if !ok {
-			// TODO: buffer for a while
-			log.Println("received stream for unknown conn")
-			str.CancelRead(1336)
-			str.CancelWrite(1336)
-			return
+		if s.conns == nil {
+			s.conns = make(map[sessionKey]*sessions)
 		}
-		conn, ok := sessions[sessionID(sID)]
+		key := sessionKey{qconn: qconn, id: sessionID(sID)}
+		session, ok := s.conns[key]
 		if !ok {
-			// TODO: buffer stream for a while
-			log.Printf("received stream for unknown session %d", sID)
-			str.CancelRead(1337)
-			str.CancelWrite(1337)
-			return
+			sess := &sessions{created: make(chan struct{})}
+			s.conns[key] = sess
+			go s.handleUnassociatedStream(str, sess)
+		} else {
+			session.conn.addStream(str)
 		}
-		conn.addStream(str)
 		return true, nil
 	}
 	return nil
+}
+
+func (s *Server) handleUnassociatedStream(str quic.Stream, sessions *sessions) {
+	t := time.NewTimer(5 * time.Second)
+	defer t.Stop()
+
+	select {
+	case <-sessions.created:
+		sessions.conn.addStream(str)
+	case <-t.C:
+		// TODO: use correct error code
+		str.CancelRead(1337)
+		str.CancelWrite(1337)
+	}
 }
 
 func (s *Server) Serve(conn net.PacketConn) error {
@@ -107,19 +128,22 @@ func (s *Server) Close() error {
 	return s.H3.Close()
 }
 
-func (s *Server) addConn(qconn http3.StreamCreator, sID sessionID, conn *Conn) {
+func (s *Server) addConn(qconn http3.StreamCreator, id sessionID, conn *Conn) {
 	s.connMx.Lock()
 	defer s.connMx.Unlock()
 
 	if s.conns == nil {
-		s.conns = make(map[http3.StreamCreator]map[sessionID]*Conn)
+		s.conns = make(map[sessionKey]*sessions)
 	}
-	sessions, ok := s.conns[qconn]
-	if !ok {
-		sessions = make(map[sessionID]*Conn)
-		s.conns[qconn] = sessions
+	key := sessionKey{qconn: qconn, id: id}
+	if sess, ok := s.conns[key]; ok {
+		sess.conn = conn
+		close(sess.created)
+		return
 	}
-	sessions[sID] = conn
+	c := make(chan struct{})
+	close(c)
+	s.conns[key] = &sessions{created: c, conn: conn}
 }
 
 func (s *Server) Upgrade(w http.ResponseWriter, r *http.Request) (*Conn, error) {
