@@ -189,3 +189,54 @@ func TestReorderedUpgradeRequestTimeout(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []byte("raboof"), data)
 }
+
+func TestReorderedMultipleStreams(t *testing.T) {
+	const timeout = 300 * time.Millisecond
+	tlsConf, _ := getTLSConf(t)
+	s := webtransport.Server{
+		H3: http3.Server{
+			Server: &http.Server{TLSConfig: tlsConf},
+		},
+		StreamReorderingTimeout: timeout,
+	}
+	defer s.Close()
+	connChan := make(chan *webtransport.Conn)
+	addHandler(t, &s, func(c *webtransport.Conn) {
+		connChan <- c
+	})
+
+	udpConn, err := net.ListenUDP("udp", nil)
+	require.NoError(t, err)
+	port := udpConn.LocalAddr().(*net.UDPAddr).Port
+	go s.Serve(udpConn)
+
+	var rt http3.RoundTripper
+	rt.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
+	// This sends a request, so that we can hijack the connection. Stream ID: 0.
+	req, err := http.NewRequest(http.MethodGet, fmt.Sprintf("https://localhost:%d/", port), nil)
+	require.NoError(t, err)
+	rsp, err := rt.RoundTrip(req)
+	require.NoError(t, err)
+	qconn := rsp.Body.(http3.Hijacker).StreamCreator()
+	start := time.Now()
+	// Open a new stream for a WebTransport session we'll establish later. Stream ID: 4.
+	str1 := createStreamAndWrite(t, qconn, 12, []byte("foobar"))
+
+	// After a while, open another stream.
+	time.Sleep(timeout / 2)
+	// Open a new stream for a WebTransport session we'll establish later. Stream ID: 8.
+	str2 := createStreamAndWrite(t, qconn, 12, []byte("foobar"))
+
+	// Reordering was too long. The stream should now have been reset by the server.
+	_, err = str1.Read([]byte{0})
+	var streamErr *quic.StreamError
+	require.ErrorAs(t, err, &streamErr)
+	require.Equal(t, webtransport.WebTransportBufferedStreamRejectedErrorCode, streamErr.ErrorCode)
+	_, err = str2.Read([]byte{0})
+	require.ErrorAs(t, err, &streamErr)
+	require.Equal(t, webtransport.WebTransportBufferedStreamRejectedErrorCode, streamErr.ErrorCode)
+
+	took := time.Since(start)
+	require.GreaterOrEqual(t, took, timeout)
+	require.Less(t, took, timeout*5/4)
+}

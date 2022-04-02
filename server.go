@@ -36,9 +36,10 @@ type sessionKey struct {
 	id    sessionID
 }
 
-// sessions is the map value in the conns map
-type sessions struct {
-	created chan struct{} // is closed once the sessions map has been initialized
+// session is the map value in the conns map
+type session struct {
+	created chan struct{} // is closed once the session map has been initialized
+	deleted bool
 	conn    *Conn
 }
 
@@ -60,7 +61,7 @@ type Server struct {
 	initErr  error
 
 	connMx sync.Mutex
-	conns  map[sessionKey]*sessions
+	conns  map[sessionKey]*session
 }
 
 func (s *Server) initialize() error {
@@ -92,27 +93,29 @@ func (s *Server) init() error {
 		s.connMx.Lock()
 		defer s.connMx.Unlock()
 		if s.conns == nil {
-			s.conns = make(map[sessionKey]*sessions)
+			s.conns = make(map[sessionKey]*session)
 		}
 		key := sessionKey{qconn: qconn, id: sessionID(sID)}
-		session, ok := s.conns[key]
-		if !ok {
-			sess := &sessions{created: make(chan struct{})}
-			s.conns[key] = sess
-			s.refCount.Add(1)
-			go func() {
-				defer s.refCount.Done()
-				s.handleUnassociatedStream(str, sess)
-			}()
-		} else {
-			session.conn.addStream(str)
+		sess, ok := s.conns[key]
+		if ok && sess.conn != nil {
+			sess.conn.addStream(str)
+			return true, nil
 		}
+		if !ok {
+			sess = &session{created: make(chan struct{})}
+			s.conns[key] = sess
+		}
+		s.refCount.Add(1)
+		go func() {
+			defer s.refCount.Done()
+			s.handleUnassociatedStream(str, sess, key)
+		}()
 		return true, nil
 	}
 	return nil
 }
 
-func (s *Server) handleUnassociatedStream(str quic.Stream, sessions *sessions) {
+func (s *Server) handleUnassociatedStream(str quic.Stream, session *session, key sessionKey) {
 	timeout := s.StreamReorderingTimeout
 	if timeout == 0 {
 		timeout = 5 * time.Second
@@ -120,12 +123,27 @@ func (s *Server) handleUnassociatedStream(str quic.Stream, sessions *sessions) {
 	t := time.NewTimer(timeout)
 	defer t.Stop()
 
+	// When multiple streams are waiting for the same session to be established,
+	// the timeout is calculated from the first stream we received.
+	// As soon as that stream times out, all other streams are reset as well.
 	select {
-	case <-sessions.created:
-		sessions.conn.addStream(str)
+	case <-session.created:
+		s.connMx.Lock()
+		defer s.connMx.Unlock()
+		if session.deleted {
+			str.CancelRead(WebTransportBufferedStreamRejectedErrorCode)
+			str.CancelWrite(WebTransportBufferedStreamRejectedErrorCode)
+			return
+		}
+		session.conn.addStream(str)
 	case <-t.C:
 		str.CancelRead(WebTransportBufferedStreamRejectedErrorCode)
 		str.CancelWrite(WebTransportBufferedStreamRejectedErrorCode)
+		s.connMx.Lock()
+		delete(s.conns, key)
+		session.deleted = true
+		close(session.created)
+		s.connMx.Unlock()
 	case <-s.ctx.Done():
 	}
 }
@@ -157,7 +175,7 @@ func (s *Server) addConn(qconn http3.StreamCreator, id sessionID, conn *Conn) {
 	defer s.connMx.Unlock()
 
 	if s.conns == nil {
-		s.conns = make(map[sessionKey]*sessions)
+		s.conns = make(map[sessionKey]*session)
 	}
 	key := sessionKey{qconn: qconn, id: id}
 	if sess, ok := s.conns[key]; ok {
@@ -167,7 +185,7 @@ func (s *Server) addConn(qconn http3.StreamCreator, id sessionID, conn *Conn) {
 	}
 	c := make(chan struct{})
 	close(c)
-	s.conns[key] = &sessions{created: c, conn: conn}
+	s.conns[key] = &session{created: c, conn: conn}
 }
 
 func (s *Server) Upgrade(w http.ResponseWriter, r *http.Request) (*Conn, error) {
