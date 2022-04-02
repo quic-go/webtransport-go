@@ -9,6 +9,8 @@ import (
 	"math/rand"
 	"net"
 	"net/http"
+	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -179,4 +181,75 @@ func TestStreamResetError(t *testing.T) {
 	var strErr *webtransport.StreamError
 	require.True(t, errors.As(err, &strErr))
 	require.Equal(t, strErr.ErrorCode, errorCode)
+}
+
+func TestCheckOrigin(t *testing.T) {
+	type tc struct {
+		Name        string
+		CheckOrigin func(*http.Request) bool
+		Origin      string
+		Result      bool
+	}
+
+	tcs := []tc{
+		{
+			Name:   "using default CheckOrigin, no Origin header",
+			Result: true,
+		},
+		{
+			Name:   "using default CheckOrigin, Origin: localhost",
+			Origin: "https://localhost:%port%",
+			Result: true,
+		},
+		{
+			Name:   "using default CheckOrigin, Origin: google.com",
+			Origin: "google.com",
+			Result: false,
+		},
+		{
+			Name:        "using custom CheckOrigin, always correct",
+			CheckOrigin: func(r *http.Request) bool { return true },
+			Origin:      "google.com",
+			Result:      true,
+		},
+		{
+			Name:        "using custom CheckOrigin, always incorrect",
+			CheckOrigin: func(r *http.Request) bool { return false },
+			Origin:      "google.com",
+			Result:      false,
+		},
+	}
+
+	tlsConf, certPool := getTLSConf(t)
+	for _, tc := range tcs {
+		tc := tc
+		t.Run(tc.Name, func(t *testing.T) {
+			s := webtransport.Server{
+				H3:          http3.Server{Server: &http.Server{TLSConfig: tlsConf}},
+				CheckOrigin: tc.CheckOrigin,
+			}
+			defer s.Close()
+			addHandler(t, &s, newEchoHandler(t))
+
+			udpConn := getConn(t)
+			go s.Serve(udpConn)
+
+			d := webtransport.Dialer{
+				TLSClientConf: &tls.Config{RootCAs: certPool},
+			}
+			defer d.Close()
+			port := udpConn.LocalAddr().(*net.UDPAddr).Port
+			url := fmt.Sprintf("https://localhost:%d/webtransport", port)
+			hdr := make(http.Header)
+			hdr.Add("Origin", strings.ReplaceAll(tc.Origin, "%port%", strconv.Itoa(port)))
+			rsp, conn, err := d.Dial(context.Background(), url, hdr)
+			if tc.Result {
+				require.NoError(t, err)
+				require.Equal(t, 200, rsp.StatusCode)
+				defer conn.Close()
+			} else {
+				require.Equal(t, 404, rsp.StatusCode)
+			}
+		})
+	}
 }

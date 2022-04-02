@@ -51,7 +51,6 @@ func newWebTransportRequest(t *testing.T, addr string) *http.Request {
 	require.NoError(t, err)
 	hdr := make(http.Header)
 	hdr.Add("Sec-Webtransport-Http3-Draft02", "1")
-	hdr.Add("Origin", "webtransport-go test")
 	return &http.Request{
 		Method: http.MethodConnect,
 		Header: hdr,

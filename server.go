@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/url"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/lucas-clemente/quic-go"
 	"github.com/lucas-clemente/quic-go/http3"
@@ -53,6 +55,12 @@ type Server struct {
 	// Defaults to 5 seconds.
 	StreamReorderingTimeout time.Duration
 
+	// CheckOrigin is used to validate the request origin, thereby preventing cross-site request forgery.
+	// CheckOrigin returns true if the request Origin header is acceptable.
+	// If unset, a safe default is used: If the Origin header is set, it is checked that it
+	// matches the request's Host header.
+	CheckOrigin func(r *http.Request) bool
+
 	ctx       context.Context // is closed when Close is called
 	ctxCancel context.CancelFunc
 	refCount  sync.WaitGroup
@@ -73,6 +81,13 @@ func (s *Server) initialize() error {
 
 func (s *Server) init() error {
 	s.ctx, s.ctxCancel = context.WithCancel(context.Background())
+	if s.StreamReorderingTimeout == 0 {
+		s.StreamReorderingTimeout = 5 * time.Second
+	}
+	if s.CheckOrigin == nil {
+		s.CheckOrigin = checkSameOrigin
+	}
+
 	// configure the http3.Server
 	if s.H3.AdditionalSettings == nil {
 		s.H3.AdditionalSettings = make(map[uint64]uint64)
@@ -117,11 +132,7 @@ func (s *Server) init() error {
 }
 
 func (s *Server) handleUnassociatedStream(str quic.Stream, session *session, key sessionKey) {
-	timeout := s.StreamReorderingTimeout
-	if timeout == 0 {
-		timeout = 5 * time.Second
-	}
-	t := time.NewTimer(timeout)
+	t := time.NewTimer(s.StreamReorderingTimeout)
 	defer t.Stop()
 
 	// When multiple streams are waiting for the same session to be established,
@@ -194,7 +205,9 @@ func (s *Server) Upgrade(w http.ResponseWriter, r *http.Request) (*Conn, error) 
 	if v, ok := r.Header[webTransportDraftOfferHeaderKey]; !ok || len(v) != 1 || v[0] != "1" {
 		return nil, fmt.Errorf("missing or invalid %s header", webTransportDraftOfferHeaderKey)
 	}
-	// TODO: verify origin
+	if !s.CheckOrigin(r) {
+		return nil, errors.New("webtransport: request origin not allowed")
+	}
 	w.Header().Add(webTransportDraftHeaderKey, webTransportDraftHeaderValue)
 	w.WriteHeader(200)
 	w.(http.Flusher).Flush()
@@ -214,4 +227,40 @@ func (s *Server) Upgrade(w http.ResponseWriter, r *http.Request) (*Conn, error) 
 
 	s.addConn(qconn, sID, c)
 	return c, nil
+}
+
+// copied from https://github.com/gorilla/websocket
+func checkSameOrigin(r *http.Request) bool {
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		return true
+	}
+	u, err := url.Parse(origin)
+	if err != nil {
+		return false
+	}
+	return equalASCIIFold(u.Host, r.Host)
+}
+
+// copied from https://github.com/gorilla/websocket
+func equalASCIIFold(s, t string) bool {
+	for s != "" && t != "" {
+		sr, size := utf8.DecodeRuneInString(s)
+		s = s[size:]
+		tr, size := utf8.DecodeRuneInString(t)
+		t = t[size:]
+		if sr == tr {
+			continue
+		}
+		if 'A' <= sr && sr <= 'Z' {
+			sr = sr + 'a' - 'A'
+		}
+		if 'A' <= tr && tr <= 'Z' {
+			tr = tr + 'a' - 'A'
+		}
+		if sr != tr {
+			return false
+		}
+	}
+	return s == t
 }

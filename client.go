@@ -39,7 +39,7 @@ type Dialer struct {
 	streamQueue      []queueEntry
 }
 
-func (d *Dialer) Dial(ctx context.Context, urlStr string, requestHeader http.Header) (*http.Response, *Conn, error) {
+func (d *Dialer) Dial(ctx context.Context, urlStr string, reqHdr http.Header) (*http.Response, *Conn, error) {
 	d.initOnce.Do(func() {
 		d.ctx, d.ctxCancel = context.WithCancel(context.Background())
 		d.conns = make(map[http3.StreamCreator]map[sessionID]*Conn)
@@ -83,14 +83,13 @@ func (d *Dialer) Dial(ctx context.Context, urlStr string, requestHeader http.Hea
 	if err != nil {
 		return nil, nil, err
 	}
-	if requestHeader == nil {
-		requestHeader = http.Header{}
+	if reqHdr == nil {
+		reqHdr = http.Header{}
 	}
-	requestHeader.Add(webTransportDraftOfferHeaderKey, "1")
-	requestHeader.Add("Origin", "webtransport-go client")
+	reqHdr.Add(webTransportDraftOfferHeaderKey, "1")
 	req := &http.Request{
 		Method: http.MethodConnect,
-		Header: requestHeader,
+		Header: reqHdr,
 		Proto:  "webtransport",
 		Host:   u.Host,
 		URL:    u,
