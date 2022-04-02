@@ -1,6 +1,7 @@
 package webtransport
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net"
@@ -51,6 +52,10 @@ type Server struct {
 	// Defaults to 5 seconds.
 	StreamReorderingTimeout time.Duration
 
+	ctx       context.Context // is closed when Close is called
+	ctxCancel context.CancelFunc
+	refCount  sync.WaitGroup
+
 	initOnce sync.Once
 	initErr  error
 
@@ -66,6 +71,7 @@ func (s *Server) initialize() error {
 }
 
 func (s *Server) init() error {
+	s.ctx, s.ctxCancel = context.WithCancel(context.Background())
 	// configure the http3.Server
 	if s.H3.AdditionalSettings == nil {
 		s.H3.AdditionalSettings = make(map[uint64]uint64)
@@ -93,7 +99,11 @@ func (s *Server) init() error {
 		if !ok {
 			sess := &sessions{created: make(chan struct{})}
 			s.conns[key] = sess
-			go s.handleUnassociatedStream(str, sess)
+			s.refCount.Add(1)
+			go func() {
+				defer s.refCount.Done()
+				s.handleUnassociatedStream(str, sess)
+			}()
 		} else {
 			session.conn.addStream(str)
 		}
@@ -117,6 +127,7 @@ func (s *Server) handleUnassociatedStream(str quic.Stream, sessions *sessions) {
 		// TODO: use correct error code
 		str.CancelRead(1337)
 		str.CancelWrite(1337)
+	case <-s.ctx.Done():
 	}
 }
 
@@ -136,7 +147,10 @@ func (s *Server) ListenAndServeTLS(certFile, keyFile string) error {
 }
 
 func (s *Server) Close() error {
-	return s.H3.Close()
+	s.ctxCancel()
+	err := s.H3.Close()
+	s.refCount.Wait()
+	return err
 }
 
 func (s *Server) addConn(qconn http3.StreamCreator, id sessionID, conn *Conn) {

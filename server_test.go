@@ -82,6 +82,7 @@ func TestReorderedUpgradeRequest(t *testing.T) {
 			Server: &http.Server{TLSConfig: tlsConf},
 		},
 	}
+	defer s.Close()
 	connChan := make(chan *webtransport.Conn)
 	addHandler(t, &s, func(c *webtransport.Conn) {
 		connChan <- c
@@ -90,9 +91,7 @@ func TestReorderedUpgradeRequest(t *testing.T) {
 	udpConn, err := net.ListenUDP("udp", nil)
 	require.NoError(t, err)
 	port := udpConn.LocalAddr().(*net.UDPAddr).Port
-	go func() {
-		require.NoError(t, s.Serve(udpConn))
-	}()
+	go s.Serve(udpConn)
 
 	var rt http3.RoundTripper
 	rt.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
@@ -140,6 +139,7 @@ func TestReorderedUpgradeRequestTimeout(t *testing.T) {
 		},
 		StreamReorderingTimeout: timeout,
 	}
+	defer s.Close()
 	connChan := make(chan *webtransport.Conn)
 	addHandler(t, &s, func(c *webtransport.Conn) {
 		connChan <- c
@@ -148,9 +148,7 @@ func TestReorderedUpgradeRequestTimeout(t *testing.T) {
 	udpConn, err := net.ListenUDP("udp", nil)
 	require.NoError(t, err)
 	port := udpConn.LocalAddr().(*net.UDPAddr).Port
-	go func() {
-		require.NoError(t, s.Serve(udpConn))
-	}()
+	go s.Serve(udpConn)
 
 	var rt http3.RoundTripper
 	rt.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
