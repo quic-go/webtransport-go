@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"testing"
 	"time"
 
@@ -21,6 +22,13 @@ import (
 
 	"github.com/stretchr/testify/require"
 )
+
+func scaleDuration(d time.Duration) time.Duration {
+	if os.Getenv("CI") != "" {
+		return 5 * d
+	}
+	return d
+}
 
 func TestUpgradeFailures(t *testing.T) {
 	var s webtransport.Server
@@ -106,7 +114,7 @@ func TestReorderedUpgradeRequest(t *testing.T) {
 	createStreamAndWrite(t, qconn, 8, []byte("foobar"))
 
 	// make sure this request actually arrives first
-	time.Sleep(100 * time.Millisecond)
+	time.Sleep(scaleDuration(50 * time.Millisecond))
 
 	rsp, err = rt.RoundTrip(newWebTransportRequest(t, fmt.Sprintf("https://localhost:%d/webtransport", port)))
 	require.NoError(t, err)
@@ -132,7 +140,7 @@ func TestReorderedUpgradeRequest(t *testing.T) {
 }
 
 func TestReorderedUpgradeRequestTimeout(t *testing.T) {
-	const timeout = 100 * time.Millisecond
+	timeout := scaleDuration(100 * time.Millisecond)
 	tlsConf, certPool := getTLSConf(t)
 	s := webtransport.Server{
 		H3: http3.Server{
@@ -194,7 +202,7 @@ func TestReorderedUpgradeRequestTimeout(t *testing.T) {
 }
 
 func TestReorderedMultipleStreams(t *testing.T) {
-	const timeout = 300 * time.Millisecond
+	timeout := scaleDuration(150 * time.Millisecond)
 	tlsConf, certPool := getTLSConf(t)
 	s := webtransport.Server{
 		H3: http3.Server{
