@@ -44,6 +44,13 @@ type sessions struct {
 type Server struct {
 	H3 http3.Server
 
+	// StreamReorderingTime is the time an incoming WebTransport stream that cannot be associated
+	// with a session is buffered.
+	// This can happen if the CONNECT request (that creates a new session) is reordered, and arrives
+	// after the first WebTransport stream(s) for that session.
+	// Defaults to 5 seconds.
+	StreamReorderingTimeout time.Duration
+
 	initOnce sync.Once
 	initErr  error
 
@@ -96,7 +103,11 @@ func (s *Server) init() error {
 }
 
 func (s *Server) handleUnassociatedStream(str quic.Stream, sessions *sessions) {
-	t := time.NewTimer(5 * time.Second)
+	timeout := s.StreamReorderingTimeout
+	if timeout == 0 {
+		timeout = 5 * time.Second
+	}
+	t := time.NewTimer(timeout)
 	defer t.Stop()
 
 	select {
