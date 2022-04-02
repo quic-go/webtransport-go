@@ -225,18 +225,27 @@ func TestReorderedMultipleStreams(t *testing.T) {
 	// After a while, open another stream.
 	time.Sleep(timeout / 2)
 	// Open a new stream for a WebTransport session we'll establish later. Stream ID: 8.
-	str2 := createStreamAndWrite(t, qconn, 12, []byte("foobar"))
+	createStreamAndWrite(t, qconn, 12, []byte("raboof"))
 
 	// Reordering was too long. The stream should now have been reset by the server.
 	_, err = str1.Read([]byte{0})
 	var streamErr *quic.StreamError
 	require.ErrorAs(t, err, &streamErr)
 	require.Equal(t, webtransport.WebTransportBufferedStreamRejectedErrorCode, streamErr.ErrorCode)
-	_, err = str2.Read([]byte{0})
-	require.ErrorAs(t, err, &streamErr)
-	require.Equal(t, webtransport.WebTransportBufferedStreamRejectedErrorCode, streamErr.ErrorCode)
-
 	took := time.Since(start)
 	require.GreaterOrEqual(t, took, timeout)
 	require.Less(t, took, timeout*5/4)
+
+	// Now establish the session. Make sure we don't accept the stream.
+	rsp, err = rt.RoundTrip(newWebTransportRequest(t, fmt.Sprintf("https://localhost:%d/webtransport", port)))
+	require.NoError(t, err)
+	require.Equal(t, 200, rsp.StatusCode)
+	sconn := <-connChan
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	sstr, err := sconn.AcceptStream(ctx)
+	require.NoError(t, err)
+	data, err := io.ReadAll(sstr)
+	require.NoError(t, err)
+	require.Equal(t, []byte("raboof"), data)
 }

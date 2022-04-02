@@ -39,7 +39,7 @@ type sessionKey struct {
 // session is the map value in the conns map
 type session struct {
 	created chan struct{} // is closed once the session map has been initialized
-	deleted bool
+	counter int           // how many streams are waiting for this session to be established
 	conn    *Conn
 }
 
@@ -105,6 +105,7 @@ func (s *Server) init() error {
 			sess = &session{created: make(chan struct{})}
 			s.conns[key] = sess
 		}
+		sess.counter++
 		s.refCount.Add(1)
 		go func() {
 			defer s.refCount.Done()
@@ -124,28 +125,23 @@ func (s *Server) handleUnassociatedStream(str quic.Stream, session *session, key
 	defer t.Stop()
 
 	// When multiple streams are waiting for the same session to be established,
-	// the timeout is calculated from the first stream we received.
-	// As soon as that stream times out, all other streams are reset as well.
+	// the timeout is calculated for every stream separately.
 	select {
 	case <-session.created:
-		s.connMx.Lock()
-		defer s.connMx.Unlock()
-		if session.deleted {
-			str.CancelRead(WebTransportBufferedStreamRejectedErrorCode)
-			str.CancelWrite(WebTransportBufferedStreamRejectedErrorCode)
-			return
-		}
 		session.conn.addStream(str)
 	case <-t.C:
 		str.CancelRead(WebTransportBufferedStreamRejectedErrorCode)
 		str.CancelWrite(WebTransportBufferedStreamRejectedErrorCode)
-		s.connMx.Lock()
-		delete(s.conns, key)
-		session.deleted = true
-		close(session.created)
-		s.connMx.Unlock()
 	case <-s.ctx.Done():
 	}
+	s.connMx.Lock()
+	session.counter--
+	// Once no more streams are waiting for this session to be established,
+	// and this session is still outstanding, delete it from the map.
+	if session.counter == 0 && session.conn == nil {
+		delete(s.conns, key)
+	}
+	s.connMx.Unlock()
 }
 
 func (s *Server) Serve(conn net.PacketConn) error {
