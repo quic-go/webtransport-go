@@ -23,7 +23,13 @@ type queueEntry struct {
 }
 
 type Dialer struct {
+	// TLSClientConfig specifies the TLS configuration to use.
+	// If nil, the default configuration is used.
 	TLSClientConf *tls.Config
+
+	// DialFunc specifies an optional dial function for creating QUIC connections.
+	// If DialFunc is nil, quic.DialAddrEarlyContext will be used.
+	DialFunc func(ctx context.Context, addr string, tlsCfg *tls.Config, cfg *quic.Config) (quic.EarlyConnection, error)
 
 	ctx       context.Context
 	ctxCancel context.CancelFunc
@@ -47,6 +53,7 @@ func (d *Dialer) Dial(ctx context.Context, urlStr string, reqHdr http.Header) (*
 		d.roundTripper = &http3.RoundTripper{
 			TLSClientConfig:    d.TLSClientConf,
 			QuicConfig:         &quic.Config{MaxIncomingStreams: 100, MaxIncomingUniStreams: 100},
+			Dial:               d.DialFunc,
 			EnableDatagrams:    true,
 			AdditionalSettings: map[uint64]uint64{settingsEnableWebtransport: 1},
 			StreamHijacker: func(ft http3.FrameType, conn quic.Connection, str quic.Stream) (hijacked bool, err error) {
