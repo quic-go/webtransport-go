@@ -32,19 +32,6 @@ type streamIDGetter interface {
 
 var _ streamIDGetter = quic.Stream(nil)
 
-// sessionKey is used as a map key in the conns map
-type sessionKey struct {
-	qconn http3.StreamCreator
-	id    sessionID
-}
-
-// session is the map value in the conns map
-type session struct {
-	created chan struct{} // is closed once the session map has been initialized
-	counter int           // how many streams are waiting for this session to be established
-	conn    *Conn
-}
-
 type Server struct {
 	H3 http3.Server
 
@@ -68,8 +55,7 @@ type Server struct {
 	initOnce sync.Once
 	initErr  error
 
-	connMx sync.Mutex
-	conns  map[sessionKey]*session
+	conns *sessionManager
 }
 
 func (s *Server) initialize() error {
@@ -81,9 +67,11 @@ func (s *Server) initialize() error {
 
 func (s *Server) init() error {
 	s.ctx, s.ctxCancel = context.WithCancel(context.Background())
-	if s.StreamReorderingTimeout == 0 {
-		s.StreamReorderingTimeout = 5 * time.Second
+	timeout := s.StreamReorderingTimeout
+	if timeout == 0 {
+		timeout = 5 * time.Second
 	}
+	s.conns = newSessionManager(timeout)
 	if s.CheckOrigin == nil {
 		s.CheckOrigin = checkSameOrigin
 	}
@@ -101,58 +89,14 @@ func (s *Server) init() error {
 		if ft != webTransportFrameType {
 			return false, nil
 		}
-		sID, err := quicvarint.Read(quicvarint.NewReader(str))
+		id, err := quicvarint.Read(quicvarint.NewReader(str))
 		if err != nil {
 			return false, err
 		}
-		s.connMx.Lock()
-		defer s.connMx.Unlock()
-		if s.conns == nil {
-			s.conns = make(map[sessionKey]*session)
-		}
-		key := sessionKey{qconn: qconn, id: sessionID(sID)}
-		sess, ok := s.conns[key]
-		if ok && sess.conn != nil {
-			sess.conn.addStream(str)
-			return true, nil
-		}
-		if !ok {
-			sess = &session{created: make(chan struct{})}
-			s.conns[key] = sess
-		}
-		sess.counter++
-		s.refCount.Add(1)
-		go func() {
-			defer s.refCount.Done()
-			s.handleUnassociatedStream(str, sess, key)
-		}()
+		s.conns.AddStream(qconn, str, sessionID(id))
 		return true, nil
 	}
 	return nil
-}
-
-func (s *Server) handleUnassociatedStream(str quic.Stream, session *session, key sessionKey) {
-	t := time.NewTimer(s.StreamReorderingTimeout)
-	defer t.Stop()
-
-	// When multiple streams are waiting for the same session to be established,
-	// the timeout is calculated for every stream separately.
-	select {
-	case <-session.created:
-		session.conn.addStream(str)
-	case <-t.C:
-		str.CancelRead(WebTransportBufferedStreamRejectedErrorCode)
-		str.CancelWrite(WebTransportBufferedStreamRejectedErrorCode)
-	case <-s.ctx.Done():
-	}
-	s.connMx.Lock()
-	session.counter--
-	// Once no more streams are waiting for this session to be established,
-	// and this session is still outstanding, delete it from the map.
-	if session.counter == 0 && session.conn == nil {
-		delete(s.conns, key)
-	}
-	s.connMx.Unlock()
 }
 
 func (s *Server) Serve(conn net.PacketConn) error {
@@ -172,27 +116,10 @@ func (s *Server) ListenAndServeTLS(certFile, keyFile string) error {
 
 func (s *Server) Close() error {
 	s.ctxCancel()
+	s.conns.Close()
 	err := s.H3.Close()
 	s.refCount.Wait()
 	return err
-}
-
-func (s *Server) addConn(qconn http3.StreamCreator, id sessionID, conn *Conn) {
-	s.connMx.Lock()
-	defer s.connMx.Unlock()
-
-	if s.conns == nil {
-		s.conns = make(map[sessionKey]*session)
-	}
-	key := sessionKey{qconn: qconn, id: id}
-	if sess, ok := s.conns[key]; ok {
-		sess.conn = conn
-		close(sess.created)
-		return
-	}
-	c := make(chan struct{})
-	close(c)
-	s.conns[key] = &session{created: c, conn: conn}
 }
 
 func (s *Server) Upgrade(w http.ResponseWriter, r *http.Request) (*Conn, error) {
@@ -224,8 +151,7 @@ func (s *Server) Upgrade(w http.ResponseWriter, r *http.Request) (*Conn, error) 
 	}
 	qconn := hijacker.StreamCreator()
 	c := newConn(sID, qconn, r.Body)
-
-	s.addConn(qconn, sID, c)
+	s.conns.AddSession(qconn, sID, c)
 	return c, nil
 }
 
