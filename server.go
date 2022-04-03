@@ -55,7 +55,7 @@ type Server struct {
 	initOnce sync.Once
 	initErr  error
 
-	conns *sessionManager
+	conns sessionManager
 }
 
 func (s *Server) initialize() error {
@@ -71,7 +71,7 @@ func (s *Server) init() error {
 	if timeout == 0 {
 		timeout = 5 * time.Second
 	}
-	s.conns = newSessionManager(timeout)
+	s.conns = *newSessionManager(timeout)
 	if s.CheckOrigin == nil {
 		s.CheckOrigin = checkSameOrigin
 	}

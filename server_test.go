@@ -82,7 +82,7 @@ func createStreamAndWrite(t *testing.T, qconn http3.StreamCreator, sessionID uin
 	return str
 }
 
-func TestReorderedUpgradeRequest(t *testing.T) {
+func TestServerReorderedUpgradeRequest(t *testing.T) {
 	tlsConf, certPool := getTLSConf(t)
 	s := webtransport.Server{
 		H3: http3.Server{
@@ -139,7 +139,7 @@ func TestReorderedUpgradeRequest(t *testing.T) {
 	require.Equal(t, []byte("raboof"), data)
 }
 
-func TestReorderedUpgradeRequestTimeout(t *testing.T) {
+func TestServerReorderedUpgradeRequestTimeout(t *testing.T) {
 	timeout := scaleDuration(100 * time.Millisecond)
 	tlsConf, certPool := getTLSConf(t)
 	s := webtransport.Server{
@@ -201,7 +201,7 @@ func TestReorderedUpgradeRequestTimeout(t *testing.T) {
 	require.Equal(t, []byte("raboof"), data)
 }
 
-func TestReorderedMultipleStreams(t *testing.T) {
+func TestServerReorderedMultipleStreams(t *testing.T) {
 	timeout := scaleDuration(150 * time.Millisecond)
 	tlsConf, certPool := getTLSConf(t)
 	s := webtransport.Server{
