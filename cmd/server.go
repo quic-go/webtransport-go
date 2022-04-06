@@ -2,13 +2,13 @@ package main
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/rand"
-	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
-	"encoding/hex"
 	"fmt"
 	"io"
 	"log"
@@ -23,15 +23,12 @@ import (
 
 func main() {
 	s := webtransport.Server{
-		H3: http3.Server{Server: &http.Server{Addr: ":4433"}},
+		H3:          http3.Server{Server: &http.Server{Addr: ":4433"}},
+		CheckOrigin: func(*http.Request) bool { return true },
 	}
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/hello", func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("Hello, world!"))
-	})
 	mux.HandleFunc("/webtransport", func(w http.ResponseWriter, r *http.Request) {
-		fmt.Println("request for /webtransport")
 		done := make(chan struct{})
 		go func() {
 			defer func() {
@@ -46,7 +43,7 @@ func main() {
 				log.Println("webtransport upgrade failed:", err)
 				return
 			}
-			log.Println("webtransport upgrade succeeded")
+			log.Println("Accepted WebTransport connection from", r.RemoteAddr)
 			go handleConn(conn)
 		}()
 		time.Sleep(time.Hour)
@@ -58,31 +55,25 @@ func main() {
 		log.Fatal(err)
 	}
 	s.H3.TLSConfig = tlsConf
-	hash := sha256.Sum256(tlsConf.Certificates[0].Certificate[0])
-	fmt.Printf("%#v\n", hash)
-	fmt.Println(hex.EncodeToString(hash[:]))
-	log.Println(s.ListenAndServe())
-
-	log.Println(s.ListenAndServeTLS("example.com+3.pem", "example.com+3-key.pem"))
+	fmt.Printf("Server Certificate Hash: %#v\n", sha256.Sum256(tlsConf.Certificates[0].Certificate[0]))
+	s.ListenAndServe()
 }
 
 func handleConn(c *webtransport.Conn) {
-	str, err := c.OpenStream()
-	if err != nil {
-		log.Fatal(err)
-	}
-	str.Write([]byte("Hello world!"))
-	str.Close()
-
 	for {
 		str, err := c.AcceptStream(context.Background())
 		if err != nil {
 			log.Fatal(err)
 		}
-		if _, err := io.Copy(str, str); err != nil {
-			log.Fatal(err)
-		}
-		str.Close()
+
+		go func(str webtransport.Stream) {
+			data, err := io.ReadAll(str)
+			if err != nil {
+				log.Fatal(err)
+			}
+			log.Printf("Received message: %s", string(data))
+			str.Close()
+		}(str)
 	}
 }
 
@@ -105,7 +96,7 @@ func getTLSConf() (*tls.Config, error) {
 	}, nil
 }
 
-func generateCA() (*x509.Certificate, *rsa.PrivateKey, error) {
+func generateCA() (*x509.Certificate, *ecdsa.PrivateKey, error) {
 	certTempl := &x509.Certificate{
 		SerialNumber:          big.NewInt(2019),
 		Subject:               pkix.Name{},
@@ -116,7 +107,7 @@ func generateCA() (*x509.Certificate, *rsa.PrivateKey, error) {
 		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,
 		BasicConstraintsValid: true,
 	}
-	caPrivateKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	caPrivateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -131,7 +122,7 @@ func generateCA() (*x509.Certificate, *rsa.PrivateKey, error) {
 	return ca, caPrivateKey, nil
 }
 
-func generateLeafCert(ca *x509.Certificate, caPrivateKey *rsa.PrivateKey) (*x509.Certificate, *rsa.PrivateKey, error) {
+func generateLeafCert(ca *x509.Certificate, caPrivateKey *ecdsa.PrivateKey) (*x509.Certificate, *ecdsa.PrivateKey, error) {
 	certTempl := &x509.Certificate{
 		SerialNumber: big.NewInt(1),
 		DNSNames:     []string{"localhost"},
@@ -140,7 +131,7 @@ func generateLeafCert(ca *x509.Certificate, caPrivateKey *rsa.PrivateKey) (*x509
 		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth},
 		KeyUsage:     x509.KeyUsageDigitalSignature,
 	}
-	privKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	privKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		return nil, nil, err
 	}
