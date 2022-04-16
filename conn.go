@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"net"
 	"sync"
 
 	"github.com/lucas-clemente/quic-go"
@@ -102,6 +103,14 @@ func (c *Conn) writeStreamHeader(str quic.Stream) error {
 	quicvarint.Write(buf, uint64(c.sessionID))
 	_, err := str.Write(buf.Bytes())
 	return err
+}
+
+func (c *Conn) LocalAddr() net.Addr {
+	return c.qconn.LocalAddr()
+}
+
+func (c *Conn) RemoteAddr() net.Addr {
+	return c.qconn.RemoteAddr()
 }
 
 func (c *Conn) Close() error {
