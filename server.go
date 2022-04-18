@@ -100,21 +100,32 @@ func (s *Server) init() error {
 }
 
 func (s *Server) Serve(conn net.PacketConn) error {
-	s.initialize()
+	if err := s.initialize(); err != nil {
+		return err
+	}
 	return s.H3.Serve(conn)
 }
 
 func (s *Server) ListenAndServe() error {
-	s.initialize()
+	if err := s.initialize(); err != nil {
+		return err
+	}
 	return s.H3.ListenAndServe()
 }
 
 func (s *Server) ListenAndServeTLS(certFile, keyFile string) error {
-	s.initialize()
+	if err := s.initialize(); err != nil {
+		return err
+	}
 	return s.H3.ListenAndServeTLS(certFile, keyFile)
 }
 
 func (s *Server) Close() error {
+	// Make sure that ctxCancel is defined.
+	// This is expected to be uncommon.
+	// It only happens if the server is closed without Serve / ListenAndServe having been called.
+	_ = s.initialize()
+
 	s.ctxCancel()
 	s.conns.Close()
 	err := s.H3.Close()

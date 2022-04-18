@@ -262,3 +262,12 @@ func TestServerReorderedMultipleStreams(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []byte("raboof"), data)
 }
+
+func TestImmediateClose(t *testing.T) {
+	s := webtransport.Server{
+		H3: http3.Server{
+			Server: &http.Server{},
+		},
+	}
+	require.NoError(t, s.Close())
+}
