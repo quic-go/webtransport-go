@@ -55,7 +55,7 @@ type Server struct {
 	initOnce sync.Once
 	initErr  error
 
-	conns sessionManager
+	conns *sessionManager
 }
 
 func (s *Server) initialize() error {
@@ -71,7 +71,7 @@ func (s *Server) init() error {
 	if timeout == 0 {
 		timeout = 5 * time.Second
 	}
-	s.conns = *newSessionManager(timeout)
+	s.conns = newSessionManager(timeout)
 	if s.CheckOrigin == nil {
 		s.CheckOrigin = checkSameOrigin
 	}
@@ -124,10 +124,14 @@ func (s *Server) Close() error {
 	// Make sure that ctxCancel is defined.
 	// This is expected to be uncommon.
 	// It only happens if the server is closed without Serve / ListenAndServe having been called.
-	_ = s.initialize()
+	s.initOnce.Do(func() {})
 
-	s.ctxCancel()
-	s.conns.Close()
+	if s.ctxCancel != nil {
+		s.ctxCancel()
+	}
+	if s.conns != nil {
+		s.conns.Close()
+	}
 	err := s.H3.Close()
 	s.refCount.Wait()
 	return err
