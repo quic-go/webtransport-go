@@ -77,30 +77,59 @@ func sendDataAndCheckEcho(t *testing.T, conn *webtransport.Conn) {
 	require.Equal(t, data, reply)
 }
 
-func TestSingleClient(t *testing.T) {
+func TestBirectionalStreams(t *testing.T) {
 	tlsConf, certPool := getTLSConf(t)
-	s := webtransport.Server{
-		H3: http3.Server{Server: &http.Server{TLSConfig: tlsConf}},
-	}
-	defer s.Close()
-	addHandler(t, &s, newEchoHandler(t))
 
-	udpConn := getConn(t)
-	servErr := make(chan error, 1)
-	go func() {
-		servErr <- s.Serve(udpConn)
-	}()
-	// TODO: check err
+	t.Run("client-initiated", func(t *testing.T) {
+		s := webtransport.Server{
+			H3: http3.Server{Server: &http.Server{TLSConfig: tlsConf}},
+		}
+		defer s.Close()
+		addHandler(t, &s, newEchoHandler(t))
 
-	d := webtransport.Dialer{
-		TLSClientConf: &tls.Config{RootCAs: certPool},
-	}
-	defer d.Close()
-	url := fmt.Sprintf("https://localhost:%d/webtransport", udpConn.LocalAddr().(*net.UDPAddr).Port)
-	rsp, conn, err := d.Dial(context.Background(), url, nil)
-	require.NoError(t, err)
-	require.Equal(t, 200, rsp.StatusCode)
-	sendDataAndCheckEcho(t, conn)
+		udpConn := getConn(t)
+		servErr := make(chan error, 1)
+		go func() {
+			servErr <- s.Serve(udpConn)
+		}()
+		// TODO: check err
+
+		d := webtransport.Dialer{TLSClientConf: &tls.Config{RootCAs: certPool}}
+		defer d.Close()
+		url := fmt.Sprintf("https://localhost:%d/webtransport", udpConn.LocalAddr().(*net.UDPAddr).Port)
+		rsp, conn, err := d.Dial(context.Background(), url, nil)
+		require.NoError(t, err)
+		require.Equal(t, 200, rsp.StatusCode)
+		sendDataAndCheckEcho(t, conn)
+	})
+
+	t.Run("server-initiated", func(t *testing.T) {
+		s := webtransport.Server{
+			H3: http3.Server{Server: &http.Server{TLSConfig: tlsConf}},
+		}
+		defer s.Close()
+		done := make(chan struct{})
+		addHandler(t, &s, func(conn *webtransport.Conn) {
+			defer close(done)
+			sendDataAndCheckEcho(t, conn)
+		})
+
+		udpConn := getConn(t)
+		servErr := make(chan error, 1)
+		go func() {
+			servErr <- s.Serve(udpConn)
+		}()
+		// TODO: check err
+
+		d := webtransport.Dialer{TLSClientConf: &tls.Config{RootCAs: certPool}}
+		defer d.Close()
+		url := fmt.Sprintf("https://localhost:%d/webtransport", udpConn.LocalAddr().(*net.UDPAddr).Port)
+		rsp, conn, err := d.Dial(context.Background(), url, nil)
+		require.NoError(t, err)
+		require.Equal(t, 200, rsp.StatusCode)
+		go newEchoHandler(t)(conn)
+		<-done
+	})
 }
 
 func TestMultipleClients(t *testing.T) {
