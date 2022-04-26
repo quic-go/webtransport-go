@@ -60,12 +60,17 @@ func newEchoHandler(t *testing.T) func(*webtransport.Conn) {
 	}
 }
 
+func getRandomData(l int) []byte {
+	data := make([]byte, l)
+	rand.Read(data)
+	return data
+}
+
 // exchangeData opens a new stream on the connection,
 // sends data and checks the echoed data.
 func sendDataAndCheckEcho(t *testing.T, conn *webtransport.Conn) {
 	t.Helper()
-	data := make([]byte, 5*1024)
-	rand.Read(data)
+	data := getRandomData(5 * 1024)
 	str, err := conn.OpenStream()
 	require.NoError(t, err)
 	str.SetDeadline(time.Now().Add(time.Second))
@@ -130,6 +135,53 @@ func TestBirectionalStreams(t *testing.T) {
 		go newEchoHandler(t)(conn)
 		<-done
 	})
+}
+
+func TestUnidirectionalStreams(t *testing.T) {
+	tlsConf, certPool := getTLSConf(t)
+
+	s := webtransport.Server{
+		H3: http3.Server{Server: &http.Server{TLSConfig: tlsConf}},
+	}
+	defer s.Close()
+	// Accept a unidirectional stream, read all of its contents,
+	// and echo it on a newly opened unidirectional stream.
+	addHandler(t, &s, func(conn *webtransport.Conn) {
+		str, err := conn.AcceptUniStream(context.Background())
+		require.NoError(t, err)
+		data, err := io.ReadAll(str)
+		require.NoError(t, err)
+		rstr, err := conn.OpenUniStream()
+		require.NoError(t, err)
+		defer rstr.Close()
+		_, err = rstr.Write(data)
+		require.NoError(t, err)
+	})
+
+	udpConn := getConn(t)
+	servErr := make(chan error, 1)
+	go func() {
+		servErr <- s.Serve(udpConn)
+	}()
+	// TODO: check err
+
+	d := webtransport.Dialer{TLSClientConf: &tls.Config{RootCAs: certPool}}
+	defer d.Close()
+	url := fmt.Sprintf("https://localhost:%d/webtransport", udpConn.LocalAddr().(*net.UDPAddr).Port)
+	rsp, conn, err := d.Dial(context.Background(), url, nil)
+	require.NoError(t, err)
+	require.Equal(t, 200, rsp.StatusCode)
+	str, err := conn.OpenUniStream()
+	require.NoError(t, err)
+	data := getRandomData(10 * 1024)
+	_, err = str.Write(data)
+	require.NoError(t, err)
+	require.NoError(t, str.Close())
+	rstr, err := conn.AcceptUniStream(context.Background())
+	require.NoError(t, err)
+	rdata, err := io.ReadAll(rstr)
+	require.NoError(t, err)
+	require.Equal(t, data, rdata)
 }
 
 func TestMultipleClients(t *testing.T) {

@@ -20,20 +20,30 @@ type Conn struct {
 	qconn      http3.StreamCreator
 	requestStr io.Reader // TODO: this needs to be an io.ReadWriteCloser so we can close the stream
 
+	// for bidirectional streams
 	acceptMx   sync.Mutex
 	acceptChan chan struct{}
 	// Contains all the streams waiting to be accepted.
 	// There's no explicit limit to the length of the queue, but it is implicitly
 	// limited by the stream flow control provided by QUIC.
 	acceptQueue []quic.Stream
+
+	// for unidirectional streams
+	acceptUniMx   sync.Mutex
+	acceptUniChan chan struct{}
+	// Contains all the streams waiting to be accepted.
+	// There's no explicit limit to the length of the queue, but it is implicitly
+	// limited by the stream flow control provided by QUIC.
+	acceptUniQueue []quic.ReceiveStream
 }
 
 func newConn(sessionID sessionID, qconn http3.StreamCreator, requestStr io.Reader) *Conn {
 	c := &Conn{
-		sessionID:  sessionID,
-		qconn:      qconn,
-		requestStr: requestStr,
-		acceptChan: make(chan struct{}, 1),
+		sessionID:     sessionID,
+		qconn:         qconn,
+		requestStr:    requestStr,
+		acceptChan:    make(chan struct{}, 1),
+		acceptUniChan: make(chan struct{}, 1),
 	}
 	return c
 }
@@ -45,6 +55,17 @@ func (c *Conn) addStream(str quic.Stream) {
 	c.acceptQueue = append(c.acceptQueue, str)
 	select {
 	case c.acceptChan <- struct{}{}:
+	default:
+	}
+}
+
+func (c *Conn) addUniStream(str quic.ReceiveStream) {
+	c.acceptUniMx.Lock()
+	defer c.acceptUniMx.Unlock()
+
+	c.acceptUniQueue = append(c.acceptUniQueue, str)
+	select {
+	case c.acceptUniChan <- struct{}{}:
 	default:
 	}
 }
@@ -71,6 +92,26 @@ func (c *Conn) AcceptStream(ctx context.Context) (Stream, error) {
 		return nil, ctx.Err()
 	case <-c.acceptChan:
 		return c.AcceptStream(ctx)
+	}
+}
+
+func (c *Conn) AcceptUniStream(ctx context.Context) (ReceiveStream, error) {
+	var str quic.ReceiveStream
+	c.acceptUniMx.Lock()
+	if len(c.acceptUniQueue) > 0 {
+		str = c.acceptUniQueue[0]
+		c.acceptUniQueue = c.acceptUniQueue[1:]
+	}
+	c.acceptUniMx.Unlock()
+	if str != nil {
+		return newReceiveStream(str), nil
+	}
+
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-c.acceptUniChan:
+		return c.AcceptUniStream(ctx)
 	}
 }
 
