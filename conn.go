@@ -97,9 +97,28 @@ func (c *Conn) OpenStreamSync(ctx context.Context) (Stream, error) {
 	return newStream(str), nil
 }
 
+func (c *Conn) OpenUniStream() (SendStream, error) {
+	str, err := c.qconn.OpenUniStream()
+	if err != nil {
+		return nil, err
+	}
+	if err := c.writeUniStreamHeader(str); err != nil {
+		return nil, err
+	}
+	return newSendStream(str), nil
+}
+
 func (c *Conn) writeStreamHeader(str quic.Stream) error {
 	buf := bytes.NewBuffer(make([]byte, 0, 9)) // 1 byte for the frame type, up to 8 bytes for the session ID
 	quicvarint.Write(buf, webTransportFrameType)
+	quicvarint.Write(buf, uint64(c.sessionID))
+	_, err := str.Write(buf.Bytes())
+	return err
+}
+
+func (c *Conn) writeUniStreamHeader(str quic.SendStream) error {
+	buf := bytes.NewBuffer(make([]byte, 0, 9)) // 1 byte for the frame type, up to 8 bytes for the session ID
+	quicvarint.Write(buf, webTransportUniStreamType)
 	quicvarint.Write(buf, uint64(c.sessionID))
 	_, err := str.Write(buf.Bytes())
 	return err

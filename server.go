@@ -23,7 +23,8 @@ const (
 )
 
 const (
-	webTransportFrameType = 0x41
+	webTransportFrameType     = 0x41
+	webTransportUniStreamType = 0x54
 )
 
 type streamIDGetter interface {
