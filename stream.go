@@ -9,26 +9,94 @@ import (
 	"github.com/lucas-clemente/quic-go"
 )
 
-type Stream interface {
-	io.Reader
+type SendStream interface {
 	io.Writer
 	io.Closer
 
-	CancelRead(ErrorCode)
 	CancelWrite(ErrorCode)
 
-	SetDeadline(time.Time) error
-	SetReadDeadline(time.Time) error
 	SetWriteDeadline(time.Time) error
 }
 
+type ReceiveStream interface {
+	io.Reader
+	CancelRead(ErrorCode)
+
+	SetReadDeadline(time.Time) error
+}
+
+type Stream interface {
+	SendStream
+	ReceiveStream
+
+	SetDeadline(time.Time) error
+}
+
+type sendStream struct {
+	str quic.SendStream
+}
+
+var _ SendStream = &sendStream{}
+
+func newSendStream(str quic.SendStream) SendStream {
+	return &sendStream{str: str}
+}
+
+func (s *sendStream) Write(b []byte) (int, error) {
+	n, err := s.str.Write(b)
+	return n, maybeConvertStreamError(err)
+}
+
+func (s *sendStream) CancelWrite(e ErrorCode) {
+	s.str.CancelWrite(webtransportCodeToHTTPCode(e))
+}
+
+func (s *sendStream) Close() error {
+	return maybeConvertStreamError(s.str.Close())
+}
+
+func (s *sendStream) SetWriteDeadline(t time.Time) error {
+	return maybeConvertStreamError(s.str.SetWriteDeadline(t))
+}
+
+type receiveStream struct {
+	str quic.ReceiveStream
+}
+
+var _ ReceiveStream = &receiveStream{}
+
+func newReceiveStream(str quic.ReceiveStream) ReceiveStream {
+	return &receiveStream{str: str}
+}
+
+func (s *receiveStream) Read(b []byte) (int, error) {
+	n, err := s.str.Read(b)
+	return n, maybeConvertStreamError(err)
+}
+
+func (s *receiveStream) CancelRead(e ErrorCode) {
+	s.str.CancelRead(webtransportCodeToHTTPCode(e))
+}
+
+func (s *receiveStream) SetReadDeadline(t time.Time) error {
+	return maybeConvertStreamError(s.str.SetReadDeadline(t))
+}
+
 type stream struct {
-	str quic.Stream
+	SendStream
+	ReceiveStream
 }
 
 var _ Stream = &stream{}
 
-func (s *stream) maybeConvertStreamError(err error) error {
+func newStream(str quic.Stream) Stream {
+	return &stream{
+		SendStream:    &sendStream{str: str},
+		ReceiveStream: &receiveStream{str: str},
+	}
+}
+
+func maybeConvertStreamError(err error) error {
 	if err == nil {
 		return nil
 	}
@@ -43,36 +111,8 @@ func (s *stream) maybeConvertStreamError(err error) error {
 	return err
 }
 
-func (s *stream) Read(b []byte) (int, error) {
-	n, err := s.str.Read(b)
-	return n, s.maybeConvertStreamError(err)
-}
-
-func (s *stream) Write(b []byte) (int, error) {
-	n, err := s.str.Write(b)
-	return n, s.maybeConvertStreamError(err)
-}
-
-func (s *stream) CancelRead(e ErrorCode) {
-	s.str.CancelRead(webtransportCodeToHTTPCode(e))
-}
-
-func (s *stream) CancelWrite(e ErrorCode) {
-	s.str.CancelWrite(webtransportCodeToHTTPCode(e))
-}
-
-func (s *stream) Close() error {
-	return s.maybeConvertStreamError(s.str.Close())
-}
-
 func (s *stream) SetDeadline(t time.Time) error {
-	return s.maybeConvertStreamError(s.str.SetDeadline(t))
-}
-
-func (s *stream) SetReadDeadline(t time.Time) error {
-	return s.maybeConvertStreamError(s.str.SetReadDeadline(t))
-}
-
-func (s *stream) SetWriteDeadline(t time.Time) error {
-	return s.maybeConvertStreamError(s.str.SetWriteDeadline(t))
+	// TODO: implement
+	return nil
+	// return maybeConvertStreamError(s.SendStream.SetDeadline(t))
 }

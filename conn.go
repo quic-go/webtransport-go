@@ -63,7 +63,7 @@ func (c *Conn) AcceptStream(ctx context.Context) (Stream, error) {
 	}
 	c.acceptMx.Unlock()
 	if str != nil {
-		return &stream{str}, nil
+		return newStream(str), nil
 	}
 
 	select {
@@ -82,7 +82,7 @@ func (c *Conn) OpenStream() (Stream, error) {
 	if err := c.writeStreamHeader(str); err != nil {
 		return nil, err
 	}
-	return &stream{str: str}, nil
+	return newStream(str), nil
 }
 
 func (c *Conn) OpenStreamSync(ctx context.Context) (Stream, error) {
@@ -94,7 +94,7 @@ func (c *Conn) OpenStreamSync(ctx context.Context) (Stream, error) {
 	if err := c.writeStreamHeader(str); err != nil {
 		return nil, err
 	}
-	return &stream{str: str}, nil
+	return newStream(str), nil
 }
 
 func (c *Conn) writeStreamHeader(str quic.Stream) error {
