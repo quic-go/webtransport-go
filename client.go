@@ -63,6 +63,13 @@ func (d *Dialer) init() {
 			d.conns.AddStream(conn, str, sessionID(id))
 			return true, nil
 		},
+		UniStreamHijacker: func(st http3.StreamType, conn quic.Connection, str quic.ReceiveStream) (hijacked bool) {
+			if st != webTransportUniStreamType {
+				return false
+			}
+			d.conns.AddUniStream(conn, str)
+			return true
+		},
 	}
 }
 

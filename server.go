@@ -23,7 +23,8 @@ const (
 )
 
 const (
-	webTransportFrameType = 0x41
+	webTransportFrameType     = 0x41
+	webTransportUniStreamType = 0x54
 )
 
 type streamIDGetter interface {
@@ -95,6 +96,13 @@ func (s *Server) init() error {
 		}
 		s.conns.AddStream(qconn, str, sessionID(id))
 		return true, nil
+	}
+	s.H3.UniStreamHijacker = func(st http3.StreamType, qconn quic.Connection, str quic.ReceiveStream) (hijacked bool) {
+		if st != webTransportUniStreamType {
+			return false
+		}
+		s.conns.AddUniStream(qconn, str)
+		return true
 	}
 	return nil
 }
