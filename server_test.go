@@ -85,9 +85,7 @@ func createStreamAndWrite(t *testing.T, qconn http3.StreamCreator, sessionID uin
 func TestServerReorderedUpgradeRequest(t *testing.T) {
 	tlsConf, certPool := getTLSConf(t)
 	s := webtransport.Server{
-		H3: http3.Server{
-			Server: &http.Server{TLSConfig: tlsConf},
-		},
+		H3: http3.Server{TLSConfig: tlsConf},
 	}
 	defer s.Close()
 	connChan := make(chan *webtransport.Conn)
@@ -143,9 +141,7 @@ func TestServerReorderedUpgradeRequestTimeout(t *testing.T) {
 	timeout := scaleDuration(100 * time.Millisecond)
 	tlsConf, certPool := getTLSConf(t)
 	s := webtransport.Server{
-		H3: http3.Server{
-			Server: &http.Server{TLSConfig: tlsConf},
-		},
+		H3:                      http3.Server{TLSConfig: tlsConf},
 		StreamReorderingTimeout: timeout,
 	}
 	defer s.Close()
@@ -205,9 +201,7 @@ func TestServerReorderedMultipleStreams(t *testing.T) {
 	timeout := scaleDuration(150 * time.Millisecond)
 	tlsConf, certPool := getTLSConf(t)
 	s := webtransport.Server{
-		H3: http3.Server{
-			Server: &http.Server{TLSConfig: tlsConf},
-		},
+		H3:                      http3.Server{TLSConfig: tlsConf},
 		StreamReorderingTimeout: timeout,
 	}
 	defer s.Close()
@@ -264,10 +258,6 @@ func TestServerReorderedMultipleStreams(t *testing.T) {
 }
 
 func TestImmediateClose(t *testing.T) {
-	s := webtransport.Server{
-		H3: http3.Server{
-			Server: &http.Server{},
-		},
-	}
+	s := webtransport.Server{H3: http3.Server{}}
 	require.NoError(t, s.Close())
 }

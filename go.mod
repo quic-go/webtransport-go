@@ -3,7 +3,7 @@ module github.com/marten-seemann/webtransport-go
 go 1.17
 
 require (
-	github.com/lucas-clemente/quic-go v0.27.1-0.20220425112058-5dedb7e12ceb
+	github.com/lucas-clemente/quic-go v0.27.1-0.20220520111257-8185d1b4e072
 	github.com/stretchr/testify v1.7.1
 )
 

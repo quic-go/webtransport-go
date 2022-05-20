@@ -87,7 +87,7 @@ func TestBirectionalStreams(t *testing.T) {
 
 	t.Run("client-initiated", func(t *testing.T) {
 		s := webtransport.Server{
-			H3: http3.Server{Server: &http.Server{TLSConfig: tlsConf}},
+			H3: http3.Server{TLSConfig: tlsConf},
 		}
 		defer s.Close()
 		addHandler(t, &s, newEchoHandler(t))
@@ -110,7 +110,7 @@ func TestBirectionalStreams(t *testing.T) {
 
 	t.Run("server-initiated", func(t *testing.T) {
 		s := webtransport.Server{
-			H3: http3.Server{Server: &http.Server{TLSConfig: tlsConf}},
+			H3: http3.Server{TLSConfig: tlsConf},
 		}
 		defer s.Close()
 		done := make(chan struct{})
@@ -141,7 +141,7 @@ func TestUnidirectionalStreams(t *testing.T) {
 	tlsConf, certPool := getTLSConf(t)
 
 	s := webtransport.Server{
-		H3: http3.Server{Server: &http.Server{TLSConfig: tlsConf}},
+		H3: http3.Server{TLSConfig: tlsConf},
 	}
 	defer s.Close()
 	// Accept a unidirectional stream, read all of its contents,
@@ -188,7 +188,7 @@ func TestMultipleClients(t *testing.T) {
 	const numClients = 5
 	tlsConf, certPool := getTLSConf(t)
 	s := webtransport.Server{
-		H3: http3.Server{Server: &http.Server{TLSConfig: tlsConf}},
+		H3: http3.Server{TLSConfig: tlsConf},
 	}
 	defer s.Close()
 	addHandler(t, &s, newEchoHandler(t))
@@ -222,7 +222,7 @@ func TestMultipleClients(t *testing.T) {
 func TestStreamResetError(t *testing.T) {
 	tlsConf, certPool := getTLSConf(t)
 	s := webtransport.Server{
-		H3: http3.Server{Server: &http.Server{TLSConfig: tlsConf}},
+		H3: http3.Server{TLSConfig: tlsConf},
 	}
 	defer s.Close()
 	const errorCode webtransport.ErrorCode = 127
@@ -306,7 +306,7 @@ func TestCheckOrigin(t *testing.T) {
 		tc := tc
 		t.Run(tc.Name, func(t *testing.T) {
 			s := webtransport.Server{
-				H3:          http3.Server{Server: &http.Server{TLSConfig: tlsConf}},
+				H3:          http3.Server{TLSConfig: tlsConf},
 				CheckOrigin: tc.CheckOrigin,
 			}
 			defer s.Close()
