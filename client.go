@@ -93,7 +93,7 @@ func (d *Dialer) Dial(ctx context.Context, urlStr string, reqHdr http.Header) (*
 	}
 	req = req.WithContext(ctx)
 
-	rsp, err := d.roundTripper.RoundTripOpt(req, http3.RoundTripOpt{})
+	rsp, err := d.roundTripper.RoundTripOpt(req, http3.RoundTripOpt{DontCloseRequestStream: true})
 	if err != nil {
 		return nil, nil, err
 	}

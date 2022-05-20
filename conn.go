@@ -3,6 +3,7 @@ package webtransport
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"net"
 	"sync"
@@ -19,6 +20,9 @@ type Conn struct {
 	sessionID  sessionID
 	qconn      http3.StreamCreator
 	requestStr io.Reader // TODO: this needs to be an io.ReadWriteCloser so we can close the stream
+
+	closeErr error
+	closed   chan struct{}
 
 	// for bidirectional streams
 	acceptMx   sync.Mutex
@@ -42,10 +46,33 @@ func newConn(sessionID sessionID, qconn http3.StreamCreator, requestStr io.Reade
 		sessionID:     sessionID,
 		qconn:         qconn,
 		requestStr:    requestStr,
+		closed:        make(chan struct{}),
 		acceptChan:    make(chan struct{}, 1),
 		acceptUniChan: make(chan struct{}, 1),
 	}
+	go c.handleConn()
 	return c
+}
+
+func (c *Conn) handleConn() {
+	for {
+		// TODO: parse capsules sent on the request stream
+		b := make([]byte, 100)
+		if _, err := c.requestStr.Read(b); err != nil {
+			c.closeErr = fmt.Errorf("WebTransport session closed: %w", err)
+			close(c.closed)
+			return
+		}
+	}
+}
+
+func (c *Conn) isClosed() bool {
+	select {
+	case <-c.closed:
+		return true
+	default:
+		return false
+	}
 }
 
 func (c *Conn) addStream(str quic.Stream) {
@@ -76,6 +103,9 @@ func (c *Conn) Context() context.Context {
 }
 
 func (c *Conn) AcceptStream(ctx context.Context) (Stream, error) {
+	if c.isClosed() {
+		return nil, c.closeErr
+	}
 	var str quic.Stream
 	c.acceptMx.Lock()
 	if len(c.acceptQueue) > 0 {
@@ -96,6 +126,9 @@ func (c *Conn) AcceptStream(ctx context.Context) (Stream, error) {
 }
 
 func (c *Conn) AcceptUniStream(ctx context.Context) (ReceiveStream, error) {
+	if c.isClosed() {
+		return nil, c.closeErr
+	}
 	var str quic.ReceiveStream
 	c.acceptUniMx.Lock()
 	if len(c.acceptUniQueue) > 0 {
@@ -116,6 +149,9 @@ func (c *Conn) AcceptUniStream(ctx context.Context) (ReceiveStream, error) {
 }
 
 func (c *Conn) OpenStream() (Stream, error) {
+	if c.isClosed() {
+		return nil, c.closeErr
+	}
 	str, err := c.qconn.OpenStream()
 	if err != nil {
 		return nil, err
@@ -127,6 +163,9 @@ func (c *Conn) OpenStream() (Stream, error) {
 }
 
 func (c *Conn) OpenStreamSync(ctx context.Context) (Stream, error) {
+	if c.isClosed() {
+		return nil, c.closeErr
+	}
 	str, err := c.qconn.OpenStreamSync(ctx)
 	if err != nil {
 		return nil, err
@@ -139,6 +178,9 @@ func (c *Conn) OpenStreamSync(ctx context.Context) (Stream, error) {
 }
 
 func (c *Conn) OpenUniStream() (SendStream, error) {
+	if c.isClosed() {
+		return nil, c.closeErr
+	}
 	str, err := c.qconn.OpenUniStream()
 	if err != nil {
 		return nil, err

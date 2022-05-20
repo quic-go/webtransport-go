@@ -114,7 +114,10 @@ func TestServerReorderedUpgradeRequest(t *testing.T) {
 	// make sure this request actually arrives first
 	time.Sleep(scaleDuration(50 * time.Millisecond))
 
-	rsp, err = rt.RoundTrip(newWebTransportRequest(t, fmt.Sprintf("https://localhost:%d/webtransport", port)))
+	rsp, err = rt.RoundTripOpt(
+		newWebTransportRequest(t, fmt.Sprintf("https://localhost:%d/webtransport", port)),
+		http3.RoundTripOpt{DontCloseRequestStream: true},
+	)
 	require.NoError(t, err)
 	require.Equal(t, 200, rsp.StatusCode)
 	sconn := <-connChan
@@ -177,7 +180,10 @@ func TestServerReorderedUpgradeRequestTimeout(t *testing.T) {
 	require.Equal(t, webtransport.WebTransportBufferedStreamRejectedErrorCode, streamErr.ErrorCode)
 
 	// Now establish the session. Make sure we don't accept the stream.
-	rsp, err = rt.RoundTrip(newWebTransportRequest(t, fmt.Sprintf("https://localhost:%d/webtransport", port)))
+	rsp, err = rt.RoundTripOpt(
+		newWebTransportRequest(t, fmt.Sprintf("https://localhost:%d/webtransport", port)),
+		http3.RoundTripOpt{DontCloseRequestStream: true},
+	)
 	require.NoError(t, err)
 	require.Equal(t, 200, rsp.StatusCode)
 	sconn := <-connChan
@@ -244,7 +250,10 @@ func TestServerReorderedMultipleStreams(t *testing.T) {
 	require.Less(t, took, timeout*5/4)
 
 	// Now establish the session. Make sure we don't accept the stream.
-	rsp, err = rt.RoundTrip(newWebTransportRequest(t, fmt.Sprintf("https://localhost:%d/webtransport", port)))
+	rsp, err = rt.RoundTripOpt(
+		newWebTransportRequest(t, fmt.Sprintf("https://localhost:%d/webtransport", port)),
+		http3.RoundTripOpt{DontCloseRequestStream: true},
+	)
 	require.NoError(t, err)
 	require.Equal(t, 200, rsp.StatusCode)
 	sconn := <-connChan
