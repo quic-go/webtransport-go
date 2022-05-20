@@ -21,6 +21,7 @@ type Conn struct {
 	qconn      http3.StreamCreator
 	requestStr io.Reader // TODO: this needs to be an io.ReadWriteCloser so we can close the stream
 
+	ctx      context.Context
 	closeErr error
 	closed   chan struct{}
 
@@ -42,15 +43,20 @@ type Conn struct {
 }
 
 func newConn(sessionID sessionID, qconn http3.StreamCreator, requestStr io.Reader) *Conn {
+	ctx, ctxCancel := context.WithCancel(context.Background())
 	c := &Conn{
 		sessionID:     sessionID,
 		qconn:         qconn,
 		requestStr:    requestStr,
+		ctx:           ctx,
 		closed:        make(chan struct{}),
 		acceptChan:    make(chan struct{}, 1),
 		acceptUniChan: make(chan struct{}, 1),
 	}
-	go c.handleConn()
+	go func() {
+		defer ctxCancel()
+		c.handleConn()
+	}()
 	return c
 }
 
@@ -99,7 +105,7 @@ func (c *Conn) addUniStream(str quic.ReceiveStream) {
 
 // Context returns a context that is closed when the connection is closed.
 func (c *Conn) Context() context.Context {
-	return context.Background() // TODO: fix
+	return c.ctx
 }
 
 func (c *Conn) AcceptStream(ctx context.Context) (Stream, error) {
