@@ -205,6 +205,17 @@ func (c *Conn) OpenUniStream() (SendStream, error) {
 	return newSendStream(str, c.uniStreamHdr), nil
 }
 
+func (c *Conn) OpenUniStreamSync(ctx context.Context) (SendStream, error) {
+	if c.isClosed() {
+		return nil, c.closeErr
+	}
+	str, err := c.qconn.OpenUniStreamSync(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return newSendStream(str, c.uniStreamHdr), nil
+}
+
 func (c *Conn) LocalAddr() net.Addr {
 	return c.qconn.LocalAddr()
 }
