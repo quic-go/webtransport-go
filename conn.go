@@ -124,6 +124,8 @@ func (c *Conn) AcceptStream(ctx context.Context) (Stream, error) {
 	}
 
 	select {
+	case <-c.ctx.Done():
+		return nil, c.closeErr
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	case <-c.acceptChan:
@@ -147,6 +149,8 @@ func (c *Conn) AcceptUniStream(ctx context.Context) (ReceiveStream, error) {
 	}
 
 	select {
+	case <-c.ctx.Done():
+		return nil, c.closeErr
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	case <-c.acceptUniChan:

@@ -215,6 +215,18 @@ func TestStreamResetError(t *testing.T) {
 	require.Equal(t, strErr.ErrorCode, errorCode)
 }
 
+func TestShutdown(t *testing.T) {
+	conn, closeServer := establishConn(t, func(conn *webtransport.Conn) {
+		conn.Close()
+	})
+	defer closeServer()
+
+	_, err := conn.AcceptStream(context.Background())
+	require.Error(t, err)
+	_, err = conn.AcceptUniStream(context.Background())
+	require.Error(t, err)
+}
+
 func TestCheckOrigin(t *testing.T) {
 	type tc struct {
 		Name        string
