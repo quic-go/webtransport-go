@@ -77,11 +77,12 @@ func newConn(sessionID sessionID, qconn http3.StreamCreator, requestStr io.Reade
 }
 
 func (c *Conn) handleConn() {
+	var closeErr error
 	for {
 		// TODO: parse capsules sent on the request stream
 		b := make([]byte, 100)
 		if _, err := c.requestStr.Read(b); err != nil {
-			c.closeErr = &ConnectionError{
+			closeErr = &ConnectionError{
 				Remote:  true,
 				Message: err.Error(),
 			}
@@ -92,6 +93,7 @@ func (c *Conn) handleConn() {
 	c.closeMx.Lock()
 	defer c.closeMx.Unlock()
 	c.closed = true
+	c.closeErr = closeErr
 	for _, cancel := range c.streamCtxs {
 		cancel()
 	}
