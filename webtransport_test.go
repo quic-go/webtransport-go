@@ -248,9 +248,11 @@ func TestOpenStreamSyncShutdown(t *testing.T) {
 		require.Never(t, func() bool { return len(errChan) > 0 }, 100*time.Millisecond, 10*time.Millisecond)
 		close(done)
 		require.Eventually(t, func() bool { return len(errChan) == 3 }, scaleDuration(100*time.Millisecond), 10*time.Millisecond)
-		require.Error(t, <-errChan)
-		require.Error(t, <-errChan)
-		require.Error(t, <-errChan)
+		for i := 0; i < 3; i++ {
+			err := <-errChan
+			var connErr *webtransport.ConnectionError
+			require.ErrorAs(t, err, &connErr)
+		}
 	}
 
 	t.Run("bidirectional streams", func(t *testing.T) {

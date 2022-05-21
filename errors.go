@@ -46,3 +46,13 @@ func (e *StreamError) Is(target error) bool {
 func (e *StreamError) Error() string {
 	return fmt.Sprintf("stream canceled with error code %d", e.ErrorCode)
 }
+
+// ConnectionError is a WebTransport connection error.
+type ConnectionError struct {
+	Remote  bool
+	Message string
+}
+
+var _ error = &ConnectionError{}
+
+func (e *ConnectionError) Error() string { return e.Message }

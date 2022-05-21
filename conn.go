@@ -3,7 +3,6 @@ package webtransport
 import (
 	"bytes"
 	"context"
-	"fmt"
 	"io"
 	"math/rand"
 	"net"
@@ -82,7 +81,10 @@ func (c *Conn) handleConn() {
 		// TODO: parse capsules sent on the request stream
 		b := make([]byte, 100)
 		if _, err := c.requestStr.Read(b); err != nil {
-			c.closeErr = fmt.Errorf("WebTransport session closed: %w", err)
+			c.closeErr = &ConnectionError{
+				Remote:  true,
+				Message: err.Error(),
+			}
 			break
 		}
 	}
@@ -195,7 +197,7 @@ func (c *Conn) OpenStream() (Stream, error) {
 	return newStream(str, c.streamHdr), nil
 }
 
-func (c *Conn) OpenStreamSync(ctx context.Context) (Stream, error) {
+func (c *Conn) OpenStreamSync(ctx context.Context) (str Stream, err error) {
 	c.closeMx.Lock()
 	if c.closed {
 		c.closeMx.Unlock()
@@ -211,15 +213,20 @@ rand:
 	c.closeMx.Unlock()
 	defer func() {
 		c.closeMx.Lock()
+		closeErr := c.closeErr
 		delete(c.streamCtxs, id)
 		c.closeMx.Unlock()
+		if err != nil {
+			err = closeErr
+		}
 	}()
 
-	str, err := c.qconn.OpenStreamSync(ctx)
+	var s quic.Stream
+	s, err = c.qconn.OpenStreamSync(ctx)
 	if err != nil {
 		return nil, err
 	}
-	return newStream(str, c.streamHdr), nil
+	return newStream(s, c.streamHdr), nil
 }
 
 func (c *Conn) OpenUniStream() (SendStream, error) {
@@ -233,7 +240,7 @@ func (c *Conn) OpenUniStream() (SendStream, error) {
 	return newSendStream(str, c.uniStreamHdr), nil
 }
 
-func (c *Conn) OpenUniStreamSync(ctx context.Context) (SendStream, error) {
+func (c *Conn) OpenUniStreamSync(ctx context.Context) (str SendStream, err error) {
 	if c.closed {
 		return nil, c.closeErr
 	}
@@ -248,15 +255,20 @@ rand:
 	c.closeMx.Unlock()
 	defer func() {
 		c.closeMx.Lock()
+		closeErr := c.closeErr
 		delete(c.streamCtxs, id)
 		c.closeMx.Unlock()
+		if err != nil {
+			err = closeErr
+		}
 	}()
 
-	str, err := c.qconn.OpenUniStreamSync(ctx)
+	var s quic.SendStream
+	s, err = c.qconn.OpenUniStreamSync(ctx)
 	if err != nil {
 		return nil, err
 	}
-	return newSendStream(str, c.uniStreamHdr), nil
+	return newSendStream(s, c.uniStreamHdr), nil
 }
 
 func (c *Conn) LocalAddr() net.Addr {
