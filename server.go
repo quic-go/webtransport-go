@@ -162,7 +162,10 @@ func (s *Server) Upgrade(w http.ResponseWriter, r *http.Request) (*Conn, error) 
 	w.WriteHeader(200)
 	w.(http.Flusher).Flush()
 
-	str := w.(http3.DataStreamer).DataStream()
+	str, ok := w.(streamIDGetter)
+	if !ok { // should never happen, unless quic-go changed the API
+		return nil, errors.New("failed to get stream ID")
+	}
 	sID := sessionID(str.StreamID())
 
 	hijacker, ok := w.(http3.Hijacker)
@@ -170,7 +173,7 @@ func (s *Server) Upgrade(w http.ResponseWriter, r *http.Request) (*Conn, error) 
 		return nil, errors.New("failed to hijack")
 	}
 	qconn := hijacker.StreamCreator()
-	c := newConn(sID, qconn, str)
+	c := newConn(sID, qconn, r.Body)
 	s.conns.AddSession(qconn, sID, c)
 	return c, nil
 }

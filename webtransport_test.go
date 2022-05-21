@@ -41,7 +41,7 @@ func addHandler(t *testing.T, s *webtransport.Server, connHandler func(*webtrans
 			w.WriteHeader(404) // TODO: better error code
 			return
 		}
-		go connHandler(conn)
+		connHandler(conn)
 	})
 	s.H3.Handler = mux
 }
@@ -82,7 +82,7 @@ func sendDataAndCheckEcho(t *testing.T, conn *webtransport.Conn) {
 	require.Equal(t, data, reply)
 }
 
-func TestBirectionalStreams(t *testing.T) {
+func TestBidirectionalStreams(t *testing.T) {
 	tlsConf, certPool := getTLSConf(t)
 
 	t.Run("client-initiated", func(t *testing.T) {
@@ -153,9 +153,10 @@ func TestUnidirectionalStreams(t *testing.T) {
 		require.NoError(t, err)
 		rstr, err := conn.OpenUniStream()
 		require.NoError(t, err)
-		defer rstr.Close()
 		_, err = rstr.Write(data)
 		require.NoError(t, err)
+		require.NoError(t, rstr.Close())
+		<-conn.Context().Done()
 	})
 
 	udpConn := getConn(t)
@@ -171,6 +172,7 @@ func TestUnidirectionalStreams(t *testing.T) {
 	rsp, conn, err := d.Dial(context.Background(), url, nil)
 	require.NoError(t, err)
 	require.Equal(t, 200, rsp.StatusCode)
+	defer conn.Close()
 	str, err := conn.OpenUniStream()
 	require.NoError(t, err)
 	data := getRandomData(10 * 1024)

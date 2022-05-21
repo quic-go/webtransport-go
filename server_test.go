@@ -91,6 +91,7 @@ func TestServerReorderedUpgradeRequest(t *testing.T) {
 	connChan := make(chan *webtransport.Conn)
 	addHandler(t, &s, func(c *webtransport.Conn) {
 		connChan <- c
+		<-c.Context().Done()
 	})
 
 	udpConn, err := net.ListenUDP("udp", nil)
@@ -151,6 +152,7 @@ func TestServerReorderedUpgradeRequestTimeout(t *testing.T) {
 	connChan := make(chan *webtransport.Conn)
 	addHandler(t, &s, func(c *webtransport.Conn) {
 		connChan <- c
+		<-c.Context().Done()
 	})
 
 	udpConn, err := net.ListenUDP("udp", nil)
@@ -214,6 +216,7 @@ func TestServerReorderedMultipleStreams(t *testing.T) {
 	connChan := make(chan *webtransport.Conn)
 	addHandler(t, &s, func(c *webtransport.Conn) {
 		connChan <- c
+		<-c.Context().Done()
 	})
 
 	udpConn, err := net.ListenUDP("udp", nil)

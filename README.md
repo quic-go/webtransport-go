@@ -23,7 +23,10 @@ http.HandleFunc("/webtransport", func(w http.ResponseWriter, r *http.Request) {
         w.WriteHeader(500)
         return
     }
-    // Handle the connection. Here goes the application logic.
+    // Handle the connection. Here goes the application logic. 
+    // Once this function returns, the WebTransport connection is closed.
+    // If the connection is handled async, it is possible to block until it closed
+    // by using the connection's context: <-conn.Context().Done().
 })
 
 s.ListenAndServeTLS(certFile, keyFile)

@@ -58,6 +58,7 @@ func TestClientReorderedUpgrade(t *testing.T) {
 		_, err = str.Write([]byte("foobar"))
 		require.NoError(t, err)
 		require.NoError(t, str.Close())
+		<-c.Context().Done()
 	})
 	udpConn, err := net.ListenUDP("udp", nil)
 	require.NoError(t, err)
