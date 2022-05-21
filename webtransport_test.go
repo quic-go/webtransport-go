@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"github.com/lucas-clemente/quic-go/http3"
 	"io"
 	"math/rand"
 	"net"
@@ -15,20 +16,62 @@ import (
 	"testing"
 	"time"
 
-	"github.com/lucas-clemente/quic-go/http3"
-
 	"github.com/marten-seemann/webtransport-go"
 
 	"github.com/stretchr/testify/require"
 )
 
-// getConn creates a UDP conn for the server to listen on
-func getConn(t *testing.T) *net.UDPConn {
+func runServer(t *testing.T, s *webtransport.Server) (conn *net.UDPAddr, close func()) {
 	laddr, err := net.ResolveUDPAddr("udp", "localhost:0")
 	require.NoError(t, err)
-	conn, err := net.ListenUDP("udp", laddr)
+	udpConn, err := net.ListenUDP("udp", laddr)
 	require.NoError(t, err)
-	return conn
+
+	servErr := make(chan error, 1)
+	go func() {
+		servErr <- s.Serve(udpConn)
+	}()
+
+	return udpConn.LocalAddr().(*net.UDPAddr), func() {
+		require.NoError(t, s.Close())
+		<-servErr
+		udpConn.Close()
+	}
+}
+
+func establishConn(t *testing.T, handler func(*webtransport.Conn)) (conn *webtransport.Conn, close func()) {
+	s := &webtransport.Server{
+		H3: http3.Server{TLSConfig: tlsConf},
+	}
+	addHandler(t, s, handler)
+
+	addr, closeServer := runServer(t, s)
+	d := webtransport.Dialer{TLSClientConf: &tls.Config{RootCAs: certPool}}
+	defer d.Close()
+	url := fmt.Sprintf("https://localhost:%d/webtransport", addr.Port)
+	rsp, conn, err := d.Dial(context.Background(), url, nil)
+	require.NoError(t, err)
+	require.Equal(t, 200, rsp.StatusCode)
+	return conn, func() {
+		closeServer()
+		s.Close()
+	}
+}
+
+// opens a new stream on the connection,
+// sends data and checks the echoed data.
+func sendDataAndCheckEcho(t *testing.T, conn *webtransport.Conn) {
+	t.Helper()
+	data := getRandomData(5 * 1024)
+	str, err := conn.OpenStream()
+	require.NoError(t, err)
+	str.SetDeadline(time.Now().Add(time.Second))
+	_, err = str.Write(data)
+	require.NoError(t, err)
+	require.NoError(t, str.Close())
+	reply, err := io.ReadAll(str)
+	require.NoError(t, err)
+	require.Equal(t, data, reply)
 }
 
 func addHandler(t *testing.T, s *webtransport.Server, connHandler func(*webtransport.Conn)) {
@@ -66,83 +109,31 @@ func getRandomData(l int) []byte {
 	return data
 }
 
-// exchangeData opens a new stream on the connection,
-// sends data and checks the echoed data.
-func sendDataAndCheckEcho(t *testing.T, conn *webtransport.Conn) {
-	t.Helper()
-	data := getRandomData(5 * 1024)
-	str, err := conn.OpenStream()
-	require.NoError(t, err)
-	str.SetDeadline(time.Now().Add(time.Second))
-	_, err = str.Write(data)
-	require.NoError(t, err)
-	require.NoError(t, str.Close())
-	reply, err := io.ReadAll(str)
-	require.NoError(t, err)
-	require.Equal(t, data, reply)
-}
-
 func TestBidirectionalStreams(t *testing.T) {
 	t.Run("client-initiated", func(t *testing.T) {
-		s := webtransport.Server{
-			H3: http3.Server{TLSConfig: tlsConf},
-		}
-		defer s.Close()
-		addHandler(t, &s, newEchoHandler(t))
+		conn, closeServer := establishConn(t, newEchoHandler(t))
+		defer closeServer()
 
-		udpConn := getConn(t)
-		servErr := make(chan error, 1)
-		go func() {
-			servErr <- s.Serve(udpConn)
-		}()
-		// TODO: check err
-
-		d := webtransport.Dialer{TLSClientConf: &tls.Config{RootCAs: certPool}}
-		defer d.Close()
-		url := fmt.Sprintf("https://localhost:%d/webtransport", udpConn.LocalAddr().(*net.UDPAddr).Port)
-		rsp, conn, err := d.Dial(context.Background(), url, nil)
-		require.NoError(t, err)
-		require.Equal(t, 200, rsp.StatusCode)
 		sendDataAndCheckEcho(t, conn)
 	})
 
 	t.Run("server-initiated", func(t *testing.T) {
-		s := webtransport.Server{
-			H3: http3.Server{TLSConfig: tlsConf},
-		}
-		defer s.Close()
 		done := make(chan struct{})
-		addHandler(t, &s, func(conn *webtransport.Conn) {
+		conn, closeServer := establishConn(t, func(conn *webtransport.Conn) {
 			defer close(done)
 			sendDataAndCheckEcho(t, conn)
 		})
+		defer closeServer()
 
-		udpConn := getConn(t)
-		servErr := make(chan error, 1)
-		go func() {
-			servErr <- s.Serve(udpConn)
-		}()
-		// TODO: check err
-
-		d := webtransport.Dialer{TLSClientConf: &tls.Config{RootCAs: certPool}}
-		defer d.Close()
-		url := fmt.Sprintf("https://localhost:%d/webtransport", udpConn.LocalAddr().(*net.UDPAddr).Port)
-		rsp, conn, err := d.Dial(context.Background(), url, nil)
-		require.NoError(t, err)
-		require.Equal(t, 200, rsp.StatusCode)
 		go newEchoHandler(t)(conn)
 		<-done
 	})
 }
 
 func TestUnidirectionalStreams(t *testing.T) {
-	s := webtransport.Server{
-		H3: http3.Server{TLSConfig: tlsConf},
-	}
-	defer s.Close()
-	// Accept a unidirectional stream, read all of its contents,
-	// and echo it on a newly opened unidirectional stream.
-	addHandler(t, &s, func(conn *webtransport.Conn) {
+	conn, closeServer := establishConn(t, func(conn *webtransport.Conn) {
+		// Accept a unidirectional stream, read all of its contents,
+		// and echo it on a newly opened unidirectional stream.
 		str, err := conn.AcceptUniStream(context.Background())
 		require.NoError(t, err)
 		data, err := io.ReadAll(str)
@@ -154,21 +145,8 @@ func TestUnidirectionalStreams(t *testing.T) {
 		require.NoError(t, rstr.Close())
 		<-conn.Context().Done()
 	})
+	defer closeServer()
 
-	udpConn := getConn(t)
-	servErr := make(chan error, 1)
-	go func() {
-		servErr <- s.Serve(udpConn)
-	}()
-	// TODO: check err
-
-	d := webtransport.Dialer{TLSClientConf: &tls.Config{RootCAs: certPool}}
-	defer d.Close()
-	url := fmt.Sprintf("https://localhost:%d/webtransport", udpConn.LocalAddr().(*net.UDPAddr).Port)
-	rsp, conn, err := d.Dial(context.Background(), url, nil)
-	require.NoError(t, err)
-	require.Equal(t, 200, rsp.StatusCode)
-	defer conn.Close()
 	str, err := conn.OpenUniStream()
 	require.NoError(t, err)
 	data := getRandomData(10 * 1024)
@@ -184,18 +162,14 @@ func TestUnidirectionalStreams(t *testing.T) {
 
 func TestMultipleClients(t *testing.T) {
 	const numClients = 5
-	s := webtransport.Server{
+	s := &webtransport.Server{
 		H3: http3.Server{TLSConfig: tlsConf},
 	}
 	defer s.Close()
-	addHandler(t, &s, newEchoHandler(t))
+	addHandler(t, s, newEchoHandler(t))
 
-	udpConn := getConn(t)
-	servErr := make(chan error, 1)
-	go func() {
-		servErr <- s.Serve(udpConn)
-	}()
-	// TODO: check err
+	addr, closeServer := runServer(t, s)
+	defer closeServer()
 
 	var wg sync.WaitGroup
 	wg.Add(numClients)
@@ -206,7 +180,7 @@ func TestMultipleClients(t *testing.T) {
 				TLSClientConf: &tls.Config{RootCAs: certPool},
 			}
 			defer d.Close()
-			url := fmt.Sprintf("https://localhost:%d/webtransport", udpConn.LocalAddr().(*net.UDPAddr).Port)
+			url := fmt.Sprintf("https://localhost:%d/webtransport", addr.Port)
 			rsp, conn, err := d.Dial(context.Background(), url, nil)
 			require.NoError(t, err)
 			require.Equal(t, 200, rsp.StatusCode)
@@ -217,12 +191,8 @@ func TestMultipleClients(t *testing.T) {
 }
 
 func TestStreamResetError(t *testing.T) {
-	s := webtransport.Server{
-		H3: http3.Server{TLSConfig: tlsConf},
-	}
-	defer s.Close()
 	const errorCode webtransport.ErrorCode = 127
-	addHandler(t, &s, func(conn *webtransport.Conn) {
+	conn, closeServer := establishConn(t, func(conn *webtransport.Conn) {
 		for {
 			str, err := conn.AcceptStream(context.Background())
 			if err != nil {
@@ -232,22 +202,7 @@ func TestStreamResetError(t *testing.T) {
 			str.CancelWrite(errorCode)
 		}
 	})
-
-	udpConn := getConn(t)
-	servErr := make(chan error, 1)
-	go func() {
-		servErr <- s.Serve(udpConn)
-	}()
-	// TODO: check err
-
-	d := webtransport.Dialer{
-		TLSClientConf: &tls.Config{RootCAs: certPool},
-	}
-	defer d.Close()
-	url := fmt.Sprintf("https://localhost:%d/webtransport", udpConn.LocalAddr().(*net.UDPAddr).Port)
-	rsp, conn, err := d.Dial(context.Background(), url, nil)
-	require.NoError(t, err)
-	require.Equal(t, 200, rsp.StatusCode)
+	defer closeServer()
 
 	str, err := conn.OpenStream()
 	require.NoError(t, err)
@@ -300,24 +255,23 @@ func TestCheckOrigin(t *testing.T) {
 	for _, tc := range tcs {
 		tc := tc
 		t.Run(tc.Name, func(t *testing.T) {
-			s := webtransport.Server{
+			s := &webtransport.Server{
 				H3:          http3.Server{TLSConfig: tlsConf},
 				CheckOrigin: tc.CheckOrigin,
 			}
 			defer s.Close()
-			addHandler(t, &s, newEchoHandler(t))
+			addHandler(t, s, newEchoHandler(t))
 
-			udpConn := getConn(t)
-			go s.Serve(udpConn)
+			addr, closeServer := runServer(t, s)
+			defer closeServer()
 
 			d := webtransport.Dialer{
 				TLSClientConf: &tls.Config{RootCAs: certPool},
 			}
 			defer d.Close()
-			port := udpConn.LocalAddr().(*net.UDPAddr).Port
-			url := fmt.Sprintf("https://localhost:%d/webtransport", port)
+			url := fmt.Sprintf("https://localhost:%d/webtransport", addr.Port)
 			hdr := make(http.Header)
-			hdr.Add("Origin", strings.ReplaceAll(tc.Origin, "%port%", strconv.Itoa(port)))
+			hdr.Add("Origin", strings.ReplaceAll(tc.Origin, "%port%", strconv.Itoa(addr.Port)))
 			rsp, conn, err := d.Dial(context.Background(), url, hdr)
 			if tc.Result {
 				require.NoError(t, err)
