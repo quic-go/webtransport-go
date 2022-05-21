@@ -34,15 +34,25 @@ type Stream interface {
 
 type sendStream struct {
 	str quic.SendStream
+	// WebTransport stream header.
+	// Set by the constructor, set to nil once sent out.
+	// Might be initialized to nil if this sendStream is part of an incoming bidirectional stream.
+	streamHdr []byte
 }
 
 var _ SendStream = &sendStream{}
 
-func newSendStream(str quic.SendStream) SendStream {
-	return &sendStream{str: str}
+func newSendStream(str quic.SendStream, hdr []byte) SendStream {
+	return &sendStream{str: str, streamHdr: hdr}
 }
 
 func (s *sendStream) Write(b []byte) (int, error) {
+	if len(s.streamHdr) > 0 {
+		if _, err := s.str.Write(s.streamHdr); err != nil {
+			return 0, err
+		}
+		s.streamHdr = nil
+	}
 	n, err := s.str.Write(b)
 	return n, maybeConvertStreamError(err)
 }
@@ -89,10 +99,10 @@ type stream struct {
 
 var _ Stream = &stream{}
 
-func newStream(str quic.Stream) Stream {
+func newStream(str quic.Stream, hdr []byte) Stream {
 	return &stream{
-		SendStream:    &sendStream{str: str},
-		ReceiveStream: &receiveStream{str: str},
+		SendStream:    newSendStream(str, hdr),
+		ReceiveStream: newReceiveStream(str),
 	}
 }
 

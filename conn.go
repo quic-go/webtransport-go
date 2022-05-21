@@ -21,6 +21,9 @@ type Conn struct {
 	qconn      http3.StreamCreator
 	requestStr io.Reader // TODO: this needs to be an io.ReadWriteCloser so we can close the stream
 
+	streamHdr    []byte
+	uniStreamHdr []byte
+
 	ctx      context.Context
 	closeErr error
 	closed   chan struct{}
@@ -53,6 +56,17 @@ func newConn(sessionID sessionID, qconn http3.StreamCreator, requestStr io.Reade
 		acceptChan:    make(chan struct{}, 1),
 		acceptUniChan: make(chan struct{}, 1),
 	}
+	// precompute the headers for unidirectional streams
+	buf := bytes.NewBuffer(make([]byte, 0, 2+quicvarint.Len(uint64(c.sessionID))))
+	quicvarint.Write(buf, webTransportUniStreamType)
+	quicvarint.Write(buf, uint64(c.sessionID))
+	c.uniStreamHdr = buf.Bytes()
+	// precompute the headers for bidirectional streams
+	buf = bytes.NewBuffer(make([]byte, 0, 2+quicvarint.Len(uint64(c.sessionID))))
+	quicvarint.Write(buf, webTransportFrameType)
+	quicvarint.Write(buf, uint64(c.sessionID))
+	c.streamHdr = buf.Bytes()
+
 	go func() {
 		defer ctxCancel()
 		c.handleConn()
@@ -120,7 +134,7 @@ func (c *Conn) AcceptStream(ctx context.Context) (Stream, error) {
 	}
 	c.acceptMx.Unlock()
 	if str != nil {
-		return newStream(str), nil
+		return newStream(str, nil), nil
 	}
 
 	select {
@@ -166,10 +180,7 @@ func (c *Conn) OpenStream() (Stream, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := c.writeStreamHeader(str); err != nil {
-		return nil, err
-	}
-	return newStream(str), nil
+	return newStream(str, c.streamHdr), nil
 }
 
 func (c *Conn) OpenStreamSync(ctx context.Context) (Stream, error) {
@@ -180,11 +191,7 @@ func (c *Conn) OpenStreamSync(ctx context.Context) (Stream, error) {
 	if err != nil {
 		return nil, err
 	}
-	// TODO: this should probably respect the context
-	if err := c.writeStreamHeader(str); err != nil {
-		return nil, err
-	}
-	return newStream(str), nil
+	return newStream(str, c.streamHdr), nil
 }
 
 func (c *Conn) OpenUniStream() (SendStream, error) {
@@ -195,26 +202,7 @@ func (c *Conn) OpenUniStream() (SendStream, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := c.writeUniStreamHeader(str); err != nil {
-		return nil, err
-	}
-	return newSendStream(str), nil
-}
-
-func (c *Conn) writeStreamHeader(str quic.Stream) error {
-	buf := bytes.NewBuffer(make([]byte, 0, 9)) // 1 byte for the frame type, up to 8 bytes for the session ID
-	quicvarint.Write(buf, webTransportFrameType)
-	quicvarint.Write(buf, uint64(c.sessionID))
-	_, err := str.Write(buf.Bytes())
-	return err
-}
-
-func (c *Conn) writeUniStreamHeader(str quic.SendStream) error {
-	buf := bytes.NewBuffer(make([]byte, 0, 9)) // 1 byte for the frame type, up to 8 bytes for the session ID
-	quicvarint.Write(buf, webTransportUniStreamType)
-	quicvarint.Write(buf, uint64(c.sessionID))
-	_, err := str.Write(buf.Bytes())
-	return err
+	return newSendStream(str, c.uniStreamHdr), nil
 }
 
 func (c *Conn) LocalAddr() net.Addr {
