@@ -48,7 +48,6 @@ func (c *requestStreamDelayingConn) OpenStreamSync(ctx context.Context) (quic.St
 func TestClientReorderedUpgrade(t *testing.T) {
 	timeout := scaleDuration(100 * time.Millisecond)
 	blockUpgrade := make(chan struct{})
-	tlsConf, certPool := getTLSConf(t)
 	s := webtransport.Server{
 		H3: http3.Server{TLSConfig: tlsConf},
 	}
