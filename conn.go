@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"math/rand"
 	"net"
 	"sync"
 
@@ -24,9 +25,11 @@ type Conn struct {
 	streamHdr    []byte
 	uniStreamHdr []byte
 
-	ctx      context.Context
-	closeErr error
-	closed   chan struct{}
+	ctx        context.Context
+	closeMx    sync.Mutex
+	closeErr   error
+	closed     bool
+	streamCtxs map[int]context.CancelFunc
 
 	// for bidirectional streams
 	acceptMx   sync.Mutex
@@ -52,7 +55,7 @@ func newConn(sessionID sessionID, qconn http3.StreamCreator, requestStr io.Reade
 		qconn:         qconn,
 		requestStr:    requestStr,
 		ctx:           ctx,
-		closed:        make(chan struct{}),
+		streamCtxs:    make(map[int]context.CancelFunc),
 		acceptChan:    make(chan struct{}, 1),
 		acceptUniChan: make(chan struct{}, 1),
 	}
@@ -80,18 +83,15 @@ func (c *Conn) handleConn() {
 		b := make([]byte, 100)
 		if _, err := c.requestStr.Read(b); err != nil {
 			c.closeErr = fmt.Errorf("WebTransport session closed: %w", err)
-			close(c.closed)
-			return
+			break
 		}
 	}
-}
 
-func (c *Conn) isClosed() bool {
-	select {
-	case <-c.closed:
-		return true
-	default:
-		return false
+	c.closeMx.Lock()
+	defer c.closeMx.Unlock()
+	c.closed = true
+	for _, cancel := range c.streamCtxs {
+		cancel()
 	}
 }
 
@@ -123,9 +123,13 @@ func (c *Conn) Context() context.Context {
 }
 
 func (c *Conn) AcceptStream(ctx context.Context) (Stream, error) {
-	if c.isClosed() {
+	c.closeMx.Lock()
+	closed := c.closed
+	c.closeMx.Unlock()
+	if closed {
 		return nil, c.closeErr
 	}
+
 	var str quic.Stream
 	c.acceptMx.Lock()
 	if len(c.acceptQueue) > 0 {
@@ -148,9 +152,13 @@ func (c *Conn) AcceptStream(ctx context.Context) (Stream, error) {
 }
 
 func (c *Conn) AcceptUniStream(ctx context.Context) (ReceiveStream, error) {
-	if c.isClosed() {
+	c.closeMx.Lock()
+	closed := c.closed
+	c.closeMx.Unlock()
+	if closed {
 		return nil, c.closeErr
 	}
+
 	var str quic.ReceiveStream
 	c.acceptUniMx.Lock()
 	if len(c.acceptUniQueue) > 0 {
@@ -173,9 +181,13 @@ func (c *Conn) AcceptUniStream(ctx context.Context) (ReceiveStream, error) {
 }
 
 func (c *Conn) OpenStream() (Stream, error) {
-	if c.isClosed() {
+	c.closeMx.Lock()
+	closed := c.closed
+	c.closeMx.Unlock()
+	if closed {
 		return nil, c.closeErr
 	}
+
 	str, err := c.qconn.OpenStream()
 	if err != nil {
 		return nil, err
@@ -184,9 +196,25 @@ func (c *Conn) OpenStream() (Stream, error) {
 }
 
 func (c *Conn) OpenStreamSync(ctx context.Context) (Stream, error) {
-	if c.isClosed() {
+	c.closeMx.Lock()
+	if c.closed {
+		c.closeMx.Unlock()
 		return nil, c.closeErr
 	}
+	ctx, cancel := context.WithCancel(ctx)
+rand:
+	id := rand.Int()
+	if _, ok := c.streamCtxs[id]; ok {
+		goto rand
+	}
+	c.streamCtxs[id] = cancel
+	c.closeMx.Unlock()
+	defer func() {
+		c.closeMx.Lock()
+		delete(c.streamCtxs, id)
+		c.closeMx.Unlock()
+	}()
+
 	str, err := c.qconn.OpenStreamSync(ctx)
 	if err != nil {
 		return nil, err
@@ -195,7 +223,7 @@ func (c *Conn) OpenStreamSync(ctx context.Context) (Stream, error) {
 }
 
 func (c *Conn) OpenUniStream() (SendStream, error) {
-	if c.isClosed() {
+	if c.closed {
 		return nil, c.closeErr
 	}
 	str, err := c.qconn.OpenUniStream()
@@ -206,9 +234,24 @@ func (c *Conn) OpenUniStream() (SendStream, error) {
 }
 
 func (c *Conn) OpenUniStreamSync(ctx context.Context) (SendStream, error) {
-	if c.isClosed() {
+	if c.closed {
 		return nil, c.closeErr
 	}
+	ctx, cancel := context.WithCancel(ctx)
+	c.closeMx.Lock()
+rand:
+	id := rand.Int()
+	if _, ok := c.streamCtxs[id]; ok {
+		goto rand
+	}
+	c.streamCtxs[id] = cancel
+	c.closeMx.Unlock()
+	defer func() {
+		c.closeMx.Lock()
+		delete(c.streamCtxs, id)
+		c.closeMx.Unlock()
+	}()
+
 	str, err := c.qconn.OpenUniStreamSync(ctx)
 	if err != nil {
 		return nil, err

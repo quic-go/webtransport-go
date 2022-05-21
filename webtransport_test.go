@@ -21,7 +21,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func runServer(t *testing.T, s *webtransport.Server) (conn *net.UDPAddr, close func()) {
+func runServer(t *testing.T, s *webtransport.Server) (addr *net.UDPAddr, close func()) {
 	laddr, err := net.ResolveUDPAddr("udp", "localhost:0")
 	require.NoError(t, err)
 	udpConn, err := net.ListenUDP("udp", laddr)
@@ -225,6 +225,63 @@ func TestShutdown(t *testing.T) {
 	require.Error(t, err)
 	_, err = conn.AcceptUniStream(context.Background())
 	require.Error(t, err)
+}
+
+func TestOpenStreamSyncShutdown(t *testing.T) {
+	runTest := func(t *testing.T, openStream, openStreamSync func() error, done chan struct{}) {
+		t.Helper()
+
+		// open as many streams as the server lets us
+		for {
+			if err := openStream(); err != nil {
+				break
+			}
+		}
+
+		const num = 3
+		errChan := make(chan error, num)
+		for i := 0; i < num; i++ {
+			go func() { errChan <- openStreamSync() }()
+		}
+
+		// make sure the 3 calls to OpenStreamSync are actually blocked
+		require.Never(t, func() bool { return len(errChan) > 0 }, 100*time.Millisecond, 10*time.Millisecond)
+		close(done)
+		require.Eventually(t, func() bool { return len(errChan) == 3 }, scaleDuration(100*time.Millisecond), 10*time.Millisecond)
+		require.Error(t, <-errChan)
+		require.Error(t, <-errChan)
+		require.Error(t, <-errChan)
+	}
+
+	t.Run("bidirectional streams", func(t *testing.T) {
+		done := make(chan struct{})
+		conn, closeServer := establishConn(t, func(conn *webtransport.Conn) {
+			<-done
+			conn.Close()
+		})
+		defer closeServer()
+
+		runTest(t,
+			func() error { _, err := conn.OpenStream(); return err },
+			func() error { _, err := conn.OpenStreamSync(context.Background()); return err },
+			done,
+		)
+	})
+
+	t.Run("unidirectional streams", func(t *testing.T) {
+		done := make(chan struct{})
+		conn, closeServer := establishConn(t, func(conn *webtransport.Conn) {
+			<-done
+			conn.Close()
+		})
+		defer closeServer()
+
+		runTest(t,
+			func() error { _, err := conn.OpenUniStream(); return err },
+			func() error { _, err := conn.OpenUniStreamSync(context.Background()); return err },
+			done,
+		)
+	})
 }
 
 func TestCheckOrigin(t *testing.T) {
