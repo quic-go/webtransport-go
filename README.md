@@ -10,9 +10,7 @@ webtransport-go is an implementation of the WebTransport protocol, based on [qui
 ```go
 // create a new webtransport.Server, listening on (UDP) port 443
 s := webtransport.Server{
-    H3: http3.Server{
-        Server: &http.Server{Addr: ":443"},
-    },
+    H3: http3.Server{Addr: ":443"},
 }
 
 // Create a new HTTP endpoint /webtransport.
