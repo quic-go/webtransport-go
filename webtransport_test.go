@@ -286,6 +286,51 @@ func TestOpenStreamSyncShutdown(t *testing.T) {
 	})
 }
 
+func TestStreamCloseOnShutdown(t *testing.T) {
+	t.Skip()
+	const numStream = 3
+	done := make(chan struct{})
+	strChan := make(chan webtransport.Stream)
+	conn, closeServer := establishConn(t, func(conn *webtransport.Conn) {
+		for i := 0; i < numStream; i++ {
+			str, err := conn.AcceptStream(context.Background())
+			require.NoError(t, err)
+			strChan <- str
+		}
+		<-done
+		conn.Close()
+	})
+	defer closeServer()
+
+	clientStreams := make([]webtransport.Stream, numStream)
+	serverStreams := make([]webtransport.Stream, numStream)
+	for i := 0; i < numStream; i++ {
+		cstr, err := conn.OpenStream()
+		require.NoError(t, err)
+		_, err = cstr.Write([]byte("foobar"))
+		require.NoError(t, err)
+		clientStreams[i] = cstr
+		var sstr webtransport.Stream
+		select {
+		case sstr = <-strChan:
+		case <-time.After(scaleDuration(100 * time.Millisecond)):
+			t.Fatal("failed to accept stream")
+		}
+		serverStreams[i] = sstr
+		_, err = sstr.Read(make([]byte, 6))
+		require.NoError(t, err)
+	}
+
+	close(done)
+	time.Sleep(scaleDuration(200 * time.Millisecond))
+	// check that client streams are closed
+	for _, str := range clientStreams {
+		_, err := str.Write([]byte("foo"))
+		require.Error(t, err)
+	}
+	// check that server streams are closed
+}
+
 func TestCheckOrigin(t *testing.T) {
 	type tc struct {
 		Name        string
