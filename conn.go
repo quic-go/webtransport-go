@@ -184,9 +184,9 @@ func (c *Conn) AcceptUniStream(ctx context.Context) (ReceiveStream, error) {
 
 func (c *Conn) OpenStream() (Stream, error) {
 	c.closeMx.Lock()
-	closeErr := c.closeErr
-	c.closeMx.Unlock()
-	if closeErr != nil {
+	defer c.closeMx.Unlock()
+
+	if c.closeErr != nil {
 		return nil, c.closeErr
 	}
 
@@ -197,6 +197,16 @@ func (c *Conn) OpenStream() (Stream, error) {
 	return newStream(str, c.streamHdr), nil
 }
 
+func (c *Conn) addStreamCtxCancel(cancel context.CancelFunc) (id int) {
+rand:
+	id = rand.Int()
+	if _, ok := c.streamCtxs[id]; ok {
+		goto rand
+	}
+	c.streamCtxs[id] = cancel
+	return id
+}
+
 func (c *Conn) OpenStreamSync(ctx context.Context) (str Stream, err error) {
 	c.closeMx.Lock()
 	if c.closeErr != nil {
@@ -204,13 +214,9 @@ func (c *Conn) OpenStreamSync(ctx context.Context) (str Stream, err error) {
 		return nil, c.closeErr
 	}
 	ctx, cancel := context.WithCancel(ctx)
-rand:
-	id := rand.Int()
-	if _, ok := c.streamCtxs[id]; ok {
-		goto rand
-	}
-	c.streamCtxs[id] = cancel
+	id := c.addStreamCtxCancel(cancel)
 	c.closeMx.Unlock()
+
 	defer func() {
 		c.closeMx.Lock()
 		closeErr := c.closeErr
@@ -231,11 +237,10 @@ rand:
 
 func (c *Conn) OpenUniStream() (SendStream, error) {
 	c.closeMx.Lock()
-	closeErr := c.closeErr
-	c.closeMx.Unlock()
+	defer c.closeMx.Unlock()
 
-	if closeErr != nil {
-		return nil, closeErr
+	if c.closeErr != nil {
+		return nil, c.closeErr
 	}
 	str, err := c.qconn.OpenUniStream()
 	if err != nil {
@@ -246,21 +251,14 @@ func (c *Conn) OpenUniStream() (SendStream, error) {
 
 func (c *Conn) OpenUniStreamSync(ctx context.Context) (str SendStream, err error) {
 	c.closeMx.Lock()
-	closeErr := c.closeErr
-	c.closeMx.Unlock()
-
-	if closeErr != nil {
-		return nil, closeErr
+	if c.closeErr != nil {
+		c.closeMx.Unlock()
+		return nil, c.closeErr
 	}
 	ctx, cancel := context.WithCancel(ctx)
-	c.closeMx.Lock()
-rand:
-	id := rand.Int()
-	if _, ok := c.streamCtxs[id]; ok {
-		goto rand
-	}
-	c.streamCtxs[id] = cancel
+	id := c.addStreamCtxCancel(cancel)
 	c.closeMx.Unlock()
+
 	defer func() {
 		c.closeMx.Lock()
 		closeErr := c.closeErr
