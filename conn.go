@@ -230,8 +230,12 @@ rand:
 }
 
 func (c *Conn) OpenUniStream() (SendStream, error) {
-	if c.closeErr != nil {
-		return nil, c.closeErr
+	c.closeMx.Lock()
+	closeErr := c.closeErr
+	c.closeMx.Unlock()
+
+	if closeErr != nil {
+		return nil, closeErr
 	}
 	str, err := c.qconn.OpenUniStream()
 	if err != nil {
@@ -241,8 +245,12 @@ func (c *Conn) OpenUniStream() (SendStream, error) {
 }
 
 func (c *Conn) OpenUniStreamSync(ctx context.Context) (str SendStream, err error) {
-	if c.closeErr != nil {
-		return nil, c.closeErr
+	c.closeMx.Lock()
+	closeErr := c.closeErr
+	c.closeMx.Unlock()
+
+	if closeErr != nil {
+		return nil, closeErr
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	c.closeMx.Lock()
