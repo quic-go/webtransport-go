@@ -26,8 +26,7 @@ type Conn struct {
 
 	ctx        context.Context
 	closeMx    sync.Mutex
-	closeErr   error
-	closed     bool
+	closeErr   error // not nil once the connection is closed
 	streamCtxs map[int]context.CancelFunc
 
 	// for bidirectional streams
@@ -92,7 +91,6 @@ func (c *Conn) handleConn() {
 
 	c.closeMx.Lock()
 	defer c.closeMx.Unlock()
-	c.closed = true
 	c.closeErr = closeErr
 	for _, cancel := range c.streamCtxs {
 		cancel()
@@ -128,10 +126,10 @@ func (c *Conn) Context() context.Context {
 
 func (c *Conn) AcceptStream(ctx context.Context) (Stream, error) {
 	c.closeMx.Lock()
-	closed := c.closed
+	closeErr := c.closeErr
 	c.closeMx.Unlock()
-	if closed {
-		return nil, c.closeErr
+	if closeErr != nil {
+		return nil, closeErr
 	}
 
 	var str quic.Stream
@@ -157,9 +155,9 @@ func (c *Conn) AcceptStream(ctx context.Context) (Stream, error) {
 
 func (c *Conn) AcceptUniStream(ctx context.Context) (ReceiveStream, error) {
 	c.closeMx.Lock()
-	closed := c.closed
+	closeErr := c.closeErr
 	c.closeMx.Unlock()
-	if closed {
+	if closeErr != nil {
 		return nil, c.closeErr
 	}
 
@@ -186,9 +184,9 @@ func (c *Conn) AcceptUniStream(ctx context.Context) (ReceiveStream, error) {
 
 func (c *Conn) OpenStream() (Stream, error) {
 	c.closeMx.Lock()
-	closed := c.closed
+	closeErr := c.closeErr
 	c.closeMx.Unlock()
-	if closed {
+	if closeErr != nil {
 		return nil, c.closeErr
 	}
 
@@ -201,7 +199,7 @@ func (c *Conn) OpenStream() (Stream, error) {
 
 func (c *Conn) OpenStreamSync(ctx context.Context) (str Stream, err error) {
 	c.closeMx.Lock()
-	if c.closed {
+	if c.closeErr != nil {
 		c.closeMx.Unlock()
 		return nil, c.closeErr
 	}
@@ -232,7 +230,7 @@ rand:
 }
 
 func (c *Conn) OpenUniStream() (SendStream, error) {
-	if c.closed {
+	if c.closeErr != nil {
 		return nil, c.closeErr
 	}
 	str, err := c.qconn.OpenUniStream()
@@ -243,7 +241,7 @@ func (c *Conn) OpenUniStream() (SendStream, error) {
 }
 
 func (c *Conn) OpenUniStreamSync(ctx context.Context) (str SendStream, err error) {
-	if c.closed {
+	if c.closeErr != nil {
 		return nil, c.closeErr
 	}
 	ctx, cancel := context.WithCancel(ctx)
