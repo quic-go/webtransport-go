@@ -130,7 +130,7 @@ func TestBidirectionalStreamsDataTransfer(t *testing.T) {
 	})
 }
 
-func TestBidirectionalStreamsImmediateClose(t *testing.T) {
+func TestStreamsImmediateClose(t *testing.T) {
 	t.Run("bidirectional streams", func(t *testing.T) {
 		t.Run("client-initiated", func(t *testing.T) {
 			conn, closeServer := establishConn(t, func(c *webtransport.Conn) {
@@ -211,6 +211,46 @@ func TestBidirectionalStreamsImmediateClose(t *testing.T) {
 			close(done)
 		})
 	})
+}
+
+func TestStreamsImmediateReset(t *testing.T) {
+	// This tests ensures that we correctly process the error code that occurs when quic-go reads the frame type.
+	// If we don't process the error code correctly and fail to hijack the stream,
+	// quic-go will see a bidirectional stream opened by the server, which is a connection error.
+	done := make(chan struct{})
+	defer close(done)
+	conn, closeServer := establishConn(t, func(c *webtransport.Conn) {
+		for i := 0; i < 50; i++ {
+			str, err := c.OpenStream()
+			require.NoError(t, err)
+
+			var wg sync.WaitGroup
+			wg.Add(2)
+			go func() {
+				defer wg.Done()
+				str.CancelWrite(42)
+			}()
+
+			go func() {
+				defer wg.Done()
+				str.Write([]byte("foobar"))
+			}()
+
+			wg.Wait()
+		}
+		<-done
+	})
+	defer closeServer()
+
+	ctx, cancel := context.WithTimeout(context.Background(), scaleDuration(100*time.Millisecond))
+	defer cancel()
+	for {
+		_, err := conn.AcceptStream(ctx)
+		if err == context.DeadlineExceeded {
+			break
+		}
+		require.NoError(t, err)
+	}
 }
 
 func TestUnidirectionalStreams(t *testing.T) {

@@ -52,7 +52,10 @@ func (d *Dialer) init() {
 		Dial:               d.DialFunc,
 		EnableDatagrams:    true,
 		AdditionalSettings: map[uint64]uint64{settingsEnableWebtransport: 1},
-		StreamHijacker: func(ft http3.FrameType, conn quic.Connection, str quic.Stream) (hijacked bool, err error) {
+		StreamHijacker: func(ft http3.FrameType, conn quic.Connection, str quic.Stream, e error) (hijacked bool, err error) {
+			if isWebTransportError(e) {
+				return true, nil
+			}
 			if ft != webTransportFrameType {
 				return false, nil
 			}
@@ -63,8 +66,8 @@ func (d *Dialer) init() {
 			d.conns.AddStream(conn, str, sessionID(id))
 			return true, nil
 		},
-		UniStreamHijacker: func(st http3.StreamType, conn quic.Connection, str quic.ReceiveStream) (hijacked bool) {
-			if st != webTransportUniStreamType {
+		UniStreamHijacker: func(st http3.StreamType, conn quic.Connection, str quic.ReceiveStream, err error) (hijacked bool) {
+			if st != webTransportUniStreamType && !isWebTransportError(err) {
 				return false
 			}
 			d.conns.AddUniStream(conn, str)

@@ -86,7 +86,10 @@ func (s *Server) init() error {
 	if s.H3.StreamHijacker != nil {
 		return errors.New("StreamHijacker already set")
 	}
-	s.H3.StreamHijacker = func(ft http3.FrameType, qconn quic.Connection, str quic.Stream) (bool /* hijacked */, error) {
+	s.H3.StreamHijacker = func(ft http3.FrameType, qconn quic.Connection, str quic.Stream, err error) (bool /* hijacked */, error) {
+		if isWebTransportError(err) {
+			return true, nil
+		}
 		if ft != webTransportFrameType {
 			return false, nil
 		}
@@ -97,8 +100,8 @@ func (s *Server) init() error {
 		s.conns.AddStream(qconn, str, sessionID(id))
 		return true, nil
 	}
-	s.H3.UniStreamHijacker = func(st http3.StreamType, qconn quic.Connection, str quic.ReceiveStream) (hijacked bool) {
-		if st != webTransportUniStreamType {
+	s.H3.UniStreamHijacker = func(st http3.StreamType, qconn quic.Connection, str quic.ReceiveStream, err error) (hijacked bool) {
+		if st != webTransportUniStreamType && !isWebTransportError(err) {
 			return false
 		}
 		s.conns.AddUniStream(qconn, str)
