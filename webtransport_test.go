@@ -109,7 +109,7 @@ func getRandomData(l int) []byte {
 	return data
 }
 
-func TestBidirectionalStreams(t *testing.T) {
+func TestBidirectionalStreamsDataTransfer(t *testing.T) {
 	t.Run("client-initiated", func(t *testing.T) {
 		conn, closeServer := establishConn(t, newEchoHandler(t))
 		defer closeServer()
@@ -127,6 +127,89 @@ func TestBidirectionalStreams(t *testing.T) {
 
 		go newEchoHandler(t)(conn)
 		<-done
+	})
+}
+
+func TestBidirectionalStreamsImmediateClose(t *testing.T) {
+	t.Run("bidirectional streams", func(t *testing.T) {
+		t.Run("client-initiated", func(t *testing.T) {
+			conn, closeServer := establishConn(t, func(c *webtransport.Conn) {
+				str, err := c.AcceptStream(context.Background())
+				require.NoError(t, err)
+				n, err := str.Read([]byte{0})
+				require.Zero(t, n)
+				require.ErrorIs(t, err, io.EOF)
+				require.NoError(t, str.Close())
+			})
+			defer closeServer()
+
+			str, err := conn.OpenStream()
+			require.NoError(t, err)
+			require.NoError(t, str.Close())
+			n, err := str.Read([]byte{0})
+			require.Zero(t, n)
+			require.ErrorIs(t, err, io.EOF)
+		})
+
+		t.Run("server-initiated", func(t *testing.T) {
+			done := make(chan struct{})
+			conn, closeServer := establishConn(t, func(c *webtransport.Conn) {
+				defer close(done)
+				str, err := c.OpenStream()
+				require.NoError(t, err)
+				require.NoError(t, str.Close())
+				n, err := str.Read([]byte{0})
+				require.Zero(t, n)
+				require.ErrorIs(t, err, io.EOF)
+			})
+			defer closeServer()
+
+			str, err := conn.AcceptStream(context.Background())
+			require.NoError(t, err)
+			n, err := str.Read([]byte{0})
+			require.Zero(t, n)
+			require.ErrorIs(t, err, io.EOF)
+			require.NoError(t, str.Close())
+			<-done
+		})
+	})
+
+	t.Run("unidirectional", func(t *testing.T) {
+		t.Run("client-initiated", func(t *testing.T) {
+			done := make(chan struct{})
+			conn, closeServer := establishConn(t, func(c *webtransport.Conn) {
+				defer close(done)
+				str, err := c.AcceptUniStream(context.Background())
+				require.NoError(t, err)
+				n, err := str.Read([]byte{0})
+				require.Zero(t, n)
+				require.ErrorIs(t, err, io.EOF)
+			})
+			defer closeServer()
+
+			str, err := conn.OpenUniStream()
+			require.NoError(t, err)
+			require.NoError(t, str.Close())
+			<-done
+		})
+
+		t.Run("server-initiated", func(t *testing.T) {
+			done := make(chan struct{})
+			conn, closeServer := establishConn(t, func(c *webtransport.Conn) {
+				str, err := c.OpenUniStream()
+				require.NoError(t, err)
+				require.NoError(t, str.Close())
+				<-done
+			})
+			defer closeServer()
+
+			str, err := conn.AcceptUniStream(context.Background())
+			require.NoError(t, err)
+			n, err := str.Read([]byte{0})
+			require.Zero(t, n)
+			require.ErrorIs(t, err, io.EOF)
+			close(done)
+		})
 	})
 }
 

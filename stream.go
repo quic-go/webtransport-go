@@ -46,12 +46,20 @@ func newSendStream(str quic.SendStream, hdr []byte) SendStream {
 	return &sendStream{str: str, streamHdr: hdr}
 }
 
+func (s *sendStream) maybeSendStreamHeader() error {
+	if len(s.streamHdr) == 0 {
+		return nil
+	}
+	if _, err := s.str.Write(s.streamHdr); err != nil {
+		return err
+	}
+	s.streamHdr = nil
+	return nil
+}
+
 func (s *sendStream) Write(b []byte) (int, error) {
-	if len(s.streamHdr) > 0 {
-		if _, err := s.str.Write(s.streamHdr); err != nil {
-			return 0, err
-		}
-		s.streamHdr = nil
+	if err := s.maybeSendStreamHeader(); err != nil {
+		return 0, err
 	}
 	n, err := s.str.Write(b)
 	return n, maybeConvertStreamError(err)
@@ -62,6 +70,9 @@ func (s *sendStream) CancelWrite(e ErrorCode) {
 }
 
 func (s *sendStream) Close() error {
+	if err := s.maybeSendStreamHeader(); err != nil {
+		return err
+	}
 	return maybeConvertStreamError(s.str.Close())
 }
 
