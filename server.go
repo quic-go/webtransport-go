@@ -27,12 +27,6 @@ const (
 	webTransportUniStreamType = 0x54
 )
 
-type streamIDGetter interface {
-	StreamID() quic.StreamID
-}
-
-var _ streamIDGetter = quic.Stream(nil)
-
 type Server struct {
 	H3 http3.Server
 
@@ -165,17 +159,22 @@ func (s *Server) Upgrade(w http.ResponseWriter, r *http.Request) (*Conn, error) 
 	w.WriteHeader(http.StatusOK)
 	w.(http.Flusher).Flush()
 
-	str, ok := w.(streamIDGetter)
+	httpStreamer, ok := r.Body.(http3.HTTPStreamer)
 	if !ok { // should never happen, unless quic-go changed the API
-		return nil, errors.New("failed to get stream ID")
+		return nil, errors.New("failed to take over HTTP stream")
 	}
+	str := httpStreamer.HTTPStream()
 	sID := sessionID(str.StreamID())
 
 	hijacker, ok := w.(http3.Hijacker)
 	if !ok { // should never happen, unless quic-go changed the API
 		return nil, errors.New("failed to hijack")
 	}
-	return s.conns.AddSession(hijacker.StreamCreator(), sID, r.Body), nil
+	return s.conns.AddSession(
+		hijacker.StreamCreator(),
+		sID,
+		r.Body.(http3.HTTPStreamer).HTTPStream(),
+	), nil
 }
 
 // copied from https://github.com/gorilla/websocket

@@ -19,7 +19,7 @@ type sessionID uint64
 type Conn struct {
 	sessionID  sessionID
 	qconn      http3.StreamCreator
-	requestStr io.Reader // TODO: this needs to be an io.ReadWriteCloser so we can close the stream
+	requestStr io.ReadWriteCloser
 
 	streamHdr    []byte
 	uniStreamHdr []byte
@@ -46,7 +46,7 @@ type Conn struct {
 	acceptUniQueue []ReceiveStream
 }
 
-func newConn(sessionID sessionID, qconn http3.StreamCreator, requestStr io.Reader) *Conn {
+func newConn(sessionID sessionID, qconn http3.StreamCreator, requestStr io.ReadWriteCloser) *Conn {
 	ctx, ctxCancel := context.WithCancel(context.Background())
 	c := &Conn{
 		sessionID:     sessionID,
@@ -292,5 +292,6 @@ func (c *Conn) RemoteAddr() net.Addr {
 }
 
 func (c *Conn) Close() error {
-	return nil
+	// TODO: send CLOSE_WEBTRANSPORT_SESSION capsule
+	return c.requestStr.Close()
 }

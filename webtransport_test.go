@@ -113,6 +113,7 @@ func TestBidirectionalStreamsDataTransfer(t *testing.T) {
 	t.Run("client-initiated", func(t *testing.T) {
 		conn, closeServer := establishConn(t, newEchoHandler(t))
 		defer closeServer()
+		defer conn.Close()
 
 		sendDataAndCheckEcho(t, conn)
 	})
@@ -124,6 +125,7 @@ func TestBidirectionalStreamsDataTransfer(t *testing.T) {
 			sendDataAndCheckEcho(t, conn)
 		})
 		defer closeServer()
+		defer conn.Close()
 
 		go newEchoHandler(t)(conn)
 		<-done
@@ -133,7 +135,9 @@ func TestBidirectionalStreamsDataTransfer(t *testing.T) {
 func TestStreamsImmediateClose(t *testing.T) {
 	t.Run("bidirectional streams", func(t *testing.T) {
 		t.Run("client-initiated", func(t *testing.T) {
+			done := make(chan struct{})
 			conn, closeServer := establishConn(t, func(c *webtransport.Conn) {
+				defer close(done)
 				str, err := c.AcceptStream(context.Background())
 				require.NoError(t, err)
 				n, err := str.Read([]byte{0})
@@ -142,6 +146,7 @@ func TestStreamsImmediateClose(t *testing.T) {
 				require.NoError(t, str.Close())
 			})
 			defer closeServer()
+			defer conn.Close()
 
 			str, err := conn.OpenStream()
 			require.NoError(t, err)
@@ -149,6 +154,7 @@ func TestStreamsImmediateClose(t *testing.T) {
 			n, err := str.Read([]byte{0})
 			require.Zero(t, n)
 			require.ErrorIs(t, err, io.EOF)
+			<-done
 		})
 
 		t.Run("server-initiated", func(t *testing.T) {
@@ -161,8 +167,10 @@ func TestStreamsImmediateClose(t *testing.T) {
 				n, err := str.Read([]byte{0})
 				require.Zero(t, n)
 				require.ErrorIs(t, err, io.EOF)
+				require.NoError(t, c.Close())
 			})
 			defer closeServer()
+			defer conn.Close()
 
 			str, err := conn.AcceptStream(context.Background())
 			require.NoError(t, err)
@@ -176,9 +184,8 @@ func TestStreamsImmediateClose(t *testing.T) {
 
 	t.Run("unidirectional", func(t *testing.T) {
 		t.Run("client-initiated", func(t *testing.T) {
-			done := make(chan struct{})
 			conn, closeServer := establishConn(t, func(c *webtransport.Conn) {
-				defer close(done)
+				defer c.Close()
 				str, err := c.AcceptUniStream(context.Background())
 				require.NoError(t, err)
 				n, err := str.Read([]byte{0})
@@ -190,25 +197,23 @@ func TestStreamsImmediateClose(t *testing.T) {
 			str, err := conn.OpenUniStream()
 			require.NoError(t, err)
 			require.NoError(t, str.Close())
-			<-done
+			<-conn.Context().Done()
 		})
 
 		t.Run("server-initiated", func(t *testing.T) {
-			done := make(chan struct{})
 			conn, closeServer := establishConn(t, func(c *webtransport.Conn) {
 				str, err := c.OpenUniStream()
 				require.NoError(t, err)
 				require.NoError(t, str.Close())
-				<-done
 			})
 			defer closeServer()
+			defer conn.Close()
 
 			str, err := conn.AcceptUniStream(context.Background())
 			require.NoError(t, err)
 			n, err := str.Read([]byte{0})
 			require.Zero(t, n)
 			require.ErrorIs(t, err, io.EOF)
-			close(done)
 		})
 	})
 }
@@ -238,9 +243,9 @@ func TestStreamsImmediateReset(t *testing.T) {
 
 			wg.Wait()
 		}
-		<-done
 	})
 	defer closeServer()
+	defer conn.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), scaleDuration(100*time.Millisecond))
 	defer cancel()
@@ -266,9 +271,9 @@ func TestUnidirectionalStreams(t *testing.T) {
 		_, err = rstr.Write(data)
 		require.NoError(t, err)
 		require.NoError(t, rstr.Close())
-		<-conn.Context().Done()
 	})
 	defer closeServer()
+	defer conn.Close()
 
 	str, err := conn.OpenUniStream()
 	require.NoError(t, err)
@@ -370,8 +375,8 @@ func TestOpenStreamSyncShutdown(t *testing.T) {
 		// make sure the 3 calls to OpenStreamSync are actually blocked
 		require.Never(t, func() bool { return len(errChan) > 0 }, 100*time.Millisecond, 10*time.Millisecond)
 		close(done)
-		require.Eventually(t, func() bool { return len(errChan) == 3 }, scaleDuration(100*time.Millisecond), 10*time.Millisecond)
-		for i := 0; i < 3; i++ {
+		require.Eventually(t, func() bool { return len(errChan) == num }, scaleDuration(100*time.Millisecond), 10*time.Millisecond)
+		for i := 0; i < num; i++ {
 			err := <-errChan
 			var connErr *webtransport.ConnectionError
 			require.ErrorAs(t, err, &connErr)

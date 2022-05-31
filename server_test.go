@@ -90,7 +90,6 @@ func TestServerReorderedUpgradeRequest(t *testing.T) {
 	connChan := make(chan *webtransport.Conn)
 	addHandler(t, &s, func(c *webtransport.Conn) {
 		connChan <- c
-		<-c.Context().Done()
 	})
 
 	udpConn, err := net.ListenUDP("udp", nil)
@@ -121,6 +120,7 @@ func TestServerReorderedUpgradeRequest(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 200, rsp.StatusCode)
 	sconn := <-connChan
+	defer sconn.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
 	sstr, err := sconn.AcceptStream(ctx)
@@ -150,7 +150,6 @@ func TestServerReorderedUpgradeRequestTimeout(t *testing.T) {
 	connChan := make(chan *webtransport.Conn)
 	addHandler(t, &s, func(c *webtransport.Conn) {
 		connChan <- c
-		<-c.Context().Done()
 	})
 
 	udpConn, err := net.ListenUDP("udp", nil)
@@ -187,6 +186,7 @@ func TestServerReorderedUpgradeRequestTimeout(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 200, rsp.StatusCode)
 	sconn := <-connChan
+	defer sconn.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
 	_, err = sconn.AcceptStream(ctx)
@@ -213,7 +213,6 @@ func TestServerReorderedMultipleStreams(t *testing.T) {
 	connChan := make(chan *webtransport.Conn)
 	addHandler(t, &s, func(c *webtransport.Conn) {
 		connChan <- c
-		<-c.Context().Done()
 	})
 
 	udpConn, err := net.ListenUDP("udp", nil)
@@ -257,6 +256,7 @@ func TestServerReorderedMultipleStreams(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 200, rsp.StatusCode)
 	sconn := <-connChan
+	defer sconn.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
 	sstr, err := sconn.AcceptStream(ctx)

@@ -2,13 +2,13 @@ package webtransport
 
 import (
 	"context"
-	"github.com/lucas-clemente/quic-go/quicvarint"
 	"io"
 	"sync"
 	"time"
 
 	"github.com/lucas-clemente/quic-go"
 	"github.com/lucas-clemente/quic-go/http3"
+	"github.com/lucas-clemente/quic-go/quicvarint"
 )
 
 // sessionKey is used as a map key in the conns map
@@ -155,7 +155,7 @@ func (m *sessionManager) handleUniStream(str quic.ReceiveStream, session *sessio
 }
 
 // AddSession adds a new WebTransport session.
-func (m *sessionManager) AddSession(qconn http3.StreamCreator, id sessionID, requestStr io.Reader) *Conn {
+func (m *sessionManager) AddSession(qconn http3.StreamCreator, id sessionID, requestStr io.ReadWriteCloser) *Conn {
 	conn := newConn(id, qconn, requestStr)
 
 	m.mx.Lock()

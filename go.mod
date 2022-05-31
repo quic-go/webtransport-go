@@ -3,7 +3,7 @@ module github.com/marten-seemann/webtransport-go
 go 1.17
 
 require (
-	github.com/lucas-clemente/quic-go v0.27.1-0.20220527161611-708eb47cec1e
+	github.com/lucas-clemente/quic-go v0.27.1-0.20220609153137-4c96cf75bf40
 	github.com/stretchr/testify v1.7.1
 )
 
@@ -14,8 +14,8 @@ require (
 	github.com/go-task/slim-sprig v0.0.0-20210107165309-348f09dbbbc0 // indirect
 	github.com/marten-seemann/qpack v0.2.1 // indirect
 	github.com/marten-seemann/qtls-go1-16 v0.1.5 // indirect
-	github.com/marten-seemann/qtls-go1-17 v0.1.1 // indirect
-	github.com/marten-seemann/qtls-go1-18 v0.1.1 // indirect
+	github.com/marten-seemann/qtls-go1-17 v0.1.2 // indirect
+	github.com/marten-seemann/qtls-go1-18 v0.1.2 // indirect
 	github.com/nxadm/tail v1.4.8 // indirect
 	github.com/onsi/ginkgo v1.16.4 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
