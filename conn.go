@@ -132,24 +132,27 @@ func (c *Conn) AcceptStream(ctx context.Context) (Stream, error) {
 		return nil, closeErr
 	}
 
-	var str Stream
-	c.acceptMx.Lock()
-	if len(c.acceptQueue) > 0 {
-		str = c.acceptQueue[0]
-		c.acceptQueue = c.acceptQueue[1:]
-	}
-	c.acceptMx.Unlock()
-	if str != nil {
-		return str, nil
-	}
+	for {
+		var str Stream
+		// If there's a stream in the accept queue, return it immediately.
+		c.acceptMx.Lock()
+		if len(c.acceptQueue) > 0 {
+			str = c.acceptQueue[0]
+			c.acceptQueue = c.acceptQueue[1:]
+		}
+		c.acceptMx.Unlock()
+		if str != nil {
+			return str, nil
+		}
 
-	select {
-	case <-c.ctx.Done():
-		return nil, c.closeErr
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	case <-c.acceptChan:
-		return c.AcceptStream(ctx)
+		// No stream in the accept queue. Wait until we accept one.
+		select {
+		case <-c.ctx.Done():
+			return nil, c.closeErr
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-c.acceptChan:
+		}
 	}
 }
 
@@ -161,24 +164,27 @@ func (c *Conn) AcceptUniStream(ctx context.Context) (ReceiveStream, error) {
 		return nil, c.closeErr
 	}
 
-	var str ReceiveStream
-	c.acceptUniMx.Lock()
-	if len(c.acceptUniQueue) > 0 {
-		str = c.acceptUniQueue[0]
-		c.acceptUniQueue = c.acceptUniQueue[1:]
-	}
-	c.acceptUniMx.Unlock()
-	if str != nil {
-		return str, nil
-	}
+	for {
+		var str ReceiveStream
+		// If there's a stream in the accept queue, return it immediately.
+		c.acceptUniMx.Lock()
+		if len(c.acceptUniQueue) > 0 {
+			str = c.acceptUniQueue[0]
+			c.acceptUniQueue = c.acceptUniQueue[1:]
+		}
+		c.acceptUniMx.Unlock()
+		if str != nil {
+			return str, nil
+		}
 
-	select {
-	case <-c.ctx.Done():
-		return nil, c.closeErr
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	case <-c.acceptUniChan:
-		return c.AcceptUniStream(ctx)
+		// No stream in the accept queue. Wait until we accept one.
+		select {
+		case <-c.ctx.Done():
+			return nil, c.closeErr
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-c.acceptUniChan:
+		}
 	}
 }
 
