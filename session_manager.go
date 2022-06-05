@@ -3,6 +3,7 @@ package webtransport
 import (
 	"context"
 	"github.com/lucas-clemente/quic-go/quicvarint"
+	"io"
 	"sync"
 	"time"
 
@@ -154,19 +155,25 @@ func (m *sessionManager) handleUniStream(str quic.ReceiveStream, session *sessio
 }
 
 // AddSession adds a new WebTransport session.
-func (m *sessionManager) AddSession(qconn http3.StreamCreator, id sessionID, conn *Conn) {
+func (m *sessionManager) AddSession(qconn http3.StreamCreator, id sessionID, requestStr io.Reader) *Conn {
+	conn := newConn(id, qconn, requestStr)
+
 	m.mx.Lock()
 	defer m.mx.Unlock()
 
 	key := sessionKey{qconn: qconn, id: id}
+	// We might already have an entry of this session.
+	// This can happen when we receive a stream for this WebTransport session before we complete the HTTP request
+	// that establishes the session.
 	if sess, ok := m.conns[key]; ok {
 		sess.conn = conn
 		close(sess.created)
-		return
+		return conn
 	}
 	c := make(chan struct{})
 	close(c)
 	m.conns[key] = &session{created: c, conn: conn}
+	return conn
 }
 
 func (m *sessionManager) Close() {

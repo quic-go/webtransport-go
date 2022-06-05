@@ -103,10 +103,11 @@ func (d *Dialer) Dial(ctx context.Context, urlStr string, reqHdr http.Header) (*
 	if rsp.StatusCode < 200 || rsp.StatusCode >= 300 {
 		return rsp, nil, fmt.Errorf("received status %d", rsp.StatusCode)
 	}
-	qconn := rsp.Body.(http3.Hijacker).StreamCreator()
-	id := sessionID(rsp.Body.(streamIDGetter).StreamID())
-	conn := newConn(id, qconn, rsp.Body)
-	d.conns.AddSession(qconn, id, conn)
+	conn := d.conns.AddSession(
+		rsp.Body.(http3.Hijacker).StreamCreator(),
+		sessionID(rsp.Body.(streamIDGetter).StreamID()),
+		rsp.Body,
+	)
 	return rsp, conn, nil
 }
 

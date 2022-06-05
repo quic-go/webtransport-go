@@ -162,7 +162,7 @@ func (s *Server) Upgrade(w http.ResponseWriter, r *http.Request) (*Conn, error) 
 		return nil, errors.New("webtransport: request origin not allowed")
 	}
 	w.Header().Add(webTransportDraftHeaderKey, webTransportDraftHeaderValue)
-	w.WriteHeader(200)
+	w.WriteHeader(http.StatusOK)
 	w.(http.Flusher).Flush()
 
 	str, ok := w.(streamIDGetter)
@@ -175,10 +175,7 @@ func (s *Server) Upgrade(w http.ResponseWriter, r *http.Request) (*Conn, error) 
 	if !ok { // should never happen, unless quic-go changed the API
 		return nil, errors.New("failed to hijack")
 	}
-	qconn := hijacker.StreamCreator()
-	c := newConn(sID, qconn, r.Body)
-	s.conns.AddSession(qconn, sID, c)
-	return c, nil
+	return s.conns.AddSession(hijacker.StreamCreator(), sID, r.Body), nil
 }
 
 // copied from https://github.com/gorilla/websocket
