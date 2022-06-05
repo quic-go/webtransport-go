@@ -50,7 +50,7 @@ func newSessionManager(timeout time.Duration) *sessionManager {
 // If that takes longer than timeout, the stream is reset.
 func (m *sessionManager) AddStream(qconn http3.StreamCreator, str quic.Stream, id sessionID) {
 	key := sessionKey{qconn: qconn, id: id}
-	sess, isExisting := m.getSession(key)
+	sess, isExisting := m.getOrCreateSession(key)
 	if isExisting {
 		sess.conn.addStream(str)
 		return
@@ -59,7 +59,17 @@ func (m *sessionManager) AddStream(qconn http3.StreamCreator, str quic.Stream, i
 	m.refCount.Add(1)
 	go func() {
 		defer m.refCount.Done()
-		m.handleStream(str, sess, key)
+		m.handleStream(str, sess)
+
+		m.mx.Lock()
+		defer m.mx.Unlock()
+
+		sess.counter--
+		// Once no more streams are waiting for this session to be established,
+		// and this session is still outstanding, delete it from the map.
+		if sess.counter == 0 && sess.conn == nil {
+			delete(m.conns, key)
+		}
 	}()
 }
 
@@ -74,7 +84,7 @@ func (m *sessionManager) AddUniStream(qconn http3.StreamCreator, str quic.Receiv
 	}
 
 	key := sessionKey{qconn: qconn, id: sessionID(id)}
-	sess, isExisting := m.getSession(key)
+	sess, isExisting := m.getOrCreateSession(key)
 	if isExisting {
 		sess.conn.addUniStream(str)
 		return
@@ -83,11 +93,21 @@ func (m *sessionManager) AddUniStream(qconn http3.StreamCreator, str quic.Receiv
 	m.refCount.Add(1)
 	go func() {
 		defer m.refCount.Done()
-		m.handleUniStream(str, sess, key)
+		m.handleUniStream(str, sess)
+
+		m.mx.Lock()
+		defer m.mx.Unlock()
+
+		sess.counter--
+		// Once no more streams are waiting for this session to be established,
+		// and this session is still outstanding, delete it from the map.
+		if sess.counter == 0 && sess.conn == nil {
+			delete(m.conns, key)
+		}
 	}()
 }
 
-func (m *sessionManager) getSession(key sessionKey) (sess *session, existed bool) {
+func (m *sessionManager) getOrCreateSession(key sessionKey) (sess *session, existed bool) {
 	m.mx.Lock()
 	defer m.mx.Unlock()
 
@@ -103,54 +123,34 @@ func (m *sessionManager) getSession(key sessionKey) (sess *session, existed bool
 	return sess, false
 }
 
-func (m *sessionManager) handleStream(str quic.Stream, session *session, key sessionKey) {
+func (m *sessionManager) handleStream(str quic.Stream, sess *session) {
 	t := time.NewTimer(m.timeout)
 	defer t.Stop()
 
 	// When multiple streams are waiting for the same session to be established,
 	// the timeout is calculated for every stream separately.
 	select {
-	case <-session.created:
-		session.conn.addStream(str)
+	case <-sess.created:
+		sess.conn.addStream(str)
 	case <-t.C:
 		str.CancelRead(WebTransportBufferedStreamRejectedErrorCode)
 		str.CancelWrite(WebTransportBufferedStreamRejectedErrorCode)
 	case <-m.ctx.Done():
 	}
-
-	m.mx.Lock()
-	defer m.mx.Unlock()
-
-	session.counter--
-	// Once no more streams are waiting for this session to be established,
-	// and this session is still outstanding, delete it from the map.
-	if session.counter == 0 && session.conn == nil {
-		delete(m.conns, key)
-	}
 }
 
-func (m *sessionManager) handleUniStream(str quic.ReceiveStream, session *session, key sessionKey) {
+func (m *sessionManager) handleUniStream(str quic.ReceiveStream, sess *session) {
 	t := time.NewTimer(m.timeout)
 	defer t.Stop()
 
 	// When multiple streams are waiting for the same session to be established,
 	// the timeout is calculated for every stream separately.
 	select {
-	case <-session.created:
-		session.conn.addUniStream(str)
+	case <-sess.created:
+		sess.conn.addUniStream(str)
 	case <-t.C:
 		str.CancelRead(WebTransportBufferedStreamRejectedErrorCode)
 	case <-m.ctx.Done():
-	}
-
-	m.mx.Lock()
-	defer m.mx.Unlock()
-
-	session.counter--
-	// Once no more streams are waiting for this session to be established,
-	// and this session is still outstanding, delete it from the map.
-	if session.counter == 0 && session.conn == nil {
-		delete(m.conns, key)
 	}
 }
 
