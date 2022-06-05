@@ -35,7 +35,7 @@ type Conn struct {
 	// Contains all the streams waiting to be accepted.
 	// There's no explicit limit to the length of the queue, but it is implicitly
 	// limited by the stream flow control provided by QUIC.
-	acceptQueue []quic.Stream
+	acceptQueue []Stream
 
 	// for unidirectional streams
 	acceptUniMx   sync.Mutex
@@ -43,7 +43,7 @@ type Conn struct {
 	// Contains all the streams waiting to be accepted.
 	// There's no explicit limit to the length of the queue, but it is implicitly
 	// limited by the stream flow control provided by QUIC.
-	acceptUniQueue []quic.ReceiveStream
+	acceptUniQueue []ReceiveStream
 }
 
 func newConn(sessionID sessionID, qconn http3.StreamCreator, requestStr io.Reader) *Conn {
@@ -101,7 +101,7 @@ func (c *Conn) addStream(str quic.Stream) {
 	c.acceptMx.Lock()
 	defer c.acceptMx.Unlock()
 
-	c.acceptQueue = append(c.acceptQueue, str)
+	c.acceptQueue = append(c.acceptQueue, newStream(str, nil))
 	select {
 	case c.acceptChan <- struct{}{}:
 	default:
@@ -112,7 +112,7 @@ func (c *Conn) addUniStream(str quic.ReceiveStream) {
 	c.acceptUniMx.Lock()
 	defer c.acceptUniMx.Unlock()
 
-	c.acceptUniQueue = append(c.acceptUniQueue, str)
+	c.acceptUniQueue = append(c.acceptUniQueue, newReceiveStream(str))
 	select {
 	case c.acceptUniChan <- struct{}{}:
 	default:
@@ -132,7 +132,7 @@ func (c *Conn) AcceptStream(ctx context.Context) (Stream, error) {
 		return nil, closeErr
 	}
 
-	var str quic.Stream
+	var str Stream
 	c.acceptMx.Lock()
 	if len(c.acceptQueue) > 0 {
 		str = c.acceptQueue[0]
@@ -140,7 +140,7 @@ func (c *Conn) AcceptStream(ctx context.Context) (Stream, error) {
 	}
 	c.acceptMx.Unlock()
 	if str != nil {
-		return newStream(str, nil), nil
+		return str, nil
 	}
 
 	select {
@@ -161,7 +161,7 @@ func (c *Conn) AcceptUniStream(ctx context.Context) (ReceiveStream, error) {
 		return nil, c.closeErr
 	}
 
-	var str quic.ReceiveStream
+	var str ReceiveStream
 	c.acceptUniMx.Lock()
 	if len(c.acceptUniQueue) > 0 {
 		str = c.acceptUniQueue[0]
@@ -169,7 +169,7 @@ func (c *Conn) AcceptUniStream(ctx context.Context) (ReceiveStream, error) {
 	}
 	c.acceptUniMx.Unlock()
 	if str != nil {
-		return newReceiveStream(str), nil
+		return str, nil
 	}
 
 	select {
