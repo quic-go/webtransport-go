@@ -9,7 +9,6 @@ import (
 	"sync"
 
 	"github.com/lucas-clemente/quic-go"
-	"github.com/lucas-clemente/quic-go/http3"
 	"github.com/lucas-clemente/quic-go/quicvarint"
 )
 
@@ -18,7 +17,7 @@ type sessionID uint64
 
 type Conn struct {
 	sessionID  sessionID
-	qconn      http3.StreamCreator
+	qconn      quic.Connection
 	requestStr io.ReadWriteCloser
 
 	streamHdr    []byte
@@ -46,7 +45,7 @@ type Conn struct {
 	acceptUniQueue []ReceiveStream
 }
 
-func newConn(sessionID sessionID, qconn http3.StreamCreator, requestStr io.ReadWriteCloser) *Conn {
+func newConn(sessionID sessionID, qconn quic.Connection, requestStr io.ReadWriteCloser) *Conn {
 	ctx, ctxCancel := context.WithCancel(context.Background())
 	c := &Conn{
 		sessionID:     sessionID,
@@ -283,12 +282,24 @@ func (c *Conn) OpenUniStreamSync(ctx context.Context) (str SendStream, err error
 	return newSendStream(s, c.uniStreamHdr), nil
 }
 
+func (c *Conn) SendDatagram(data []byte) error {
+	return c.qconn.SendMessage(data)
+}
+
+func (c *Conn) ReceiveDatagram() ([]byte, error) {
+	return c.qconn.ReceiveMessage()
+}
+
 func (c *Conn) LocalAddr() net.Addr {
 	return c.qconn.LocalAddr()
 }
 
 func (c *Conn) RemoteAddr() net.Addr {
 	return c.qconn.RemoteAddr()
+}
+
+func (c *Conn) ConnectionState() quic.ConnectionState {
+	return c.qconn.ConnectionState()
 }
 
 func (c *Conn) Close() error {

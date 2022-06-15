@@ -155,7 +155,7 @@ func (m *sessionManager) handleUniStream(str quic.ReceiveStream, session *sessio
 }
 
 // AddSession adds a new WebTransport session.
-func (m *sessionManager) AddSession(qconn http3.StreamCreator, id sessionID, requestStr io.ReadWriteCloser) *Conn {
+func (m *sessionManager) AddSession(qconn quic.Connection, id sessionID, requestStr io.ReadWriteCloser) *Conn {
 	conn := newConn(id, qconn, requestStr)
 
 	m.mx.Lock()

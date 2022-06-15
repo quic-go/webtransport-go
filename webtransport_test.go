@@ -5,7 +5,6 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
-	"github.com/lucas-clemente/quic-go/http3"
 	"io"
 	"math/rand"
 	"net"
@@ -15,6 +14,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/lucas-clemente/quic-go/http3"
 
 	"github.com/marten-seemann/webtransport-go"
 
@@ -481,4 +482,49 @@ func TestCheckOrigin(t *testing.T) {
 			}
 		})
 	}
+}
+
+func newDatagramEchoHandler(t *testing.T) func(*webtransport.Conn) {
+	return func(conn *webtransport.Conn) {
+		require.True(t, conn.ConnectionState().SupportsDatagrams)
+
+		data, err := conn.ReceiveDatagram()
+		require.NoError(t, err)
+		err = conn.SendDatagram(data)
+		require.NoError(t, err)
+	}
+}
+
+func sendDatagramAndCheckEcho(t *testing.T, conn *webtransport.Conn) {
+	t.Helper()
+	require.True(t, conn.ConnectionState().SupportsDatagrams)
+	data := getRandomData(1024)
+	err := conn.SendDatagram(data)
+	require.NoError(t, err)
+	reply, err := conn.ReceiveDatagram()
+	require.NoError(t, err)
+	require.Equal(t, data, reply)
+}
+
+func TestDatagramSendReceive(t *testing.T) {
+	t.Run("client-initiated", func(t *testing.T) {
+		conn, closeServer := establishConn(t, newDatagramEchoHandler(t))
+		defer closeServer()
+		defer conn.Close()
+
+		sendDatagramAndCheckEcho(t, conn)
+	})
+
+	t.Run("server-initiated", func(t *testing.T) {
+		done := make(chan struct{})
+		conn, closeServer := establishConn(t, func(conn *webtransport.Conn) {
+			defer close(done)
+			sendDatagramAndCheckEcho(t, conn)
+		})
+		defer closeServer()
+		defer conn.Close()
+
+		go newDatagramEchoHandler(t)(conn)
+		<-done
+	})
 }

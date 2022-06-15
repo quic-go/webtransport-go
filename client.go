@@ -105,7 +105,7 @@ func (d *Dialer) Dial(ctx context.Context, urlStr string, reqHdr http.Header) (*
 	}
 	str := rsp.Body.(http3.HTTPStreamer).HTTPStream()
 	conn := d.conns.AddSession(
-		rsp.Body.(http3.Hijacker).StreamCreator(),
+		rsp.Body.(http3.Hijacker).StreamCreator().(quic.Connection),
 		sessionID(str.StreamID()),
 		str,
 	)
