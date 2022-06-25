@@ -482,3 +482,38 @@ func TestCheckOrigin(t *testing.T) {
 		})
 	}
 }
+
+func TestCloseStreamsOnSessionClose(t *testing.T) {
+	accepted := make(chan struct{})
+	conn, closeServer := establishConn(t, func(conn *webtransport.Conn) {
+		str, err := conn.OpenStream()
+		require.NoError(t, err)
+		_, err = str.Write([]byte("foobar"))
+		require.NoError(t, err)
+		ustr, err := conn.OpenUniStream()
+		require.NoError(t, err)
+		_, err = ustr.Write([]byte("foobar"))
+		require.NoError(t, err)
+		<-accepted
+		conn.Close()
+		_, err = str.Read([]byte{0})
+		require.Error(t, err)
+		_, err = ustr.Write([]byte{0})
+		require.Error(t, err)
+		_, err = ustr.Write([]byte{0})
+		require.Error(t, err)
+	})
+	defer closeServer()
+
+	str, err := conn.AcceptStream(context.Background())
+	require.NoError(t, err)
+	ustr, err := conn.AcceptUniStream(context.Background())
+	require.NoError(t, err)
+	close(accepted)
+	str.Read(make([]byte, 6)) // read the foobar
+	_, err = str.Read([]byte{0})
+	require.Error(t, err)
+	ustr.Read(make([]byte, 6)) // read the foobar
+	_, err = ustr.Read([]byte{0})
+	require.Error(t, err)
+}
