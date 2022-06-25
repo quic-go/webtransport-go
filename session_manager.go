@@ -15,7 +15,7 @@ import (
 type session struct {
 	created chan struct{} // is closed once the session map has been initialized
 	counter int           // how many streams are waiting for this session to be established
-	conn    *Conn
+	conn    *Session
 }
 
 type sessionManager struct {
@@ -165,8 +165,8 @@ func (m *sessionManager) handleUniStream(str quic.ReceiveStream, sess *session) 
 }
 
 // AddSession adds a new WebTransport session.
-func (m *sessionManager) AddSession(qconn http3.StreamCreator, id sessionID, requestStr io.ReadWriteCloser) *Conn {
-	conn := newConn(id, qconn, requestStr)
+func (m *sessionManager) AddSession(qconn http3.StreamCreator, id sessionID, requestStr io.ReadWriteCloser) *Session {
+	conn := newSession(id, qconn, requestStr)
 
 	m.mx.Lock()
 	defer m.mx.Unlock()

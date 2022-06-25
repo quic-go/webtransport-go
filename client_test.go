@@ -51,7 +51,7 @@ func TestClientReorderedUpgrade(t *testing.T) {
 	s := webtransport.Server{
 		H3: http3.Server{TLSConfig: tlsConf},
 	}
-	addHandler(t, &s, func(c *webtransport.Conn) {
+	addHandler(t, &s, func(c *webtransport.Session) {
 		str, err := c.OpenStream()
 		require.NoError(t, err)
 		_, err = str.Write([]byte("foobar"))
@@ -73,7 +73,7 @@ func TestClientReorderedUpgrade(t *testing.T) {
 			return &requestStreamDelayingConn{done: blockUpgrade, EarlyConnection: conn}, nil
 		},
 	}
-	connChan := make(chan *webtransport.Conn)
+	connChan := make(chan *webtransport.Session)
 	go func() {
 		// This will block until blockUpgrade is closed.
 		rsp, conn, err := d.Dial(context.Background(), fmt.Sprintf("https://localhost:%d/webtransport", port), nil)

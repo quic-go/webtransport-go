@@ -142,7 +142,7 @@ func (s *Server) Close() error {
 	return err
 }
 
-func (s *Server) Upgrade(w http.ResponseWriter, r *http.Request) (*Conn, error) {
+func (s *Server) Upgrade(w http.ResponseWriter, r *http.Request) (*Session, error) {
 	if r.Method != http.MethodConnect {
 		return nil, fmt.Errorf("expected CONNECT request, got %s", r.Method)
 	}

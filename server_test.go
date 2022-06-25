@@ -87,8 +87,8 @@ func TestServerReorderedUpgradeRequest(t *testing.T) {
 		H3: http3.Server{TLSConfig: tlsConf},
 	}
 	defer s.Close()
-	connChan := make(chan *webtransport.Conn)
-	addHandler(t, &s, func(c *webtransport.Conn) {
+	connChan := make(chan *webtransport.Session)
+	addHandler(t, &s, func(c *webtransport.Session) {
 		connChan <- c
 	})
 
@@ -147,8 +147,8 @@ func TestServerReorderedUpgradeRequestTimeout(t *testing.T) {
 		StreamReorderingTimeout: timeout,
 	}
 	defer s.Close()
-	connChan := make(chan *webtransport.Conn)
-	addHandler(t, &s, func(c *webtransport.Conn) {
+	connChan := make(chan *webtransport.Session)
+	addHandler(t, &s, func(c *webtransport.Session) {
 		connChan <- c
 	})
 
@@ -210,8 +210,8 @@ func TestServerReorderedMultipleStreams(t *testing.T) {
 		StreamReorderingTimeout: timeout,
 	}
 	defer s.Close()
-	connChan := make(chan *webtransport.Conn)
-	addHandler(t, &s, func(c *webtransport.Conn) {
+	connChan := make(chan *webtransport.Session)
+	addHandler(t, &s, func(c *webtransport.Session) {
 		connChan <- c
 	})
 
