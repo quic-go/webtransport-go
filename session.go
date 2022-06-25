@@ -20,7 +20,7 @@ type sessionID uint64
 // See https://github.com/ietf-wg-webtrans/draft-ietf-webtrans-http3/issues/72
 const sessionCloseErrorCode = 42
 
-type Conn struct {
+type Session struct {
 	sessionID  sessionID
 	qconn      http3.StreamCreator
 	requestStr io.ReadWriteCloser
@@ -30,7 +30,7 @@ type Conn struct {
 
 	ctx        context.Context
 	closeMx    sync.Mutex
-	closeErr   error // not nil once the connection is closed
+	closeErr   error // not nil once the session is closed
 	streamCtxs map[int]context.CancelFunc
 
 	// for bidirectional streams
@@ -53,9 +53,9 @@ type Conn struct {
 	streams streamsMap
 }
 
-func newConn(sessionID sessionID, qconn http3.StreamCreator, requestStr io.ReadWriteCloser) *Conn {
+func newSession(sessionID sessionID, qconn http3.StreamCreator, requestStr io.ReadWriteCloser) *Session {
 	ctx, ctxCancel := context.WithCancel(context.Background())
-	c := &Conn{
+	c := &Session{
 		sessionID:     sessionID,
 		qconn:         qconn,
 		requestStr:    requestStr,
@@ -83,7 +83,7 @@ func newConn(sessionID sessionID, qconn http3.StreamCreator, requestStr io.ReadW
 	return c
 }
 
-func (c *Conn) handleConn() {
+func (c *Session) handleConn() {
 	var closeErr error
 	for {
 		// TODO: parse capsules sent on the request stream
@@ -105,7 +105,7 @@ func (c *Conn) handleConn() {
 	}
 }
 
-func (c *Conn) addStream(qstr quic.Stream) {
+func (c *Session) addStream(qstr quic.Stream) {
 	str := newStream(qstr, nil)
 	c.streams.AddStream(qstr.StreamID(), func() {
 		str.CancelRead(sessionCloseErrorCode)
@@ -122,7 +122,7 @@ func (c *Conn) addStream(qstr quic.Stream) {
 	}
 }
 
-func (c *Conn) addUniStream(qstr quic.ReceiveStream) {
+func (c *Session) addUniStream(qstr quic.ReceiveStream) {
 	str := newReceiveStream(qstr)
 	c.streams.AddStream(qstr.StreamID(), func() { str.CancelRead(sessionCloseErrorCode) })
 
@@ -136,12 +136,12 @@ func (c *Conn) addUniStream(qstr quic.ReceiveStream) {
 	}
 }
 
-// Context returns a context that is closed when the connection is closed.
-func (c *Conn) Context() context.Context {
+// Context returns a context that is closed when the session is closed.
+func (c *Session) Context() context.Context {
 	return c.ctx
 }
 
-func (c *Conn) AcceptStream(ctx context.Context) (Stream, error) {
+func (c *Session) AcceptStream(ctx context.Context) (Stream, error) {
 	c.closeMx.Lock()
 	closeErr := c.closeErr
 	c.closeMx.Unlock()
@@ -173,7 +173,7 @@ func (c *Conn) AcceptStream(ctx context.Context) (Stream, error) {
 	}
 }
 
-func (c *Conn) AcceptUniStream(ctx context.Context) (ReceiveStream, error) {
+func (c *Session) AcceptUniStream(ctx context.Context) (ReceiveStream, error) {
 	c.closeMx.Lock()
 	closeErr := c.closeErr
 	c.closeMx.Unlock()
@@ -205,7 +205,7 @@ func (c *Conn) AcceptUniStream(ctx context.Context) (ReceiveStream, error) {
 	}
 }
 
-func (c *Conn) OpenStream() (Stream, error) {
+func (c *Session) OpenStream() (Stream, error) {
 	c.closeMx.Lock()
 	defer c.closeMx.Unlock()
 
@@ -225,7 +225,7 @@ func (c *Conn) OpenStream() (Stream, error) {
 	return str, nil
 }
 
-func (c *Conn) addStreamCtxCancel(cancel context.CancelFunc) (id int) {
+func (c *Session) addStreamCtxCancel(cancel context.CancelFunc) (id int) {
 rand:
 	id = rand.Int()
 	if _, ok := c.streamCtxs[id]; ok {
@@ -235,7 +235,7 @@ rand:
 	return id
 }
 
-func (c *Conn) OpenStreamSync(ctx context.Context) (str Stream, err error) {
+func (c *Session) OpenStreamSync(ctx context.Context) (str Stream, err error) {
 	c.closeMx.Lock()
 	if c.closeErr != nil {
 		c.closeMx.Unlock()
@@ -268,7 +268,7 @@ func (c *Conn) OpenStreamSync(ctx context.Context) (str Stream, err error) {
 	return str, nil
 }
 
-func (c *Conn) OpenUniStream() (SendStream, error) {
+func (c *Session) OpenUniStream() (SendStream, error) {
 	c.closeMx.Lock()
 	defer c.closeMx.Unlock()
 
@@ -284,7 +284,7 @@ func (c *Conn) OpenUniStream() (SendStream, error) {
 	return str, nil
 }
 
-func (c *Conn) OpenUniStreamSync(ctx context.Context) (str SendStream, err error) {
+func (c *Session) OpenUniStreamSync(ctx context.Context) (str SendStream, err error) {
 	c.closeMx.Lock()
 	if c.closeErr != nil {
 		c.closeMx.Unlock()
@@ -314,15 +314,15 @@ func (c *Conn) OpenUniStreamSync(ctx context.Context) (str SendStream, err error
 	return str, nil
 }
 
-func (c *Conn) LocalAddr() net.Addr {
+func (c *Session) LocalAddr() net.Addr {
 	return c.qconn.LocalAddr()
 }
 
-func (c *Conn) RemoteAddr() net.Addr {
+func (c *Session) RemoteAddr() net.Addr {
 	return c.qconn.RemoteAddr()
 }
 
-func (c *Conn) Close() error {
+func (c *Session) Close() error {
 	// TODO: send CLOSE_WEBTRANSPORT_SESSION capsule
 	c.streams.CloseSession()
 	return c.requestStr.Close()

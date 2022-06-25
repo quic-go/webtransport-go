@@ -76,7 +76,7 @@ func (d *Dialer) init() {
 	}
 }
 
-func (d *Dialer) Dial(ctx context.Context, urlStr string, reqHdr http.Header) (*http.Response, *Conn, error) {
+func (d *Dialer) Dial(ctx context.Context, urlStr string, reqHdr http.Header) (*http.Response, *Session, error) {
 	d.initOnce.Do(func() { d.init() })
 
 	u, err := url.Parse(urlStr)

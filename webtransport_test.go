@@ -39,7 +39,7 @@ func runServer(t *testing.T, s *webtransport.Server) (addr *net.UDPAddr, close f
 	}
 }
 
-func establishConn(t *testing.T, handler func(*webtransport.Conn)) (conn *webtransport.Conn, close func()) {
+func establishConn(t *testing.T, handler func(*webtransport.Session)) (conn *webtransport.Session, close func()) {
 	s := &webtransport.Server{
 		H3: http3.Server{TLSConfig: tlsConf},
 	}
@@ -60,7 +60,7 @@ func establishConn(t *testing.T, handler func(*webtransport.Conn)) (conn *webtra
 
 // opens a new stream on the connection,
 // sends data and checks the echoed data.
-func sendDataAndCheckEcho(t *testing.T, conn *webtransport.Conn) {
+func sendDataAndCheckEcho(t *testing.T, conn *webtransport.Session) {
 	t.Helper()
 	data := getRandomData(5 * 1024)
 	str, err := conn.OpenStream()
@@ -74,7 +74,7 @@ func sendDataAndCheckEcho(t *testing.T, conn *webtransport.Conn) {
 	require.Equal(t, data, reply)
 }
 
-func addHandler(t *testing.T, s *webtransport.Server, connHandler func(*webtransport.Conn)) {
+func addHandler(t *testing.T, s *webtransport.Server, connHandler func(*webtransport.Session)) {
 	t.Helper()
 	mux := http.NewServeMux()
 	mux.HandleFunc("/webtransport", func(w http.ResponseWriter, r *http.Request) {
@@ -89,8 +89,8 @@ func addHandler(t *testing.T, s *webtransport.Server, connHandler func(*webtrans
 	s.H3.Handler = mux
 }
 
-func newEchoHandler(t *testing.T) func(*webtransport.Conn) {
-	return func(conn *webtransport.Conn) {
+func newEchoHandler(t *testing.T) func(*webtransport.Session) {
+	return func(conn *webtransport.Session) {
 		for {
 			str, err := conn.AcceptStream(context.Background())
 			if err != nil {
@@ -120,7 +120,7 @@ func TestBidirectionalStreamsDataTransfer(t *testing.T) {
 
 	t.Run("server-initiated", func(t *testing.T) {
 		done := make(chan struct{})
-		conn, closeServer := establishConn(t, func(conn *webtransport.Conn) {
+		conn, closeServer := establishConn(t, func(conn *webtransport.Session) {
 			defer close(done)
 			sendDataAndCheckEcho(t, conn)
 		})
@@ -136,7 +136,7 @@ func TestStreamsImmediateClose(t *testing.T) {
 	t.Run("bidirectional streams", func(t *testing.T) {
 		t.Run("client-initiated", func(t *testing.T) {
 			done := make(chan struct{})
-			conn, closeServer := establishConn(t, func(c *webtransport.Conn) {
+			conn, closeServer := establishConn(t, func(c *webtransport.Session) {
 				defer close(done)
 				str, err := c.AcceptStream(context.Background())
 				require.NoError(t, err)
@@ -159,7 +159,7 @@ func TestStreamsImmediateClose(t *testing.T) {
 
 		t.Run("server-initiated", func(t *testing.T) {
 			done := make(chan struct{})
-			conn, closeServer := establishConn(t, func(c *webtransport.Conn) {
+			conn, closeServer := establishConn(t, func(c *webtransport.Session) {
 				defer close(done)
 				str, err := c.OpenStream()
 				require.NoError(t, err)
@@ -184,7 +184,7 @@ func TestStreamsImmediateClose(t *testing.T) {
 
 	t.Run("unidirectional", func(t *testing.T) {
 		t.Run("client-initiated", func(t *testing.T) {
-			conn, closeServer := establishConn(t, func(c *webtransport.Conn) {
+			conn, closeServer := establishConn(t, func(c *webtransport.Session) {
 				defer c.Close()
 				str, err := c.AcceptUniStream(context.Background())
 				require.NoError(t, err)
@@ -201,7 +201,7 @@ func TestStreamsImmediateClose(t *testing.T) {
 		})
 
 		t.Run("server-initiated", func(t *testing.T) {
-			conn, closeServer := establishConn(t, func(c *webtransport.Conn) {
+			conn, closeServer := establishConn(t, func(c *webtransport.Session) {
 				str, err := c.OpenUniStream()
 				require.NoError(t, err)
 				require.NoError(t, str.Close())
@@ -224,7 +224,7 @@ func TestStreamsImmediateReset(t *testing.T) {
 	// quic-go will see a bidirectional stream opened by the server, which is a connection error.
 	done := make(chan struct{})
 	defer close(done)
-	conn, closeServer := establishConn(t, func(c *webtransport.Conn) {
+	conn, closeServer := establishConn(t, func(c *webtransport.Session) {
 		for i := 0; i < 50; i++ {
 			str, err := c.OpenStream()
 			require.NoError(t, err)
@@ -259,7 +259,7 @@ func TestStreamsImmediateReset(t *testing.T) {
 }
 
 func TestUnidirectionalStreams(t *testing.T) {
-	conn, closeServer := establishConn(t, func(conn *webtransport.Conn) {
+	conn, closeServer := establishConn(t, func(conn *webtransport.Session) {
 		// Accept a unidirectional stream, read all of its contents,
 		// and echo it on a newly opened unidirectional stream.
 		str, err := conn.AcceptUniStream(context.Background())
@@ -320,7 +320,7 @@ func TestMultipleClients(t *testing.T) {
 
 func TestStreamResetError(t *testing.T) {
 	const errorCode webtransport.ErrorCode = 127
-	conn, closeServer := establishConn(t, func(conn *webtransport.Conn) {
+	conn, closeServer := establishConn(t, func(conn *webtransport.Session) {
 		for {
 			str, err := conn.AcceptStream(context.Background())
 			if err != nil {
@@ -344,7 +344,7 @@ func TestStreamResetError(t *testing.T) {
 }
 
 func TestShutdown(t *testing.T) {
-	conn, closeServer := establishConn(t, func(conn *webtransport.Conn) {
+	conn, closeServer := establishConn(t, func(conn *webtransport.Session) {
 		conn.Close()
 	})
 	defer closeServer()
@@ -385,7 +385,7 @@ func TestOpenStreamSyncShutdown(t *testing.T) {
 
 	t.Run("bidirectional streams", func(t *testing.T) {
 		done := make(chan struct{})
-		conn, closeServer := establishConn(t, func(conn *webtransport.Conn) {
+		conn, closeServer := establishConn(t, func(conn *webtransport.Session) {
 			<-done
 			conn.Close()
 		})
@@ -400,7 +400,7 @@ func TestOpenStreamSyncShutdown(t *testing.T) {
 
 	t.Run("unidirectional streams", func(t *testing.T) {
 		done := make(chan struct{})
-		conn, closeServer := establishConn(t, func(conn *webtransport.Conn) {
+		conn, closeServer := establishConn(t, func(conn *webtransport.Session) {
 			<-done
 			conn.Close()
 		})
@@ -485,7 +485,7 @@ func TestCheckOrigin(t *testing.T) {
 
 func TestCloseStreamsOnSessionClose(t *testing.T) {
 	accepted := make(chan struct{})
-	conn, closeServer := establishConn(t, func(conn *webtransport.Conn) {
+	conn, closeServer := establishConn(t, func(conn *webtransport.Session) {
 		str, err := conn.OpenStream()
 		require.NoError(t, err)
 		_, err = str.Write([]byte("foobar"))
