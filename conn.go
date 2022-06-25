@@ -16,6 +16,10 @@ import (
 // sessionID is the WebTransport Session ID
 type sessionID uint64
 
+// TODO: use the correct error code here
+// See https://github.com/ietf-wg-webtrans/draft-ietf-webtrans-http3/issues/72
+const sessionCloseErrorCode = 42
+
 type Conn struct {
 	sessionID  sessionID
 	qconn      http3.StreamCreator
@@ -44,6 +48,9 @@ type Conn struct {
 	// There's no explicit limit to the length of the queue, but it is implicitly
 	// limited by the stream flow control provided by QUIC.
 	acceptUniQueue []ReceiveStream
+
+	// TODO: garbage collect streams from when they are closed
+	streams streamsMap
 }
 
 func newConn(sessionID sessionID, qconn http3.StreamCreator, requestStr io.ReadWriteCloser) *Conn {
@@ -56,6 +63,7 @@ func newConn(sessionID sessionID, qconn http3.StreamCreator, requestStr io.ReadW
 		streamCtxs:    make(map[int]context.CancelFunc),
 		acceptChan:    make(chan struct{}, 1),
 		acceptUniChan: make(chan struct{}, 1),
+		streams:       *newStreamsMap(),
 	}
 	// precompute the headers for unidirectional streams
 	buf := bytes.NewBuffer(make([]byte, 0, 2+quicvarint.Len(uint64(c.sessionID))))
@@ -97,22 +105,31 @@ func (c *Conn) handleConn() {
 	}
 }
 
-func (c *Conn) addStream(str quic.Stream) {
+func (c *Conn) addStream(qstr quic.Stream) {
+	str := newStream(qstr, nil)
+	c.streams.AddStream(qstr.StreamID(), func() {
+		str.CancelRead(sessionCloseErrorCode)
+		str.CancelWrite(sessionCloseErrorCode)
+	})
+
 	c.acceptMx.Lock()
 	defer c.acceptMx.Unlock()
 
-	c.acceptQueue = append(c.acceptQueue, newStream(str, nil))
+	c.acceptQueue = append(c.acceptQueue, str)
 	select {
 	case c.acceptChan <- struct{}{}:
 	default:
 	}
 }
 
-func (c *Conn) addUniStream(str quic.ReceiveStream) {
+func (c *Conn) addUniStream(qstr quic.ReceiveStream) {
+	str := newReceiveStream(qstr)
+	c.streams.AddStream(qstr.StreamID(), func() { str.CancelRead(sessionCloseErrorCode) })
+
 	c.acceptUniMx.Lock()
 	defer c.acceptUniMx.Unlock()
 
-	c.acceptUniQueue = append(c.acceptUniQueue, newReceiveStream(str))
+	c.acceptUniQueue = append(c.acceptUniQueue, str)
 	select {
 	case c.acceptUniChan <- struct{}{}:
 	default:
@@ -196,11 +213,16 @@ func (c *Conn) OpenStream() (Stream, error) {
 		return nil, c.closeErr
 	}
 
-	str, err := c.qconn.OpenStream()
+	qstr, err := c.qconn.OpenStream()
 	if err != nil {
 		return nil, err
 	}
-	return newStream(str, c.streamHdr), nil
+	str := newStream(qstr, c.streamHdr)
+	c.streams.AddStream(qstr.StreamID(), func() {
+		str.CancelRead(sessionCloseErrorCode)
+		str.CancelWrite(sessionCloseErrorCode)
+	})
+	return str, nil
 }
 
 func (c *Conn) addStreamCtxCancel(cancel context.CancelFunc) (id int) {
@@ -233,12 +255,17 @@ func (c *Conn) OpenStreamSync(ctx context.Context) (str Stream, err error) {
 		}
 	}()
 
-	var s quic.Stream
-	s, err = c.qconn.OpenStreamSync(ctx)
+	var qstr quic.Stream
+	qstr, err = c.qconn.OpenStreamSync(ctx)
 	if err != nil {
 		return nil, err
 	}
-	return newStream(s, c.streamHdr), nil
+	str = newStream(qstr, c.streamHdr)
+	c.streams.AddStream(qstr.StreamID(), func() {
+		str.CancelRead(sessionCloseErrorCode)
+		str.CancelWrite(sessionCloseErrorCode)
+	})
+	return str, nil
 }
 
 func (c *Conn) OpenUniStream() (SendStream, error) {
@@ -248,11 +275,13 @@ func (c *Conn) OpenUniStream() (SendStream, error) {
 	if c.closeErr != nil {
 		return nil, c.closeErr
 	}
-	str, err := c.qconn.OpenUniStream()
+	qstr, err := c.qconn.OpenUniStream()
 	if err != nil {
 		return nil, err
 	}
-	return newSendStream(str, c.uniStreamHdr), nil
+	str := newSendStream(qstr, c.uniStreamHdr)
+	c.streams.AddStream(qstr.StreamID(), func() { str.CancelWrite(sessionCloseErrorCode) })
+	return str, nil
 }
 
 func (c *Conn) OpenUniStreamSync(ctx context.Context) (str SendStream, err error) {
@@ -275,12 +304,14 @@ func (c *Conn) OpenUniStreamSync(ctx context.Context) (str SendStream, err error
 		}
 	}()
 
-	var s quic.SendStream
-	s, err = c.qconn.OpenUniStreamSync(ctx)
+	var qstr quic.SendStream
+	qstr, err = c.qconn.OpenUniStreamSync(ctx)
 	if err != nil {
 		return nil, err
 	}
-	return newSendStream(s, c.uniStreamHdr), nil
+	str = newSendStream(qstr, c.uniStreamHdr)
+	c.streams.AddStream(qstr.StreamID(), func() { str.CancelWrite(sessionCloseErrorCode) })
+	return str, nil
 }
 
 func (c *Conn) LocalAddr() net.Addr {
@@ -293,5 +324,6 @@ func (c *Conn) RemoteAddr() net.Addr {
 
 func (c *Conn) Close() error {
 	// TODO: send CLOSE_WEBTRANSPORT_SESSION capsule
+	c.streams.CloseSession()
 	return c.requestStr.Close()
 }
