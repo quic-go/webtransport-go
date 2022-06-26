@@ -139,7 +139,16 @@ func (c *Session) addSendStream(qstr quic.SendStream) SendStream {
 
 // addIncomingStream adds a bidirectional stream that the remote peer opened
 func (c *Session) addIncomingStream(qstr quic.Stream) {
+	c.closeMx.Lock()
+	closeErr := c.closeErr
+	if closeErr != nil {
+		c.closeMx.Unlock()
+		qstr.CancelRead(webtransportCodeToHTTPCode(sessionCloseErrorCode))
+		qstr.CancelWrite(webtransportCodeToHTTPCode(sessionCloseErrorCode))
+		return
+	}
 	str := c.addStream(qstr, false)
+	c.closeMx.Unlock()
 
 	c.acceptMx.Lock()
 	defer c.acceptMx.Unlock()
@@ -153,7 +162,15 @@ func (c *Session) addIncomingStream(qstr quic.Stream) {
 
 // addIncomingUniStream adds a unidirectional stream that the remote peer opened
 func (c *Session) addIncomingUniStream(qstr quic.ReceiveStream) {
+	c.closeMx.Lock()
+	closeErr := c.closeErr
+	if closeErr != nil {
+		c.closeMx.Unlock()
+		qstr.CancelRead(webtransportCodeToHTTPCode(sessionCloseErrorCode))
+		return
+	}
 	str := c.addReceiveStream(qstr)
+	c.closeMx.Unlock()
 
 	c.acceptUniMx.Lock()
 	defer c.acceptUniMx.Unlock()
@@ -341,7 +358,7 @@ func (c *Session) Close() error {
 	// TODO: send CLOSE_WEBTRANSPORT_SESSION capsule
 	c.closeMx.Lock()
 	c.closeErr = &ConnectionError{Message: "session closed"}
-	c.closeMx.Unlock()
 	c.streams.CloseSession()
+	c.closeMx.Unlock()
 	return c.requestStr.Close()
 }
