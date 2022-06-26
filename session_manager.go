@@ -45,7 +45,7 @@ func newSessionManager(timeout time.Duration) *sessionManager {
 func (m *sessionManager) AddStream(qconn http3.StreamCreator, str quic.Stream, id sessionID) {
 	sess, isExisting := m.getOrCreateSession(qconn, id)
 	if isExisting {
-		sess.conn.addStream(str)
+		sess.conn.addIncomingStream(str)
 		return
 	}
 
@@ -90,7 +90,7 @@ func (m *sessionManager) AddUniStream(qconn http3.StreamCreator, str quic.Receiv
 
 	sess, isExisting := m.getOrCreateSession(qconn, id)
 	if isExisting {
-		sess.conn.addUniStream(str)
+		sess.conn.addIncomingUniStream(str)
 		return
 	}
 
@@ -141,7 +141,7 @@ func (m *sessionManager) handleStream(str quic.Stream, sess *session) {
 	// the timeout is calculated for every stream separately.
 	select {
 	case <-sess.created:
-		sess.conn.addStream(str)
+		sess.conn.addIncomingStream(str)
 	case <-t.C:
 		str.CancelRead(WebTransportBufferedStreamRejectedErrorCode)
 		str.CancelWrite(WebTransportBufferedStreamRejectedErrorCode)
@@ -157,7 +157,7 @@ func (m *sessionManager) handleUniStream(str quic.ReceiveStream, sess *session) 
 	// the timeout is calculated for every stream separately.
 	select {
 	case <-sess.created:
-		sess.conn.addUniStream(str)
+		sess.conn.addIncomingUniStream(str)
 	case <-t.C:
 		str.CancelRead(WebTransportBufferedStreamRejectedErrorCode)
 	case <-m.ctx.Done():

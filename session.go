@@ -105,12 +105,38 @@ func (c *Session) handleConn() {
 	}
 }
 
-func (c *Session) addStream(qstr quic.Stream) {
-	str := newStream(qstr, nil)
+func (c *Session) addStream(qstr quic.Stream, addStreamHeader bool) Stream {
+	var hdr []byte
+	if addStreamHeader {
+		hdr = c.streamHdr
+	}
+	str := newStream(qstr, hdr, func() { c.streams.RemoveStream(qstr.StreamID()) })
 	c.streams.AddStream(qstr.StreamID(), func() {
-		str.CancelRead(sessionCloseErrorCode)
-		str.CancelWrite(sessionCloseErrorCode)
+		str.cancelRead(sessionCloseErrorCode)
+		str.cancelWrite(sessionCloseErrorCode)
 	})
+	return str
+}
+
+func (c *Session) addReceiveStream(qstr quic.ReceiveStream) ReceiveStream {
+	str := newReceiveStream(qstr, func() { c.streams.RemoveStream(qstr.StreamID()) })
+	c.streams.AddStream(qstr.StreamID(), func() {
+		str.cancelRead(sessionCloseErrorCode)
+	})
+	return str
+}
+
+func (c *Session) addSendStream(qstr quic.SendStream) SendStream {
+	str := newSendStream(qstr, c.uniStreamHdr, func() { c.streams.RemoveStream(qstr.StreamID()) })
+	c.streams.AddStream(qstr.StreamID(), func() {
+		str.cancelWrite(sessionCloseErrorCode)
+	})
+	return str
+}
+
+// addIncomingStream adds a bidirectional stream that the remote peer opened
+func (c *Session) addIncomingStream(qstr quic.Stream) {
+	str := c.addStream(qstr, false)
 
 	c.acceptMx.Lock()
 	defer c.acceptMx.Unlock()
@@ -122,9 +148,9 @@ func (c *Session) addStream(qstr quic.Stream) {
 	}
 }
 
-func (c *Session) addUniStream(qstr quic.ReceiveStream) {
-	str := newReceiveStream(qstr)
-	c.streams.AddStream(qstr.StreamID(), func() { str.CancelRead(sessionCloseErrorCode) })
+// addIncomingUniStream adds a unidirectional stream that the remote peer opened
+func (c *Session) addIncomingUniStream(qstr quic.ReceiveStream) {
+	str := c.addReceiveStream(qstr)
 
 	c.acceptUniMx.Lock()
 	defer c.acceptUniMx.Unlock()
@@ -217,12 +243,7 @@ func (c *Session) OpenStream() (Stream, error) {
 	if err != nil {
 		return nil, err
 	}
-	str := newStream(qstr, c.streamHdr)
-	c.streams.AddStream(qstr.StreamID(), func() {
-		str.CancelRead(sessionCloseErrorCode)
-		str.CancelWrite(sessionCloseErrorCode)
-	})
-	return str, nil
+	return c.addStream(qstr, true), nil
 }
 
 func (c *Session) addStreamCtxCancel(cancel context.CancelFunc) (id int) {
@@ -260,12 +281,7 @@ func (c *Session) OpenStreamSync(ctx context.Context) (str Stream, err error) {
 	if err != nil {
 		return nil, err
 	}
-	str = newStream(qstr, c.streamHdr)
-	c.streams.AddStream(qstr.StreamID(), func() {
-		str.CancelRead(sessionCloseErrorCode)
-		str.CancelWrite(sessionCloseErrorCode)
-	})
-	return str, nil
+	return c.addStream(qstr, true), nil
 }
 
 func (c *Session) OpenUniStream() (SendStream, error) {
@@ -279,9 +295,7 @@ func (c *Session) OpenUniStream() (SendStream, error) {
 	if err != nil {
 		return nil, err
 	}
-	str := newSendStream(qstr, c.uniStreamHdr)
-	c.streams.AddStream(qstr.StreamID(), func() { str.CancelWrite(sessionCloseErrorCode) })
-	return str, nil
+	return c.addSendStream(qstr), nil
 }
 
 func (c *Session) OpenUniStreamSync(ctx context.Context) (str SendStream, err error) {
@@ -309,9 +323,7 @@ func (c *Session) OpenUniStreamSync(ctx context.Context) (str SendStream, err er
 	if err != nil {
 		return nil, err
 	}
-	str = newSendStream(qstr, c.uniStreamHdr)
-	c.streams.AddStream(qstr.StreamID(), func() { str.CancelWrite(sessionCloseErrorCode) })
-	return str, nil
+	return c.addSendStream(qstr), nil
 }
 
 func (c *Session) LocalAddr() net.Addr {

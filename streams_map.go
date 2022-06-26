@@ -38,4 +38,5 @@ func (s *streamsMap) CloseSession() {
 	for _, cl := range s.m {
 		cl()
 	}
+	s.m = nil
 }
