@@ -99,7 +99,10 @@ func (c *Session) handleConn() {
 
 	c.closeMx.Lock()
 	defer c.closeMx.Unlock()
-	c.closeErr = closeErr
+	// If we closed the connection, the closeErr will be set in Close.
+	if c.closeErr == nil {
+		c.closeErr = closeErr
+	}
 	for _, cancel := range c.streamCtxs {
 		cancel()
 	}
@@ -336,6 +339,9 @@ func (c *Session) RemoteAddr() net.Addr {
 
 func (c *Session) Close() error {
 	// TODO: send CLOSE_WEBTRANSPORT_SESSION capsule
+	c.closeMx.Lock()
+	c.closeErr = &ConnectionError{Message: "session closed"}
+	c.closeMx.Unlock()
 	c.streams.CloseSession()
 	return c.requestStr.Close()
 }

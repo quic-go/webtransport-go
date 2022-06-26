@@ -121,8 +121,8 @@ func TestBidirectionalStreamsDataTransfer(t *testing.T) {
 	t.Run("server-initiated", func(t *testing.T) {
 		done := make(chan struct{})
 		conn, closeServer := establishConn(t, func(conn *webtransport.Session) {
-			defer close(done)
 			sendDataAndCheckEcho(t, conn)
+			close(done) // don't defer this, the HTTP handler catches panics
 		})
 		defer closeServer()
 		defer conn.Close()
@@ -137,13 +137,13 @@ func TestStreamsImmediateClose(t *testing.T) {
 		t.Run("client-initiated", func(t *testing.T) {
 			done := make(chan struct{})
 			conn, closeServer := establishConn(t, func(c *webtransport.Session) {
-				defer close(done)
 				str, err := c.AcceptStream(context.Background())
 				require.NoError(t, err)
 				n, err := str.Read([]byte{0})
 				require.Zero(t, n)
 				require.ErrorIs(t, err, io.EOF)
 				require.NoError(t, str.Close())
+				close(done) // don't defer this, the HTTP handler catches panics
 			})
 			defer closeServer()
 			defer conn.Close()
@@ -160,7 +160,6 @@ func TestStreamsImmediateClose(t *testing.T) {
 		t.Run("server-initiated", func(t *testing.T) {
 			done := make(chan struct{})
 			conn, closeServer := establishConn(t, func(c *webtransport.Session) {
-				defer close(done)
 				str, err := c.OpenStream()
 				require.NoError(t, err)
 				require.NoError(t, str.Close())
@@ -168,6 +167,7 @@ func TestStreamsImmediateClose(t *testing.T) {
 				require.Zero(t, n)
 				require.ErrorIs(t, err, io.EOF)
 				require.NoError(t, c.Close())
+				close(done) // don't defer this, the HTTP handler catches panics
 			})
 			defer closeServer()
 			defer conn.Close()
@@ -344,15 +344,28 @@ func TestStreamResetError(t *testing.T) {
 }
 
 func TestShutdown(t *testing.T) {
+	done := make(chan struct{})
 	conn, closeServer := establishConn(t, func(conn *webtransport.Session) {
 		conn.Close()
+		var connErr *webtransport.ConnectionError
+		_, err := conn.OpenStream()
+		require.True(t, errors.As(err, &connErr))
+		require.False(t, connErr.Remote)
+		_, err = conn.OpenUniStream()
+		require.True(t, errors.As(err, &connErr))
+		require.False(t, connErr.Remote)
+
+		close(done) // don't defer this, the HTTP handler catches panics
 	})
 	defer closeServer()
 
+	var connErr *webtransport.ConnectionError
 	_, err := conn.AcceptStream(context.Background())
-	require.Error(t, err)
+	require.True(t, errors.As(err, &connErr))
+	require.True(t, connErr.Remote)
 	_, err = conn.AcceptUniStream(context.Background())
 	require.Error(t, err)
+	<-done
 }
 
 func TestOpenStreamSyncShutdown(t *testing.T) {
