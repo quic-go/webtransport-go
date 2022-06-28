@@ -89,6 +89,9 @@ func (s *Server) init() error {
 		}
 		id, err := quicvarint.Read(quicvarint.NewReader(str))
 		if err != nil {
+			if isWebTransportError(err) {
+				return true, nil
+			}
 			return false, err
 		}
 		s.conns.AddStream(qconn, str, sessionID(id))
