@@ -5,11 +5,11 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
-	"github.com/lucas-clemente/quic-go/http3"
 	"io"
 	"math/rand"
 	"net"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -18,8 +18,35 @@ import (
 
 	"github.com/marten-seemann/webtransport-go"
 
+	"github.com/lucas-clemente/quic-go"
+	"github.com/lucas-clemente/quic-go/http3"
+	"github.com/lucas-clemente/quic-go/logging"
+	"github.com/lucas-clemente/quic-go/qlog"
+
 	"github.com/stretchr/testify/require"
 )
+
+// create a qlog file in QLOGDIR, if that environment variable is set
+func getQlogger(t *testing.T) logging.Tracer {
+	return qlog.NewTracer(func(p logging.Perspective, connectionID []byte) io.WriteCloser {
+		qlogDir := os.Getenv("QLOGDIR")
+		if qlogDir == "" {
+			return nil
+		}
+		if _, err := os.Stat(qlogDir); os.IsNotExist(err) {
+			require.NoError(t, os.MkdirAll(qlogDir, 0755))
+		}
+		role := "server"
+		if p == logging.PerspectiveClient {
+			role = "client"
+		}
+		filename := fmt.Sprintf("./%s/log_%x_%s.qlog", qlogDir, connectionID, role)
+		t.Log("creating", filename)
+		f, err := os.Create(filename)
+		require.NoError(t, err)
+		return f
+	})
+}
 
 func runServer(t *testing.T, s *webtransport.Server) (addr *net.UDPAddr, close func()) {
 	laddr, err := net.ResolveUDPAddr("udp", "localhost:0")
@@ -41,7 +68,10 @@ func runServer(t *testing.T, s *webtransport.Server) (addr *net.UDPAddr, close f
 
 func establishConn(t *testing.T, handler func(*webtransport.Session)) (conn *webtransport.Session, close func()) {
 	s := &webtransport.Server{
-		H3: http3.Server{TLSConfig: tlsConf},
+		H3: http3.Server{
+			TLSConfig:  tlsConf,
+			QuicConfig: &quic.Config{Tracer: getQlogger(t)},
+		},
 	}
 	addHandler(t, s, handler)
 
@@ -49,6 +79,7 @@ func establishConn(t *testing.T, handler func(*webtransport.Session)) (conn *web
 	d := webtransport.Dialer{
 		RoundTripper: &http3.RoundTripper{
 			TLSClientConfig: &tls.Config{RootCAs: certPool},
+			QuicConfig:      &quic.Config{Tracer: getQlogger(t)},
 		},
 	}
 	defer d.Close()
@@ -309,7 +340,10 @@ func TestMultipleClients(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			d := webtransport.Dialer{
-				RoundTripper: &http3.RoundTripper{TLSClientConfig: &tls.Config{RootCAs: certPool}},
+				RoundTripper: &http3.RoundTripper{
+					TLSClientConfig: &tls.Config{RootCAs: certPool},
+					QuicConfig:      &quic.Config{Tracer: getQlogger(t)},
+				},
 			}
 			defer d.Close()
 			url := fmt.Sprintf("https://localhost:%d/webtransport", addr.Port)
@@ -482,7 +516,10 @@ func TestCheckOrigin(t *testing.T) {
 			defer closeServer()
 
 			d := webtransport.Dialer{
-				RoundTripper: &http3.RoundTripper{TLSClientConfig: &tls.Config{RootCAs: certPool}},
+				RoundTripper: &http3.RoundTripper{
+					TLSClientConfig: &tls.Config{RootCAs: certPool},
+					QuicConfig:      &quic.Config{Tracer: getQlogger(t)},
+				},
 			}
 			defer d.Close()
 			url := fmt.Sprintf("https://localhost:%d/webtransport", addr.Port)
