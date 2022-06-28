@@ -46,7 +46,11 @@ func establishConn(t *testing.T, handler func(*webtransport.Session)) (conn *web
 	addHandler(t, s, handler)
 
 	addr, closeServer := runServer(t, s)
-	d := webtransport.Dialer{TLSClientConf: &tls.Config{RootCAs: certPool}}
+	d := webtransport.Dialer{
+		RoundTripper: &http3.RoundTripper{
+			TLSClientConfig: &tls.Config{RootCAs: certPool},
+		},
+	}
 	defer d.Close()
 	url := fmt.Sprintf("https://localhost:%d/webtransport", addr.Port)
 	rsp, conn, err := d.Dial(context.Background(), url, nil)
@@ -305,7 +309,7 @@ func TestMultipleClients(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			d := webtransport.Dialer{
-				TLSClientConf: &tls.Config{RootCAs: certPool},
+				RoundTripper: &http3.RoundTripper{TLSClientConfig: &tls.Config{RootCAs: certPool}},
 			}
 			defer d.Close()
 			url := fmt.Sprintf("https://localhost:%d/webtransport", addr.Port)
@@ -478,7 +482,7 @@ func TestCheckOrigin(t *testing.T) {
 			defer closeServer()
 
 			d := webtransport.Dialer{
-				TLSClientConf: &tls.Config{RootCAs: certPool},
+				RoundTripper: &http3.RoundTripper{TLSClientConfig: &tls.Config{RootCAs: certPool}},
 			}
 			defer d.Close()
 			url := fmt.Sprintf("https://localhost:%d/webtransport", addr.Port)

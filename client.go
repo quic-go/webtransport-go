@@ -2,7 +2,6 @@ package webtransport
 
 import (
 	"context"
-	"crypto/tls"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -15,13 +14,12 @@ import (
 )
 
 type Dialer struct {
-	// TLSClientConfig specifies the TLS configuration to use.
-	// If nil, the default configuration is used.
-	TLSClientConf *tls.Config
-
-	// DialFunc specifies an optional dial function for creating QUIC connections.
-	// If DialFunc is nil, quic.DialAddrEarlyContext will be used.
-	DialFunc func(ctx context.Context, addr string, tlsCfg *tls.Config, cfg *quic.Config) (quic.EarlyConnection, error)
+	// If not set, reasonable defaults will be used.
+	// In order for WebTransport to function, this implementation will:
+	// * overwrite the StreamHijacker and UniStreamHijacker
+	// * enable datagram support
+	// * set the MaxIncomingStreams to 100 on the quic.Config, if unset
+	*http3.RoundTripper
 
 	// StreamReorderingTime is the time an incoming WebTransport stream that cannot be associated
 	// with a session is buffered.
@@ -33,8 +31,7 @@ type Dialer struct {
 	ctx       context.Context
 	ctxCancel context.CancelFunc
 
-	initOnce     sync.Once
-	roundTripper *http3.RoundTripper
+	initOnce sync.Once
 
 	conns sessionManager
 }
@@ -46,36 +43,42 @@ func (d *Dialer) init() {
 	}
 	d.conns = *newSessionManager(timeout)
 	d.ctx, d.ctxCancel = context.WithCancel(context.Background())
-	d.roundTripper = &http3.RoundTripper{
-		TLSClientConfig:    d.TLSClientConf,
-		QuicConfig:         &quic.Config{MaxIncomingStreams: 100, MaxIncomingUniStreams: 100},
-		Dial:               d.DialFunc,
-		EnableDatagrams:    true,
-		AdditionalSettings: map[uint64]uint64{settingsEnableWebtransport: 1},
-		StreamHijacker: func(ft http3.FrameType, conn quic.Connection, str quic.Stream, e error) (hijacked bool, err error) {
-			if isWebTransportError(e) {
+	if d.RoundTripper == nil {
+		d.RoundTripper = &http3.RoundTripper{}
+	}
+	d.RoundTripper.EnableDatagrams = true
+	if d.RoundTripper.AdditionalSettings == nil {
+		d.RoundTripper.AdditionalSettings = make(map[uint64]uint64)
+	}
+	d.RoundTripper.StreamHijacker = func(ft http3.FrameType, conn quic.Connection, str quic.Stream, e error) (hijacked bool, err error) {
+		if isWebTransportError(e) {
+			return true, nil
+		}
+		if ft != webTransportFrameType {
+			return false, nil
+		}
+		id, err := quicvarint.Read(quicvarint.NewReader(str))
+		if err != nil {
+			if isWebTransportError(err) {
 				return true, nil
 			}
-			if ft != webTransportFrameType {
-				return false, nil
-			}
-			id, err := quicvarint.Read(quicvarint.NewReader(str))
-			if err != nil {
-				if isWebTransportError(err) {
-					return true, nil
-				}
-				return false, err
-			}
-			d.conns.AddStream(conn, str, sessionID(id))
-			return true, nil
-		},
-		UniStreamHijacker: func(st http3.StreamType, conn quic.Connection, str quic.ReceiveStream, err error) (hijacked bool) {
-			if st != webTransportUniStreamType && !isWebTransportError(err) {
-				return false
-			}
-			d.conns.AddUniStream(conn, str)
-			return true
-		},
+			return false, err
+		}
+		d.conns.AddStream(conn, str, sessionID(id))
+		return true, nil
+	}
+	d.RoundTripper.UniStreamHijacker = func(st http3.StreamType, conn quic.Connection, str quic.ReceiveStream, err error) (hijacked bool) {
+		if st != webTransportUniStreamType && !isWebTransportError(err) {
+			return false
+		}
+		d.conns.AddUniStream(conn, str)
+		return true
+	}
+	if d.QuicConfig == nil {
+		d.QuicConfig = &quic.Config{}
+	}
+	if d.QuicConfig.MaxIncomingStreams == 0 {
+		d.QuicConfig.MaxIncomingStreams = 100
 	}
 }
 
@@ -99,7 +102,7 @@ func (d *Dialer) Dial(ctx context.Context, urlStr string, reqHdr http.Header) (*
 	}
 	req = req.WithContext(ctx)
 
-	rsp, err := d.roundTripper.RoundTripOpt(req, http3.RoundTripOpt{DontCloseRequestStream: true})
+	rsp, err := d.RoundTripper.RoundTripOpt(req, http3.RoundTripOpt{DontCloseRequestStream: true})
 	if err != nil {
 		return nil, nil, err
 	}
