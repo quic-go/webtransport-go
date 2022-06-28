@@ -16,10 +16,6 @@ import (
 // sessionID is the WebTransport Session ID
 type sessionID uint64
 
-// TODO: use the correct error code here
-// See https://github.com/ietf-wg-webtrans/draft-ietf-webtrans-http3/issues/72
-const sessionCloseErrorCode = 42
-
 type Session struct {
 	sessionID  sessionID
 	qconn      http3.StreamCreator
@@ -114,26 +110,21 @@ func (c *Session) addStream(qstr quic.Stream, addStreamHeader bool) Stream {
 		hdr = c.streamHdr
 	}
 	str := newStream(qstr, hdr, func() { c.streams.RemoveStream(qstr.StreamID()) })
-	c.streams.AddStream(qstr.StreamID(), func() {
-		str.cancelRead(sessionCloseErrorCode)
-		str.cancelWrite(sessionCloseErrorCode)
-	})
+	c.streams.AddStream(qstr.StreamID(), str.closeWithSession)
 	return str
 }
 
 func (c *Session) addReceiveStream(qstr quic.ReceiveStream) ReceiveStream {
 	str := newReceiveStream(qstr, func() { c.streams.RemoveStream(qstr.StreamID()) })
 	c.streams.AddStream(qstr.StreamID(), func() {
-		str.cancelRead(sessionCloseErrorCode)
+		str.closeWithSession()
 	})
 	return str
 }
 
 func (c *Session) addSendStream(qstr quic.SendStream) SendStream {
 	str := newSendStream(qstr, c.uniStreamHdr, func() { c.streams.RemoveStream(qstr.StreamID()) })
-	c.streams.AddStream(qstr.StreamID(), func() {
-		str.cancelWrite(sessionCloseErrorCode)
-	})
+	c.streams.AddStream(qstr.StreamID(), str.closeWithSession)
 	return str
 }
 
@@ -143,8 +134,8 @@ func (c *Session) addIncomingStream(qstr quic.Stream) {
 	closeErr := c.closeErr
 	if closeErr != nil {
 		c.closeMx.Unlock()
-		qstr.CancelRead(webtransportCodeToHTTPCode(sessionCloseErrorCode))
-		qstr.CancelWrite(webtransportCodeToHTTPCode(sessionCloseErrorCode))
+		qstr.CancelRead(sessionCloseErrorCode)
+		qstr.CancelWrite(sessionCloseErrorCode)
 		return
 	}
 	str := c.addStream(qstr, false)
@@ -166,7 +157,7 @@ func (c *Session) addIncomingUniStream(qstr quic.ReceiveStream) {
 	closeErr := c.closeErr
 	if closeErr != nil {
 		c.closeMx.Unlock()
-		qstr.CancelRead(webtransportCodeToHTTPCode(sessionCloseErrorCode))
+		qstr.CancelRead(sessionCloseErrorCode)
 		return
 	}
 	str := c.addReceiveStream(qstr)

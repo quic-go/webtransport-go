@@ -52,9 +52,9 @@ func TestCloseStreamsOnClose(t *testing.T) {
 	_, err = sess.OpenUniStream()
 	require.NoError(t, err)
 
-	str.EXPECT().CancelRead(webtransportCodeToHTTPCode(sessionCloseErrorCode))
-	str.EXPECT().CancelWrite(webtransportCodeToHTTPCode(sessionCloseErrorCode))
-	ustr.EXPECT().CancelWrite(webtransportCodeToHTTPCode(sessionCloseErrorCode))
+	str.EXPECT().CancelRead(sessionCloseErrorCode)
+	str.EXPECT().CancelWrite(sessionCloseErrorCode)
+	ustr.EXPECT().CancelWrite(sessionCloseErrorCode)
 	require.NoError(t, sess.Close())
 }
 
@@ -66,11 +66,11 @@ func TestAddStreamAfterSessionClose(t *testing.T) {
 	require.NoError(t, sess.Close())
 
 	str := NewMockStream(ctrl)
-	str.EXPECT().CancelRead(webtransportCodeToHTTPCode(sessionCloseErrorCode))
-	str.EXPECT().CancelWrite(webtransportCodeToHTTPCode(sessionCloseErrorCode))
+	str.EXPECT().CancelRead(sessionCloseErrorCode)
+	str.EXPECT().CancelWrite(sessionCloseErrorCode)
 	sess.addIncomingStream(str)
 
 	ustr := NewMockStream(ctrl)
-	ustr.EXPECT().CancelRead(webtransportCodeToHTTPCode(sessionCloseErrorCode))
+	ustr.EXPECT().CancelRead(sessionCloseErrorCode)
 	sess.addIncomingUniStream(ustr)
 }

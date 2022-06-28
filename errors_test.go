@@ -1,10 +1,12 @@
 package webtransport
 
 import (
-	"github.com/lucas-clemente/quic-go"
-	"github.com/stretchr/testify/require"
+	"errors"
 	"math"
 	"testing"
+
+	"github.com/lucas-clemente/quic-go"
+	"github.com/stretchr/testify/require"
 )
 
 func TestErrorCodeRoundTrip(t *testing.T) {
@@ -34,4 +36,22 @@ func TestErrorCodeConversionErrors(t *testing.T) {
 			require.EqualError(t, err, "invalid error code")
 		}
 	})
+}
+
+func TestErrorDetection(t *testing.T) {
+	is := []error{
+		&quic.StreamError{ErrorCode: webtransportCodeToHTTPCode(42)},
+		&quic.StreamError{ErrorCode: sessionCloseErrorCode},
+	}
+	for _, i := range is {
+		require.True(t, isWebTransportError(i))
+	}
+
+	isNot := []error{
+		errors.New("foo"),
+		&quic.StreamError{ErrorCode: sessionCloseErrorCode + 1},
+	}
+	for _, i := range isNot {
+		require.False(t, isWebTransportError(i))
+	}
 }
