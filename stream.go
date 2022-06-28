@@ -11,6 +11,8 @@ import (
 	"github.com/lucas-clemente/quic-go"
 )
 
+const sessionCloseErrorCode quic.StreamErrorCode = 0x170d7b68
+
 type SendStream interface {
 	io.Writer
 	io.Closer
@@ -72,13 +74,13 @@ func (s *sendStream) Write(b []byte) (int, error) {
 	return n, maybeConvertStreamError(err)
 }
 
-func (s *sendStream) cancelWrite(e ErrorCode) {
-	s.str.CancelWrite(webtransportCodeToHTTPCode(e))
-}
-
 func (s *sendStream) CancelWrite(e ErrorCode) {
 	s.str.CancelWrite(webtransportCodeToHTTPCode(e))
 	s.onClose()
+}
+
+func (s *sendStream) closeWithSession() {
+	s.str.CancelWrite(sessionCloseErrorCode)
 }
 
 func (s *sendStream) Close() error {
@@ -112,13 +114,13 @@ func (s *receiveStream) Read(b []byte) (int, error) {
 	return n, maybeConvertStreamError(err)
 }
 
-func (s *receiveStream) cancelRead(e ErrorCode) {
+func (s *receiveStream) CancelRead(e ErrorCode) {
 	s.str.CancelRead(webtransportCodeToHTTPCode(e))
+	s.onClose()
 }
 
-func (s *receiveStream) CancelRead(e ErrorCode) {
-	s.cancelRead(e)
-	s.onClose()
+func (s *receiveStream) closeWithSession() {
+	s.str.CancelRead(sessionCloseErrorCode)
 }
 
 func (s *receiveStream) SetReadDeadline(t time.Time) error {
@@ -158,6 +160,17 @@ func (s *stream) registerClose(isSendSide bool) {
 	}
 }
 
+func (s *stream) closeWithSession() {
+	s.sendStream.closeWithSession()
+	s.receiveStream.closeWithSession()
+}
+
+func (s *stream) SetDeadline(t time.Time) error {
+	// TODO: implement
+	return nil
+	// return maybeConvertStreamError(s.SendStream.SetDeadline(t))
+}
+
 func maybeConvertStreamError(err error) error {
 	if err == nil {
 		return nil
@@ -171,12 +184,6 @@ func maybeConvertStreamError(err error) error {
 		return &StreamError{ErrorCode: errorCode}
 	}
 	return err
-}
-
-func (s *stream) SetDeadline(t time.Time) error {
-	// TODO: implement
-	return nil
-	// return maybeConvertStreamError(s.SendStream.SetDeadline(t))
 }
 
 func isTimeoutError(err error) bool {

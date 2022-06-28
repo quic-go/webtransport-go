@@ -37,6 +37,9 @@ func isWebTransportError(e error) bool {
 	if !errors.As(e, &strErr) {
 		return false
 	}
+	if strErr.ErrorCode == sessionCloseErrorCode {
+		return true
+	}
 	_, err := httpCodeToWebtransportCode(strErr.ErrorCode)
 	return err == nil
 }
