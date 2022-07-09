@@ -13,21 +13,22 @@ import (
 //go:generate sh -c "mockgen -package webtransport -destination mock_stream_test.go github.com/lucas-clemente/quic-go Stream && cat mock_stream_test.go | sed s@protocol\\.StreamID@quic.StreamID@g | sed s@qerr\\.StreamErrorCode@quic.StreamErrorCode@g > tmp.go && mv tmp.go mock_stream_test.go && goimports -w mock_stream_test.go"
 
 type mockRequestStream struct {
-	c      chan struct{}
-	closed bool
+	*MockStream
+	c chan struct{}
 }
 
-func newMockRequestStream() *mockRequestStream {
-	return &mockRequestStream{c: make(chan struct{})}
+func newMockRequestStream(ctrl *gomock.Controller) quic.Stream {
+	str := NewMockStream(ctrl)
+	str.EXPECT().Close()
+	str.EXPECT().CancelRead(gomock.Any())
+	return &mockRequestStream{MockStream: str, c: make(chan struct{})}
 }
 
 var _ io.ReadWriteCloser = &mockRequestStream{}
 
 func (s *mockRequestStream) Close() error {
-	if !s.closed {
-		close(s.c)
-	}
-	s.closed = true
+	s.MockStream.Close()
+	close(s.c)
 	return nil
 }
 
@@ -39,7 +40,7 @@ func TestCloseStreamsOnClose(t *testing.T) {
 	defer ctrl.Finish()
 
 	mockSess := NewMockStreamCreator(ctrl)
-	sess := newSession(42, mockSess, newMockRequestStream())
+	sess := newSession(42, mockSess, newMockRequestStream(ctrl))
 
 	str := NewMockStream(ctrl)
 	str.EXPECT().StreamID().Return(quic.StreamID(4)).AnyTimes()
@@ -62,7 +63,7 @@ func TestAddStreamAfterSessionClose(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	sess := newSession(42, NewMockStreamCreator(ctrl), newMockRequestStream())
+	sess := newSession(42, NewMockStreamCreator(ctrl), newMockRequestStream(ctrl))
 	require.NoError(t, sess.Close())
 
 	str := NewMockStream(ctrl)

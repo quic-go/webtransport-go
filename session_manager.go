@@ -2,7 +2,6 @@ package webtransport
 
 import (
 	"context"
-	"io"
 	"sync"
 	"time"
 
@@ -165,7 +164,7 @@ func (m *sessionManager) handleUniStream(str quic.ReceiveStream, sess *session) 
 }
 
 // AddSession adds a new WebTransport session.
-func (m *sessionManager) AddSession(qconn http3.StreamCreator, id sessionID, requestStr io.ReadWriteCloser) *Session {
+func (m *sessionManager) AddSession(qconn http3.StreamCreator, id sessionID, requestStr quic.Stream) *Session {
 	conn := newSession(id, qconn, requestStr)
 
 	m.mx.Lock()

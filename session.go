@@ -3,7 +3,6 @@ package webtransport
 import (
 	"bytes"
 	"context"
-	"io"
 	"math/rand"
 	"net"
 	"sync"
@@ -19,7 +18,7 @@ type sessionID uint64
 type Session struct {
 	sessionID  sessionID
 	qconn      http3.StreamCreator
-	requestStr io.ReadWriteCloser
+	requestStr quic.Stream
 
 	streamHdr    []byte
 	uniStreamHdr []byte
@@ -49,7 +48,7 @@ type Session struct {
 	streams streamsMap
 }
 
-func newSession(sessionID sessionID, qconn http3.StreamCreator, requestStr io.ReadWriteCloser) *Session {
+func newSession(sessionID sessionID, qconn http3.StreamCreator, requestStr quic.Stream) *Session {
 	ctx, ctxCancel := context.WithCancel(context.Background())
 	c := &Session{
 		sessionID:     sessionID,
@@ -351,5 +350,8 @@ func (c *Session) Close() error {
 	c.closeErr = &ConnectionError{Message: "session closed"}
 	c.streams.CloseSession()
 	c.closeMx.Unlock()
-	return c.requestStr.Close()
+	c.requestStr.CancelRead(1337)
+	err := c.requestStr.Close()
+	<-c.ctx.Done()
+	return err
 }
