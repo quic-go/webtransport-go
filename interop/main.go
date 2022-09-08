@@ -71,6 +71,7 @@ func main() {
 func runHTTPServer(certHash [32]byte) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/webtransport", func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Println("handler hit")
 		content := strings.ReplaceAll(indexHTML, "%%CERTHASH%%", formatByteSlice(certHash[:]))
 		content = strings.ReplaceAll(content, "%%DATA%%", formatByteSlice(data))
 		content = strings.ReplaceAll(content, "%%TEST%%", "unidirectional")
