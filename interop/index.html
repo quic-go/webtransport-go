@@ -1,0 +1,63 @@
+<html>
+<body>
+<script>
+function testSucceeded() {
+    let elemDiv = document.createElement('div');
+    elemDiv.id = "done";
+    document.body.appendChild(elemDiv);
+}
+
+async function establishSession(url) {
+    const transport = new WebTransport(url, {
+        "serverCertificateHashes": [{
+            "algorithm": "sha-256",
+            "value": new Uint8Array(%%CERTHASH%%)
+        }]
+    });
+
+    // Optionally, set up functions to respond to
+    // the connection closing:
+    transport.closed.then(() => {
+        console.log(`The HTTP/3 connection to ${url} closed gracefully.`);
+    }).catch((error) => {
+        console.error(`The HTTP/3 connection to ${url} closed due to ${error}.`);
+    });
+
+    // Once .ready fulfills, the connection can be used.
+    await transport.ready;
+    return transport;
+}
+
+// In this test, we open 5 unidirectional streams, and send the data back to the server.
+async function runUnidirectionalTest() {
+    const transport = await establishSession('https://127.0.0.1:12345/unidirectional');
+    const data = new Uint8Array(%%DATA%%);
+
+    let failed = false
+    for(let i = 0; i < 5; i++) {
+        const stream = await transport.createUnidirectionalStream();
+        console.log(`Opened stream ${i}.`)
+        const writer = stream.getWriter();
+        writer.write(data);
+        try {
+            await writer.close();
+            console.log(`All data has been sent on stream ${i}.`);
+        } catch (error) {
+            console.error(`An error occurred: ${error}`);
+            failed = true
+        }
+    }
+    if(!failed) { testSucceeded() }
+    transport.close()
+}
+
+(async function() {
+    switch("%%TEST%%") {
+    case "unidirectional":
+        await runUnidirectionalTest()
+        break
+    }
+})()
+</script>
+</body>
+</html>
