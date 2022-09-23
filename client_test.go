@@ -1,8 +1,10 @@
 package webtransport_test
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -14,6 +16,7 @@ import (
 
 	"github.com/lucas-clemente/quic-go"
 	"github.com/lucas-clemente/quic-go/http3"
+	"github.com/lucas-clemente/quic-go/quicvarint"
 
 	"github.com/stretchr/testify/require"
 )
@@ -43,6 +46,45 @@ func (c *requestStreamDelayingConn) OpenStreamSync(ctx context.Context) (quic.St
 		return &delayedStream{done: c.done, Stream: str}, nil
 	}
 	return str, nil
+}
+
+func TestClientInvalidResponseHandling(t *testing.T) {
+	tlsConf := tlsConf.Clone()
+	tlsConf.NextProtos = []string{"h3"}
+	s, err := quic.ListenAddr("localhost:0", tlsConf, nil)
+	require.NoError(t, err)
+	errChan := make(chan error)
+	go func() {
+		conn, err := s.Accept(context.Background())
+		require.NoError(t, err)
+		str, err := conn.AcceptStream(context.Background())
+		require.NoError(t, err)
+		// write a HTTP3 data frame. This will cause an error, since a HEADERS frame is expected
+		b := &bytes.Buffer{}
+		quicvarint.Write(b, 0x0)
+		quicvarint.Write(b, 1337)
+		_, err = str.Write(b.Bytes())
+		require.NoError(t, err)
+		for {
+			if _, err := str.Read(make([]byte, 64)); err != nil {
+				errChan <- err
+				return
+			}
+		}
+	}()
+
+	d := webtransport.Dialer{
+		RoundTripper: &http3.RoundTripper{
+			TLSClientConfig: &tls.Config{RootCAs: certPool},
+		},
+	}
+	_, _, err = d.Dial(context.Background(), fmt.Sprintf("https://localhost:%d", s.Addr().(*net.UDPAddr).Port), nil)
+	require.Error(t, err)
+	sErr := <-errChan
+	require.Error(t, sErr)
+	var appErr *quic.ApplicationError
+	require.True(t, errors.As(sErr, &appErr))
+	require.Equal(t, quic.ApplicationErrorCode(0x105), appErr.ErrorCode) // H3_FRAME_UNEXPECTED
 }
 
 func TestClientReorderedUpgrade(t *testing.T) {
