@@ -1,6 +1,7 @@
 package webtransport
 
 import (
+	"context"
 	"io"
 	"testing"
 
@@ -40,6 +41,7 @@ func TestCloseStreamsOnClose(t *testing.T) {
 	defer ctrl.Finish()
 
 	mockSess := NewMockStreamCreator(ctrl)
+	mockSess.EXPECT().Context().Return(context.WithValue(context.Background(), quic.ConnectionTracingKey, uint64(1337)))
 	sess := newSession(42, mockSess, newMockRequestStream(ctrl))
 
 	str := NewMockStream(ctrl)
@@ -63,7 +65,10 @@ func TestAddStreamAfterSessionClose(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	sess := newSession(42, NewMockStreamCreator(ctrl), newMockRequestStream(ctrl))
+	mockSess := NewMockStreamCreator(ctrl)
+	mockSess.EXPECT().Context().Return(context.WithValue(context.Background(), quic.ConnectionTracingKey, uint64(1337)))
+
+	sess := newSession(42, mockSess, newMockRequestStream(ctrl))
 	require.NoError(t, sess.Close())
 
 	str := NewMockStream(ctrl)

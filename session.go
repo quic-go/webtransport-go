@@ -74,7 +74,8 @@ type Session struct {
 }
 
 func newSession(sessionID sessionID, qconn http3.StreamCreator, requestStr quic.Stream) *Session {
-	ctx, ctxCancel := context.WithCancel(context.Background())
+	tracingID := qconn.Context().Value(quic.ConnectionTracingKey).(uint64)
+	ctx, ctxCancel := context.WithCancel(context.WithValue(context.Background(), quic.ConnectionTracingKey, tracingID))
 	c := &Session{
 		sessionID:       sessionID,
 		qconn:           qconn,
