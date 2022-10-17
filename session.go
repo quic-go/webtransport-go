@@ -103,12 +103,12 @@ func newSession(sessionID sessionID, qconn http3.StreamCreator, requestStr quic.
 	return c
 }
 
-func (c *Session) handleConn() {
+func (s *Session) handleConn() {
 	var closeErr error
 	for {
 		// TODO: parse capsules sent on the request stream
 		b := make([]byte, 100)
-		if _, err := c.requestStr.Read(b); err != nil {
+		if _, err := s.requestStr.Read(b); err != nil {
 			closeErr = &ConnectionError{
 				Remote:  true,
 				Message: err.Error(),
@@ -117,236 +117,236 @@ func (c *Session) handleConn() {
 		}
 	}
 
-	c.closeMx.Lock()
-	defer c.closeMx.Unlock()
+	s.closeMx.Lock()
+	defer s.closeMx.Unlock()
 	// If we closed the connection, the closeErr will be set in Close.
-	if c.closeErr == nil {
-		c.closeErr = closeErr
+	if s.closeErr == nil {
+		s.closeErr = closeErr
 	}
-	for _, cancel := range c.streamCtxs {
+	for _, cancel := range s.streamCtxs {
 		cancel()
 	}
 }
 
-func (c *Session) addStream(qstr quic.Stream, addStreamHeader bool) Stream {
+func (s *Session) addStream(qstr quic.Stream, addStreamHeader bool) Stream {
 	var hdr []byte
 	if addStreamHeader {
-		hdr = c.streamHdr
+		hdr = s.streamHdr
 	}
-	str := newStream(qstr, hdr, func() { c.streams.RemoveStream(qstr.StreamID()) })
-	c.streams.AddStream(qstr.StreamID(), str.closeWithSession)
+	str := newStream(qstr, hdr, func() { s.streams.RemoveStream(qstr.StreamID()) })
+	s.streams.AddStream(qstr.StreamID(), str.closeWithSession)
 	return str
 }
 
-func (c *Session) addReceiveStream(qstr quic.ReceiveStream) ReceiveStream {
-	str := newReceiveStream(qstr, func() { c.streams.RemoveStream(qstr.StreamID()) })
-	c.streams.AddStream(qstr.StreamID(), func() {
+func (s *Session) addReceiveStream(qstr quic.ReceiveStream) ReceiveStream {
+	str := newReceiveStream(qstr, func() { s.streams.RemoveStream(qstr.StreamID()) })
+	s.streams.AddStream(qstr.StreamID(), func() {
 		str.closeWithSession()
 	})
 	return str
 }
 
-func (c *Session) addSendStream(qstr quic.SendStream) SendStream {
-	str := newSendStream(qstr, c.uniStreamHdr, func() { c.streams.RemoveStream(qstr.StreamID()) })
-	c.streams.AddStream(qstr.StreamID(), str.closeWithSession)
+func (s *Session) addSendStream(qstr quic.SendStream) SendStream {
+	str := newSendStream(qstr, s.uniStreamHdr, func() { s.streams.RemoveStream(qstr.StreamID()) })
+	s.streams.AddStream(qstr.StreamID(), str.closeWithSession)
 	return str
 }
 
 // addIncomingStream adds a bidirectional stream that the remote peer opened
-func (c *Session) addIncomingStream(qstr quic.Stream) {
-	c.closeMx.Lock()
-	closeErr := c.closeErr
+func (s *Session) addIncomingStream(qstr quic.Stream) {
+	s.closeMx.Lock()
+	closeErr := s.closeErr
 	if closeErr != nil {
-		c.closeMx.Unlock()
+		s.closeMx.Unlock()
 		qstr.CancelRead(sessionCloseErrorCode)
 		qstr.CancelWrite(sessionCloseErrorCode)
 		return
 	}
-	str := c.addStream(qstr, false)
-	c.closeMx.Unlock()
+	str := s.addStream(qstr, false)
+	s.closeMx.Unlock()
 
-	c.bidiAcceptQueue.Add(str)
+	s.bidiAcceptQueue.Add(str)
 }
 
 // addIncomingUniStream adds a unidirectional stream that the remote peer opened
-func (c *Session) addIncomingUniStream(qstr quic.ReceiveStream) {
-	c.closeMx.Lock()
-	closeErr := c.closeErr
+func (s *Session) addIncomingUniStream(qstr quic.ReceiveStream) {
+	s.closeMx.Lock()
+	closeErr := s.closeErr
 	if closeErr != nil {
-		c.closeMx.Unlock()
+		s.closeMx.Unlock()
 		qstr.CancelRead(sessionCloseErrorCode)
 		return
 	}
-	str := c.addReceiveStream(qstr)
-	c.closeMx.Unlock()
+	str := s.addReceiveStream(qstr)
+	s.closeMx.Unlock()
 
-	c.uniAcceptQueue.Add(str)
+	s.uniAcceptQueue.Add(str)
 }
 
 // Context returns a context that is closed when the session is closed.
-func (c *Session) Context() context.Context {
-	return c.ctx
+func (s *Session) Context() context.Context {
+	return s.ctx
 }
 
-func (c *Session) AcceptStream(ctx context.Context) (Stream, error) {
-	c.closeMx.Lock()
-	closeErr := c.closeErr
-	c.closeMx.Unlock()
+func (s *Session) AcceptStream(ctx context.Context) (Stream, error) {
+	s.closeMx.Lock()
+	closeErr := s.closeErr
+	s.closeMx.Unlock()
 	if closeErr != nil {
 		return nil, closeErr
 	}
 
 	for {
 		// If there's a stream in the accept queue, return it immediately.
-		if str := c.bidiAcceptQueue.Next(); str != nil {
+		if str := s.bidiAcceptQueue.Next(); str != nil {
 			return str, nil
 		}
 		// No stream in the accept queue. Wait until we accept one.
 		select {
-		case <-c.ctx.Done():
-			return nil, c.closeErr
+		case <-s.ctx.Done():
+			return nil, s.closeErr
 		case <-ctx.Done():
 			return nil, ctx.Err()
-		case <-c.bidiAcceptQueue.Chan():
+		case <-s.bidiAcceptQueue.Chan():
 		}
 	}
 }
 
-func (c *Session) AcceptUniStream(ctx context.Context) (ReceiveStream, error) {
-	c.closeMx.Lock()
-	closeErr := c.closeErr
-	c.closeMx.Unlock()
+func (s *Session) AcceptUniStream(ctx context.Context) (ReceiveStream, error) {
+	s.closeMx.Lock()
+	closeErr := s.closeErr
+	s.closeMx.Unlock()
 	if closeErr != nil {
-		return nil, c.closeErr
+		return nil, s.closeErr
 	}
 
 	for {
 		// If there's a stream in the accept queue, return it immediately.
-		if str := c.uniAcceptQueue.Next(); str != nil {
+		if str := s.uniAcceptQueue.Next(); str != nil {
 			return str, nil
 		}
 		// No stream in the accept queue. Wait until we accept one.
 		select {
-		case <-c.ctx.Done():
-			return nil, c.closeErr
+		case <-s.ctx.Done():
+			return nil, s.closeErr
 		case <-ctx.Done():
 			return nil, ctx.Err()
-		case <-c.uniAcceptQueue.Chan():
+		case <-s.uniAcceptQueue.Chan():
 		}
 	}
 }
 
-func (c *Session) OpenStream() (Stream, error) {
-	c.closeMx.Lock()
-	defer c.closeMx.Unlock()
+func (s *Session) OpenStream() (Stream, error) {
+	s.closeMx.Lock()
+	defer s.closeMx.Unlock()
 
-	if c.closeErr != nil {
-		return nil, c.closeErr
+	if s.closeErr != nil {
+		return nil, s.closeErr
 	}
 
-	qstr, err := c.qconn.OpenStream()
+	qstr, err := s.qconn.OpenStream()
 	if err != nil {
 		return nil, err
 	}
-	return c.addStream(qstr, true), nil
+	return s.addStream(qstr, true), nil
 }
 
-func (c *Session) addStreamCtxCancel(cancel context.CancelFunc) (id int) {
+func (s *Session) addStreamCtxCancel(cancel context.CancelFunc) (id int) {
 rand:
 	id = rand.Int()
-	if _, ok := c.streamCtxs[id]; ok {
+	if _, ok := s.streamCtxs[id]; ok {
 		goto rand
 	}
-	c.streamCtxs[id] = cancel
+	s.streamCtxs[id] = cancel
 	return id
 }
 
-func (c *Session) OpenStreamSync(ctx context.Context) (str Stream, err error) {
-	c.closeMx.Lock()
-	if c.closeErr != nil {
-		c.closeMx.Unlock()
-		return nil, c.closeErr
+func (s *Session) OpenStreamSync(ctx context.Context) (str Stream, err error) {
+	s.closeMx.Lock()
+	if s.closeErr != nil {
+		s.closeMx.Unlock()
+		return nil, s.closeErr
 	}
 	ctx, cancel := context.WithCancel(ctx)
-	id := c.addStreamCtxCancel(cancel)
-	c.closeMx.Unlock()
+	id := s.addStreamCtxCancel(cancel)
+	s.closeMx.Unlock()
 
 	defer func() {
-		c.closeMx.Lock()
-		closeErr := c.closeErr
-		delete(c.streamCtxs, id)
-		c.closeMx.Unlock()
+		s.closeMx.Lock()
+		closeErr := s.closeErr
+		delete(s.streamCtxs, id)
+		s.closeMx.Unlock()
 		if err != nil {
 			err = closeErr
 		}
 	}()
 
 	var qstr quic.Stream
-	qstr, err = c.qconn.OpenStreamSync(ctx)
+	qstr, err = s.qconn.OpenStreamSync(ctx)
 	if err != nil {
 		return nil, err
 	}
-	return c.addStream(qstr, true), nil
+	return s.addStream(qstr, true), nil
 }
 
-func (c *Session) OpenUniStream() (SendStream, error) {
-	c.closeMx.Lock()
-	defer c.closeMx.Unlock()
+func (s *Session) OpenUniStream() (SendStream, error) {
+	s.closeMx.Lock()
+	defer s.closeMx.Unlock()
 
-	if c.closeErr != nil {
-		return nil, c.closeErr
+	if s.closeErr != nil {
+		return nil, s.closeErr
 	}
-	qstr, err := c.qconn.OpenUniStream()
+	qstr, err := s.qconn.OpenUniStream()
 	if err != nil {
 		return nil, err
 	}
-	return c.addSendStream(qstr), nil
+	return s.addSendStream(qstr), nil
 }
 
-func (c *Session) OpenUniStreamSync(ctx context.Context) (str SendStream, err error) {
-	c.closeMx.Lock()
-	if c.closeErr != nil {
-		c.closeMx.Unlock()
-		return nil, c.closeErr
+func (s *Session) OpenUniStreamSync(ctx context.Context) (str SendStream, err error) {
+	s.closeMx.Lock()
+	if s.closeErr != nil {
+		s.closeMx.Unlock()
+		return nil, s.closeErr
 	}
 	ctx, cancel := context.WithCancel(ctx)
-	id := c.addStreamCtxCancel(cancel)
-	c.closeMx.Unlock()
+	id := s.addStreamCtxCancel(cancel)
+	s.closeMx.Unlock()
 
 	defer func() {
-		c.closeMx.Lock()
-		closeErr := c.closeErr
-		delete(c.streamCtxs, id)
-		c.closeMx.Unlock()
+		s.closeMx.Lock()
+		closeErr := s.closeErr
+		delete(s.streamCtxs, id)
+		s.closeMx.Unlock()
 		if err != nil {
 			err = closeErr
 		}
 	}()
 
 	var qstr quic.SendStream
-	qstr, err = c.qconn.OpenUniStreamSync(ctx)
+	qstr, err = s.qconn.OpenUniStreamSync(ctx)
 	if err != nil {
 		return nil, err
 	}
-	return c.addSendStream(qstr), nil
+	return s.addSendStream(qstr), nil
 }
 
-func (c *Session) LocalAddr() net.Addr {
-	return c.qconn.LocalAddr()
+func (s *Session) LocalAddr() net.Addr {
+	return s.qconn.LocalAddr()
 }
 
-func (c *Session) RemoteAddr() net.Addr {
-	return c.qconn.RemoteAddr()
+func (s *Session) RemoteAddr() net.Addr {
+	return s.qconn.RemoteAddr()
 }
 
-func (c *Session) Close() error {
+func (s *Session) Close() error {
 	// TODO: send CLOSE_WEBTRANSPORT_SESSION capsule
-	c.closeMx.Lock()
-	c.closeErr = &ConnectionError{Message: "session closed"}
-	c.streams.CloseSession()
-	c.closeMx.Unlock()
-	c.requestStr.CancelRead(1337)
-	err := c.requestStr.Close()
-	<-c.ctx.Done()
+	s.closeMx.Lock()
+	s.closeErr = &ConnectionError{Message: "session closed"}
+	s.streams.CloseSession()
+	s.closeMx.Unlock()
+	s.requestStr.CancelRead(1337)
+	err := s.requestStr.Close()
+	<-s.ctx.Done()
 	return err
 }
