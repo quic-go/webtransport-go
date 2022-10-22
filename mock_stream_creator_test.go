@@ -36,6 +36,34 @@ func (m *MockStreamCreator) EXPECT() *MockStreamCreatorMockRecorder {
 	return m.recorder
 }
 
+// ConnectionState mocks base method.
+func (m *MockStreamCreator) ConnectionState() quic.ConnectionState {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ConnectionState")
+	ret0, _ := ret[0].(quic.ConnectionState)
+	return ret0
+}
+
+// ConnectionState indicates an expected call of ConnectionState.
+func (mr *MockStreamCreatorMockRecorder) ConnectionState() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ConnectionState", reflect.TypeOf((*MockStreamCreator)(nil).ConnectionState))
+}
+
+// Context mocks base method.
+func (m *MockStreamCreator) Context() context.Context {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "Context")
+	ret0, _ := ret[0].(context.Context)
+	return ret0
+}
+
+// Context indicates an expected call of Context.
+func (mr *MockStreamCreatorMockRecorder) Context() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Context", reflect.TypeOf((*MockStreamCreator)(nil).Context))
+}
+
 // LocalAddr mocks base method.
 func (m *MockStreamCreator) LocalAddr() net.Addr {
 	m.ctrl.T.Helper()
