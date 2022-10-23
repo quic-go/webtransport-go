@@ -350,3 +350,7 @@ func (s *Session) Close() error {
 	<-s.ctx.Done()
 	return err
 }
+
+func (c *Session) ConnectionState() quic.ConnectionState {
+	return c.qconn.ConnectionState()
+}
