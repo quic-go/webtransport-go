@@ -11,10 +11,10 @@ import (
 
 func TestErrorCodeRoundTrip(t *testing.T) {
 	for i := 0; i < math.MaxUint8; i++ {
-		httpCode := webtransportCodeToHTTPCode(ErrorCode(i))
+		httpCode := webtransportCodeToHTTPCode(StreamErrorCode(i))
 		errorCode, err := httpCodeToWebtransportCode(httpCode)
 		require.NoError(t, err)
-		require.Equal(t, ErrorCode(i), errorCode)
+		require.Equal(t, StreamErrorCode(i), errorCode)
 	}
 }
 

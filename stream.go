@@ -16,15 +16,19 @@ const sessionCloseErrorCode quic.StreamErrorCode = 0x170d7b68
 type SendStream interface {
 	io.Writer
 	io.Closer
+
 	StreamID() quic.StreamID
-	CancelWrite(ErrorCode)
+	CancelWrite(StreamErrorCode)
+
 	SetWriteDeadline(time.Time) error
 }
 
 type ReceiveStream interface {
 	io.Reader
+
 	StreamID() quic.StreamID
-	CancelRead(ErrorCode)
+	CancelRead(StreamErrorCode)
+
 	SetReadDeadline(time.Time) error
 }
 
@@ -72,7 +76,7 @@ func (s *sendStream) Write(b []byte) (int, error) {
 	return n, maybeConvertStreamError(err)
 }
 
-func (s *sendStream) CancelWrite(e ErrorCode) {
+func (s *sendStream) CancelWrite(e StreamErrorCode) {
 	s.str.CancelWrite(webtransportCodeToHTTPCode(e))
 	s.onClose()
 }
@@ -116,7 +120,7 @@ func (s *receiveStream) Read(b []byte) (int, error) {
 	return n, maybeConvertStreamError(err)
 }
 
-func (s *receiveStream) CancelRead(e ErrorCode) {
+func (s *receiveStream) CancelRead(e StreamErrorCode) {
 	s.str.CancelRead(webtransportCodeToHTTPCode(e))
 	s.onClose()
 }

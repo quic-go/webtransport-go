@@ -357,7 +357,7 @@ func TestMultipleClients(t *testing.T) {
 }
 
 func TestStreamResetError(t *testing.T) {
-	const errorCode webtransport.ErrorCode = 127
+	const errorCode webtransport.StreamErrorCode = 127
 	conn, closeServer := establishConn(t, func(conn *webtransport.Session) {
 		for {
 			str, err := conn.AcceptStream(context.Background())
