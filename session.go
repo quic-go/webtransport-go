@@ -3,6 +3,9 @@ package webtransport
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
+	"errors"
+	"io"
 	"math/rand"
 	"net"
 	"sync"
@@ -14,6 +17,8 @@ import (
 
 // sessionID is the WebTransport Session ID
 type sessionID uint64
+
+const closeWebtransportSessionCapsuleType http3.CapsuleType = 0x2843
 
 type acceptQueue[T any] struct {
 	mx sync.Mutex
@@ -105,17 +110,10 @@ func newSession(sessionID sessionID, qconn http3.StreamCreator, requestStr quic.
 }
 
 func (s *Session) handleConn() {
-	var closeErr error
-	for {
-		// TODO: parse capsules sent on the request stream
-		b := make([]byte, 100)
-		if _, err := s.requestStr.Read(b); err != nil {
-			closeErr = &ConnectionError{
-				Remote:  true,
-				Message: err.Error(),
-			}
-			break
-		}
+	var closeErr *ConnectionError
+	err := s.parseNextCapsule()
+	if !errors.As(err, &closeErr) {
+		closeErr = &ConnectionError{Remote: true}
 	}
 
 	s.closeMx.Lock()
@@ -126,6 +124,40 @@ func (s *Session) handleConn() {
 	}
 	for _, cancel := range s.streamCtxs {
 		cancel()
+	}
+}
+
+// parseNextCapsule parses the next Capsule sent on the request stream.
+// It returns a ConnectionError, if the capsule received is a CLOSE_WEBTRANSPORT_SESSION Capsule.
+func (s *Session) parseNextCapsule() error {
+	for {
+		// TODO: enforce max size
+		typ, r, err := http3.ParseCapsule(quicvarint.NewReader(s.requestStr))
+		if err != nil {
+			return err
+		}
+		switch typ {
+		case closeWebtransportSessionCapsuleType:
+			b := make([]byte, 4)
+			if _, err := io.ReadFull(r, b); err != nil {
+				return err
+			}
+			appErrCode := binary.BigEndian.Uint32(b)
+			appErrMsg, err := io.ReadAll(r)
+			if err != nil {
+				return err
+			}
+			return &ConnectionError{
+				Remote:    true,
+				ErrorCode: SessionErrorCode(appErrCode),
+				Message:   string(appErrMsg),
+			}
+		default:
+			// unknown capsule, skip it
+			if _, err := io.ReadAll(r); err != nil {
+				return err
+			}
+		}
 	}
 }
 

@@ -7,8 +7,11 @@ import (
 	"github.com/lucas-clemente/quic-go"
 )
 
-// StreamErrorCode is the error code used for stream termination.
+// StreamErrorCode is an error code used for stream termination.
 type StreamErrorCode uint8
+
+// SessionErrorCode is an error code for session termination.
+type SessionErrorCode uint32
 
 const (
 	firstErrorCode = 0x52e4a40fa8db
@@ -65,8 +68,9 @@ func (e *StreamError) Error() string {
 
 // ConnectionError is a WebTransport connection error.
 type ConnectionError struct {
-	Remote  bool
-	Message string
+	Remote    bool
+	ErrorCode SessionErrorCode
+	Message   string
 }
 
 var _ error = &ConnectionError{}
