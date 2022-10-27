@@ -58,7 +58,7 @@ func TestCloseStreamsOnClose(t *testing.T) {
 	str.EXPECT().CancelRead(sessionCloseErrorCode)
 	str.EXPECT().CancelWrite(sessionCloseErrorCode)
 	ustr.EXPECT().CancelWrite(sessionCloseErrorCode)
-	require.NoError(t, sess.Close())
+	require.NoError(t, sess.CloseWithError(0, ""))
 }
 
 func TestAddStreamAfterSessionClose(t *testing.T) {
@@ -69,7 +69,7 @@ func TestAddStreamAfterSessionClose(t *testing.T) {
 	mockSess.EXPECT().Context().Return(context.WithValue(context.Background(), quic.ConnectionTracingKey, uint64(1337)))
 
 	sess := newSession(42, mockSess, newMockRequestStream(ctrl))
-	require.NoError(t, sess.Close())
+	require.NoError(t, sess.CloseWithError(0, ""))
 
 	str := NewMockStream(ctrl)
 	str.EXPECT().CancelRead(sessionCloseErrorCode)

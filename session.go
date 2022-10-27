@@ -372,11 +372,26 @@ func (s *Session) RemoteAddr() net.Addr {
 	return s.qconn.RemoteAddr()
 }
 
-func (s *Session) Close() error {
-	// TODO: send CLOSE_WEBTRANSPORT_SESSION capsule
+func (s *Session) CloseWithError(code SessionErrorCode, msg string) error {
 	s.closeMx.Lock()
-	s.closeErr = &ConnectionError{Message: "session closed"}
+	s.closeErr = &ConnectionError{
+		ErrorCode: code,
+		Message:   msg,
+	}
 	s.streams.CloseSession()
+
+	b := make([]byte, 4, 4+len(msg))
+	binary.BigEndian.PutUint32(b, uint32(code))
+	b = append(b, []byte(msg)...)
+
+	if err := http3.WriteCapsule(
+		quicvarint.NewWriter(s.requestStr),
+		closeWebtransportSessionCapsuleType,
+		b,
+	); err != nil {
+		return err
+	}
+
 	s.closeMx.Unlock()
 	s.requestStr.CancelRead(1337)
 	err := s.requestStr.Close()
