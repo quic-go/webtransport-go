@@ -172,9 +172,12 @@ func (s *stream) closeWithSession() {
 }
 
 func (s *stream) SetDeadline(t time.Time) error {
-	// TODO: implement
-	return nil
-	// return maybeConvertStreamError(s.SendStream.SetDeadline(t))
+	err1 := s.sendStream.SetWriteDeadline(t)
+	err2 := s.receiveStream.SetReadDeadline(t)
+	if err1 != nil {
+		return err1
+	}
+	return err2
 }
 
 func (s *stream) StreamID() quic.StreamID {
