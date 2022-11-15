@@ -16,23 +16,21 @@ const sessionCloseErrorCode quic.StreamErrorCode = 0x170d7b68
 type SendStream interface {
 	io.Writer
 	io.Closer
-
+	StreamID() quic.StreamID
 	CancelWrite(ErrorCode)
-
 	SetWriteDeadline(time.Time) error
 }
 
 type ReceiveStream interface {
 	io.Reader
+	StreamID() quic.StreamID
 	CancelRead(ErrorCode)
-
 	SetReadDeadline(time.Time) error
 }
 
 type Stream interface {
 	SendStream
 	ReceiveStream
-
 	SetDeadline(time.Time) error
 }
 
@@ -95,6 +93,10 @@ func (s *sendStream) SetWriteDeadline(t time.Time) error {
 	return maybeConvertStreamError(s.str.SetWriteDeadline(t))
 }
 
+func (s *sendStream) StreamID() quic.StreamID {
+	return s.str.StreamID()
+}
+
 type receiveStream struct {
 	str     quic.ReceiveStream
 	onClose func()
@@ -125,6 +127,10 @@ func (s *receiveStream) closeWithSession() {
 
 func (s *receiveStream) SetReadDeadline(t time.Time) error {
 	return maybeConvertStreamError(s.str.SetReadDeadline(t))
+}
+
+func (s *receiveStream) StreamID() quic.StreamID {
+	return s.str.StreamID()
 }
 
 type stream struct {
@@ -169,6 +175,10 @@ func (s *stream) SetDeadline(t time.Time) error {
 	// TODO: implement
 	return nil
 	// return maybeConvertStreamError(s.SendStream.SetDeadline(t))
+}
+
+func (s *stream) StreamID() quic.StreamID {
+	return s.receiveStream.StreamID()
 }
 
 func maybeConvertStreamError(err error) error {
