@@ -7,18 +7,22 @@ import (
 	"github.com/lucas-clemente/quic-go"
 )
 
-type ErrorCode uint8
+// StreamErrorCode is an error code used for stream termination.
+type StreamErrorCode uint8
+
+// SessionErrorCode is an error code for session termination.
+type SessionErrorCode uint32
 
 const (
 	firstErrorCode = 0x52e4a40fa8db
 	lastErrorCode  = 0x52e4a40fa9e2
 )
 
-func webtransportCodeToHTTPCode(n ErrorCode) quic.StreamErrorCode {
+func webtransportCodeToHTTPCode(n StreamErrorCode) quic.StreamErrorCode {
 	return quic.StreamErrorCode(firstErrorCode) + quic.StreamErrorCode(n) + quic.StreamErrorCode(n/0x1e)
 }
 
-func httpCodeToWebtransportCode(h quic.StreamErrorCode) (ErrorCode, error) {
+func httpCodeToWebtransportCode(h quic.StreamErrorCode) (StreamErrorCode, error) {
 	if h < firstErrorCode || h > lastErrorCode {
 		return 0, errors.New("error code outside of expected range")
 	}
@@ -26,7 +30,7 @@ func httpCodeToWebtransportCode(h quic.StreamErrorCode) (ErrorCode, error) {
 		return 0, errors.New("invalid error code")
 	}
 	shifted := h - firstErrorCode
-	return ErrorCode(shifted - shifted/0x1f), nil
+	return StreamErrorCode(shifted - shifted/0x1f), nil
 }
 
 func isWebTransportError(e error) bool {
@@ -50,7 +54,7 @@ const WebTransportBufferedStreamRejectedErrorCode quic.StreamErrorCode = 0x3994b
 
 // StreamError is the error that is returned from stream operations (Read, Write) when the stream is canceled.
 type StreamError struct {
-	ErrorCode ErrorCode
+	ErrorCode StreamErrorCode
 }
 
 func (e *StreamError) Is(target error) bool {
@@ -64,8 +68,9 @@ func (e *StreamError) Error() string {
 
 // ConnectionError is a WebTransport connection error.
 type ConnectionError struct {
-	Remote  bool
-	Message string
+	Remote    bool
+	ErrorCode SessionErrorCode
+	Message   string
 }
 
 var _ error = &ConnectionError{}

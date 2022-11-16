@@ -148,7 +148,7 @@ func TestBidirectionalStreamsDataTransfer(t *testing.T) {
 	t.Run("client-initiated", func(t *testing.T) {
 		conn, closeServer := establishConn(t, newEchoHandler(t))
 		defer closeServer()
-		defer conn.Close()
+		defer conn.CloseWithError(0, "")
 
 		sendDataAndCheckEcho(t, conn)
 	})
@@ -160,7 +160,7 @@ func TestBidirectionalStreamsDataTransfer(t *testing.T) {
 			close(done) // don't defer this, the HTTP handler catches panics
 		})
 		defer closeServer()
-		defer conn.Close()
+		defer conn.CloseWithError(0, "")
 
 		go newEchoHandler(t)(conn)
 		<-done
@@ -181,7 +181,7 @@ func TestStreamsImmediateClose(t *testing.T) {
 				close(done) // don't defer this, the HTTP handler catches panics
 			})
 			defer closeServer()
-			defer conn.Close()
+			defer conn.CloseWithError(0, "")
 
 			str, err := conn.OpenStream()
 			require.NoError(t, err)
@@ -201,11 +201,11 @@ func TestStreamsImmediateClose(t *testing.T) {
 				n, err := str.Read([]byte{0})
 				require.Zero(t, n)
 				require.ErrorIs(t, err, io.EOF)
-				require.NoError(t, c.Close())
+				require.NoError(t, c.CloseWithError(0, ""))
 				close(done) // don't defer this, the HTTP handler catches panics
 			})
 			defer closeServer()
-			defer conn.Close()
+			defer conn.CloseWithError(0, "")
 
 			str, err := conn.AcceptStream(context.Background())
 			require.NoError(t, err)
@@ -220,7 +220,7 @@ func TestStreamsImmediateClose(t *testing.T) {
 	t.Run("unidirectional", func(t *testing.T) {
 		t.Run("client-initiated", func(t *testing.T) {
 			conn, closeServer := establishConn(t, func(c *webtransport.Session) {
-				defer c.Close()
+				defer c.CloseWithError(0, "")
 				str, err := c.AcceptUniStream(context.Background())
 				require.NoError(t, err)
 				n, err := str.Read([]byte{0})
@@ -242,7 +242,7 @@ func TestStreamsImmediateClose(t *testing.T) {
 				require.NoError(t, str.Close())
 			})
 			defer closeServer()
-			defer conn.Close()
+			defer conn.CloseWithError(0, "")
 
 			str, err := conn.AcceptUniStream(context.Background())
 			require.NoError(t, err)
@@ -280,7 +280,7 @@ func TestStreamsImmediateReset(t *testing.T) {
 		}
 	})
 	defer closeServer()
-	defer conn.Close()
+	defer conn.CloseWithError(0, "")
 
 	ctx, cancel := context.WithTimeout(context.Background(), scaleDuration(100*time.Millisecond))
 	defer cancel()
@@ -308,7 +308,7 @@ func TestUnidirectionalStreams(t *testing.T) {
 		require.NoError(t, rstr.Close())
 	})
 	defer closeServer()
-	defer conn.Close()
+	defer conn.CloseWithError(0, "")
 
 	str, err := conn.OpenUniStream()
 	require.NoError(t, err)
@@ -357,7 +357,7 @@ func TestMultipleClients(t *testing.T) {
 }
 
 func TestStreamResetError(t *testing.T) {
-	const errorCode webtransport.ErrorCode = 127
+	const errorCode webtransport.StreamErrorCode = 127
 	conn, closeServer := establishConn(t, func(conn *webtransport.Session) {
 		for {
 			str, err := conn.AcceptStream(context.Background())
@@ -384,11 +384,13 @@ func TestStreamResetError(t *testing.T) {
 func TestShutdown(t *testing.T) {
 	done := make(chan struct{})
 	conn, closeServer := establishConn(t, func(conn *webtransport.Session) {
-		conn.Close()
+		conn.CloseWithError(1337, "foobar")
 		var connErr *webtransport.ConnectionError
 		_, err := conn.OpenStream()
 		require.True(t, errors.As(err, &connErr))
 		require.False(t, connErr.Remote)
+		require.Equal(t, webtransport.SessionErrorCode(1337), connErr.ErrorCode)
+		require.Equal(t, "foobar", connErr.Message)
 		_, err = conn.OpenUniStream()
 		require.True(t, errors.As(err, &connErr))
 		require.False(t, connErr.Remote)
@@ -401,6 +403,8 @@ func TestShutdown(t *testing.T) {
 	_, err := conn.AcceptStream(context.Background())
 	require.True(t, errors.As(err, &connErr))
 	require.True(t, connErr.Remote)
+	require.Equal(t, webtransport.SessionErrorCode(1337), connErr.ErrorCode)
+	require.Equal(t, "foobar", connErr.Message)
 	_, err = conn.AcceptUniStream(context.Background())
 	require.Error(t, err)
 	<-done
@@ -438,7 +442,7 @@ func TestOpenStreamSyncShutdown(t *testing.T) {
 		done := make(chan struct{})
 		conn, closeServer := establishConn(t, func(conn *webtransport.Session) {
 			<-done
-			conn.Close()
+			conn.CloseWithError(0, "")
 		})
 		defer closeServer()
 
@@ -453,7 +457,7 @@ func TestOpenStreamSyncShutdown(t *testing.T) {
 		done := make(chan struct{})
 		conn, closeServer := establishConn(t, func(conn *webtransport.Session) {
 			<-done
-			conn.Close()
+			conn.CloseWithError(0, "")
 		})
 		defer closeServer()
 
@@ -529,7 +533,7 @@ func TestCheckOrigin(t *testing.T) {
 			if tc.Result {
 				require.NoError(t, err)
 				require.Equal(t, 200, rsp.StatusCode)
-				defer conn.Close()
+				defer conn.CloseWithError(0, "")
 			} else {
 				require.Equal(t, 404, rsp.StatusCode)
 			}
@@ -549,7 +553,7 @@ func TestCloseStreamsOnSessionClose(t *testing.T) {
 		_, err = ustr.Write([]byte("foobar"))
 		require.NoError(t, err)
 		<-accepted
-		conn.Close()
+		conn.CloseWithError(0, "")
 		_, err = str.Read([]byte{0})
 		require.Error(t, err)
 		_, err = ustr.Write([]byte{0})

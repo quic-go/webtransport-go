@@ -120,7 +120,7 @@ func TestServerReorderedUpgradeRequest(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 200, rsp.StatusCode)
 	sconn := <-connChan
-	defer sconn.Close()
+	defer sconn.CloseWithError(0, "")
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
 	sstr, err := sconn.AcceptStream(ctx)
@@ -186,7 +186,7 @@ func TestServerReorderedUpgradeRequestTimeout(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 200, rsp.StatusCode)
 	sconn := <-connChan
-	defer sconn.Close()
+	defer sconn.CloseWithError(0, "")
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
 	_, err = sconn.AcceptStream(ctx)
@@ -256,7 +256,7 @@ func TestServerReorderedMultipleStreams(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 200, rsp.StatusCode)
 	sconn := <-connChan
-	defer sconn.Close()
+	defer sconn.CloseWithError(0, "")
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
 	sstr, err := sconn.AcceptStream(ctx)

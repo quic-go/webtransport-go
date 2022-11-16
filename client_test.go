@@ -129,7 +129,7 @@ func TestClientReorderedUpgrade(t *testing.T) {
 	time.Sleep(timeout)
 	close(blockUpgrade)
 	conn := <-connChan
-	defer conn.Close()
+	defer conn.CloseWithError(0, "")
 	ctx, cancel := context.WithTimeout(context.Background(), scaleDuration(100*time.Millisecond))
 	defer cancel()
 	str, err := conn.AcceptStream(ctx)
