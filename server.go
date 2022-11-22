@@ -114,6 +114,14 @@ func (s *Server) Serve(conn net.PacketConn) error {
 	return s.H3.Serve(conn)
 }
 
+// ServeQUICConn serves a single QUIC connection.
+func (s *Server) ServeQUICConn(conn quic.Connection) error {
+	if err := s.initialize(); err != nil {
+		return err
+	}
+	return s.H3.ServeQUICConn(conn)
+}
+
 func (s *Server) ListenAndServe() error {
 	if err := s.initialize(); err != nil {
 		return err
