@@ -389,6 +389,7 @@ func (s *Session) CloseWithError(code SessionErrorCode, msg string) error {
 		closeWebtransportSessionCapsuleType,
 		b,
 	); err != nil {
+		s.closeMx.Unlock()
 		return err
 	}
 
