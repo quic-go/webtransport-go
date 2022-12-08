@@ -87,6 +87,8 @@ func (s *Server) init() error {
 		if ft != webTransportFrameType {
 			return false, nil
 		}
+		// Reading the varint might block if the peer sends really small frames, but this is fine.
+		// This function is called from the HTTP/3 request handler, which runs in its own Go routine.
 		id, err := quicvarint.Read(quicvarint.NewReader(str))
 		if err != nil {
 			if isWebTransportError(err) {
