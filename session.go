@@ -22,7 +22,10 @@ const closeWebtransportSessionCapsuleType http3.CapsuleType = 0x2843
 
 type acceptQueue[T any] struct {
 	mx sync.Mutex
-	c  chan struct{}
+	// The channel is used to notify consumers (via Chan) about new incoming items.
+	// Needs to be buffered to preserve the notification if an item is enqueued
+	// between a call to Next and to Chan.
+	c chan struct{}
 	// Contains all the streams waiting to be accepted.
 	// There's no explicit limit to the length of the queue, but it is implicitly
 	// limited by the stream flow control provided by QUIC.
@@ -30,7 +33,7 @@ type acceptQueue[T any] struct {
 }
 
 func newAcceptQueue[T any]() *acceptQueue[T] {
-	return &acceptQueue[T]{c: make(chan struct{})}
+	return &acceptQueue[T]{c: make(chan struct{}, 1)}
 }
 
 func (q *acceptQueue[T]) Add(str T) {
