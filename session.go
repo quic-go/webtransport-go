@@ -1,7 +1,6 @@
 package webtransport
 
 import (
-	"bytes"
 	"context"
 	"encoding/binary"
 	"errors"
@@ -95,15 +94,13 @@ func newSession(sessionID sessionID, qconn http3.StreamCreator, requestStr quic.
 		streams:         *newStreamsMap(),
 	}
 	// precompute the headers for unidirectional streams
-	buf := bytes.NewBuffer(make([]byte, 0, 2+quicvarint.Len(uint64(c.sessionID))))
-	quicvarint.Write(buf, webTransportUniStreamType)
-	quicvarint.Write(buf, uint64(c.sessionID))
-	c.uniStreamHdr = buf.Bytes()
+	c.uniStreamHdr = make([]byte, 0, 2+quicvarint.Len(uint64(c.sessionID)))
+	c.uniStreamHdr = quicvarint.Append(c.uniStreamHdr, webTransportUniStreamType)
+	c.uniStreamHdr = quicvarint.Append(c.uniStreamHdr, uint64(c.sessionID))
 	// precompute the headers for bidirectional streams
-	buf = bytes.NewBuffer(make([]byte, 0, 2+quicvarint.Len(uint64(c.sessionID))))
-	quicvarint.Write(buf, webTransportFrameType)
-	quicvarint.Write(buf, uint64(c.sessionID))
-	c.streamHdr = buf.Bytes()
+	c.streamHdr = make([]byte, 0, 2+quicvarint.Len(uint64(c.sessionID)))
+	c.streamHdr = quicvarint.Append(c.streamHdr, webTransportFrameType)
+	c.streamHdr = quicvarint.Append(c.streamHdr, uint64(c.sessionID))
 
 	go func() {
 		defer ctxCancel()

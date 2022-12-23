@@ -1,7 +1,6 @@
 package webtransport_test
 
 import (
-	"bytes"
 	"context"
 	"crypto/tls"
 	"errors"
@@ -60,10 +59,10 @@ func TestClientInvalidResponseHandling(t *testing.T) {
 		str, err := conn.AcceptStream(context.Background())
 		require.NoError(t, err)
 		// write a HTTP3 data frame. This will cause an error, since a HEADERS frame is expected
-		b := &bytes.Buffer{}
-		quicvarint.Write(b, 0x0)
-		quicvarint.Write(b, 1337)
-		_, err = str.Write(b.Bytes())
+		var b []byte
+		b = quicvarint.Append(b, 0x0)
+		b = quicvarint.Append(b, 1337)
+		_, err = str.Write(b)
 		require.NoError(t, err)
 		for {
 			if _, err := str.Read(make([]byte, 64)); err != nil {
