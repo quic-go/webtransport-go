@@ -69,9 +69,11 @@ type Session struct {
 	streamHdr    []byte
 	uniStreamHdr []byte
 
-	ctx        context.Context
-	closeMx    sync.Mutex
-	closeErr   error // not nil once the session is closed
+	ctx      context.Context
+	closeMx  sync.Mutex
+	closeErr error // not nil once the session is closed
+	// streamCtxs holds all the context.CancelFuncs of calls to Open{Uni}StreamSync calls currently active.
+	// When the session is closed, this allows us to cancel all these contexts and make those calls return.
 	streamCtxs map[int]context.CancelFunc
 
 	bidiAcceptQueue acceptQueue[Stream]
@@ -309,11 +311,10 @@ func (s *Session) OpenStreamSync(ctx context.Context) (str Stream, err error) {
 
 	defer func() {
 		s.closeMx.Lock()
-		closeErr := s.closeErr
+		defer s.closeMx.Unlock()
 		delete(s.streamCtxs, id)
-		s.closeMx.Unlock()
-		if err != nil {
-			err = closeErr
+		if err != nil && s.closeErr != nil {
+			err = s.closeErr
 		}
 	}()
 
@@ -351,11 +352,10 @@ func (s *Session) OpenUniStreamSync(ctx context.Context) (str SendStream, err er
 
 	defer func() {
 		s.closeMx.Lock()
-		closeErr := s.closeErr
+		defer s.closeMx.Unlock()
 		delete(s.streamCtxs, id)
-		s.closeMx.Unlock()
-		if err != nil {
-			err = closeErr
+		if err != nil && s.closeErr != nil {
+			err = s.closeErr
 		}
 	}()
 

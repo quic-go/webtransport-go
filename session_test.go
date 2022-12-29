@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"testing"
+	"time"
 
 	"github.com/golang/mock/gomock"
 	"github.com/lucas-clemente/quic-go"
@@ -59,6 +60,41 @@ func TestCloseStreamsOnClose(t *testing.T) {
 	str.EXPECT().CancelWrite(sessionCloseErrorCode)
 	ustr.EXPECT().CancelWrite(sessionCloseErrorCode)
 	require.NoError(t, sess.CloseWithError(0, ""))
+}
+
+func TestOpenStreamSyncCancel(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockSess := NewMockStreamCreator(ctrl)
+	mockSess.EXPECT().Context().Return(context.WithValue(context.Background(), quic.ConnectionTracingKey, uint64(1337)))
+	sess := newSession(42, mockSess, newMockRequestStream(ctrl))
+	defer sess.CloseWithError(0, "")
+
+	str := NewMockStream(ctrl)
+	str.EXPECT().StreamID().Return(quic.StreamID(4)).AnyTimes()
+	mockSess.EXPECT().OpenStreamSync(gomock.Any()).DoAndReturn(func(ctx context.Context) (quic.Stream, error) {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	errChan := make(chan error)
+	go func() {
+		str, err := sess.OpenStreamSync(ctx)
+		require.Nil(t, str)
+		errChan <- err
+	}()
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+
+	select {
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("timeout")
+	case err := <-errChan:
+		require.Error(t, err)
+		require.ErrorIs(t, err, context.Canceled)
+	}
 }
 
 func TestAddStreamAfterSessionClose(t *testing.T) {
