@@ -6,13 +6,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/quic-go/quic-go"
+
 	"github.com/golang/mock/gomock"
-	"github.com/lucas-clemente/quic-go"
 	"github.com/stretchr/testify/require"
 )
 
-//go:generate sh -c "mockgen -package webtransport -destination mock_stream_creator_test.go github.com/lucas-clemente/quic-go/http3 StreamCreator"
-//go:generate sh -c "mockgen -package webtransport -destination mock_stream_test.go github.com/lucas-clemente/quic-go Stream && cat mock_stream_test.go | sed s@protocol\\.StreamID@quic.StreamID@g | sed s@qerr\\.StreamErrorCode@quic.StreamErrorCode@g > tmp.go && mv tmp.go mock_stream_test.go && goimports -w mock_stream_test.go"
+//go:generate sh -c "mockgen -package webtransport -destination mock_stream_creator_test.go github.com/quic-go/quic-go/http3 StreamCreator"
+//go:generate sh -c "mockgen -package webtransport -destination mock_stream_test.go github.com/quic-go/quic-go Stream && cat mock_stream_test.go | sed s@protocol\\.StreamID@quic.StreamID@g | sed s@qerr\\.StreamErrorCode@quic.StreamErrorCode@g > tmp.go && mv tmp.go mock_stream_test.go && goimports -w mock_stream_test.go"
 
 type mockRequestStream struct {
 	*MockStream

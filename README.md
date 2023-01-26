@@ -3,7 +3,7 @@
 [![PkgGoDev](https://pkg.go.dev/badge/github.com/marten-seemann/webtransport-go)](https://pkg.go.dev/github.com/marten-seemann/webtransport-go)
 [![Code Coverage](https://img.shields.io/codecov/c/github/marten-seemann/webtransport-go/master.svg?style=flat-square)](https://codecov.io/gh/marten-seemann/webtransport-go/)
 
-webtransport-go is an implementation of the WebTransport protocol, based on [quic-go](https://github.com/lucas-clemente/quic-go). It currently implements [draft-02](https://www.ietf.org/archive/id/draft-ietf-webtrans-http3-02.html) of the specification.
+webtransport-go is an implementation of the WebTransport protocol, based on [quic-go](https://github.com/quic-go/quic-go). It currently implements [draft-02](https://www.ietf.org/archive/id/draft-ietf-webtrans-http3-02.html) of the specification.
 
 ## Running a Server
 
