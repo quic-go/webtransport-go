@@ -1,7 +1,6 @@
 package webtransport_test
 
 import (
-	"bytes"
 	"context"
 	"crypto/tls"
 	"fmt"
@@ -72,11 +71,11 @@ func createStreamAndWrite(t *testing.T, qconn http3.StreamCreator, sessionID uin
 	t.Helper()
 	str, err := qconn.OpenStream()
 	require.NoError(t, err)
-	buf := &bytes.Buffer{}
-	quicvarint.Write(buf, 0x41)
-	quicvarint.Write(buf, sessionID) // stream ID of the stream used to establish the WebTransport session.
-	buf.Write(data)
-	_, err = str.Write(buf.Bytes())
+	var buf []byte
+	buf = quicvarint.Append(buf, 0x41)
+	buf = quicvarint.Append(buf, sessionID) // stream ID of the stream used to establish the WebTransport session.
+	buf = append(buf, data...)
+	_, err = str.Write(buf)
 	require.NoError(t, err)
 	require.NoError(t, str.Close())
 	return str
