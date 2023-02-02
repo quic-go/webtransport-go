@@ -15,9 +15,9 @@ import (
 
 	"github.com/marten-seemann/webtransport-go"
 
-	"github.com/lucas-clemente/quic-go"
-	"github.com/lucas-clemente/quic-go/http3"
-	"github.com/lucas-clemente/quic-go/quicvarint"
+	"github.com/quic-go/quic-go"
+	"github.com/quic-go/quic-go/http3"
+	"github.com/quic-go/quic-go/quicvarint"
 
 	"github.com/stretchr/testify/require"
 )
