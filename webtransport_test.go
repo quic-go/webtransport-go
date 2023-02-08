@@ -575,3 +575,29 @@ func TestCloseStreamsOnSessionClose(t *testing.T) {
 	_, err = ustr.Read([]byte{0})
 	require.Error(t, err)
 }
+
+// This test mostly serves to detect race conditions.
+func TestConcurrentSessionClose(t *testing.T) {
+	closeChan := make(chan struct{})
+	errChan := make(chan error, 2)
+	sess, closeServer := establishSession(t, func(sess *webtransport.Session) {
+		go func() {
+			_, err := sess.AcceptStream(context.Background())
+			errChan <- err
+		}()
+		<-closeChan
+		sess.CloseWithError(1337, "foobar")
+	})
+	defer closeServer()
+
+	go func() {
+		_, err := sess.AcceptStream(context.Background())
+		errChan <- err
+	}()
+
+	time.Sleep(10 * time.Millisecond)
+	close(closeChan)
+	sess.CloseWithError(1338, "raboof")
+	require.Error(t, <-errChan)
+	require.Error(t, <-errChan)
+}
