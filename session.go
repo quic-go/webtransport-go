@@ -127,6 +127,7 @@ func (s *Session) handleConn() {
 	for _, cancel := range s.streamCtxs {
 		cancel()
 	}
+	s.streams.CloseSession()
 }
 
 // parseNextCapsule parses the next Capsule sent on the request stream.
@@ -373,31 +374,38 @@ func (s *Session) RemoteAddr() net.Addr {
 }
 
 func (s *Session) CloseWithError(code SessionErrorCode, msg string) error {
+	first, err := s.closeWithError(code, msg)
+	if err != nil || !first {
+		return err
+	}
+
+	s.requestStr.CancelRead(1337)
+	err = s.requestStr.Close()
+	<-s.ctx.Done()
+	return err
+}
+
+func (s *Session) closeWithError(code SessionErrorCode, msg string) (bool /* first call to close session */, error) {
 	s.closeMx.Lock()
+	defer s.closeMx.Unlock()
+	// Duplicate call, or the remote already closed this session.
+	if s.closeErr != nil {
+		return false, nil
+	}
 	s.closeErr = &ConnectionError{
 		ErrorCode: code,
 		Message:   msg,
 	}
-	s.streams.CloseSession()
 
 	b := make([]byte, 4, 4+len(msg))
 	binary.BigEndian.PutUint32(b, uint32(code))
 	b = append(b, []byte(msg)...)
 
-	if err := http3.WriteCapsule(
+	return true, http3.WriteCapsule(
 		quicvarint.NewWriter(s.requestStr),
 		closeWebtransportSessionCapsuleType,
 		b,
-	); err != nil {
-		s.closeMx.Unlock()
-		return err
-	}
-
-	s.closeMx.Unlock()
-	s.requestStr.CancelRead(1337)
-	err := s.requestStr.Close()
-	<-s.ctx.Done()
-	return err
+	)
 }
 
 func (c *Session) ConnectionState() quic.ConnectionState {
