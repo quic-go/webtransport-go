@@ -125,7 +125,9 @@ func TestOpenStreamAfterSessionClose(t *testing.T) {
 	mockSess := NewMockStreamCreator(ctrl)
 	mockSess.EXPECT().Context().Return(context.WithValue(context.Background(), quic.ConnectionTracingKey, uint64(1337)))
 	wait := make(chan struct{})
+	streamOpen := make(chan struct{})
 	mockSess.EXPECT().OpenStreamSync(gomock.Any()).DoAndReturn(func(context.Context) (quic.Stream, error) {
+		streamOpen <- struct{}{}
 		str := NewMockStream(ctrl)
 		str.EXPECT().CancelRead(sessionCloseErrorCode)
 		str.EXPECT().CancelWrite(sessionCloseErrorCode)
@@ -140,8 +142,8 @@ func TestOpenStreamAfterSessionClose(t *testing.T) {
 		_, err := sess.OpenStreamSync(context.Background())
 		errChan <- err
 	}()
+	<-streamOpen
 
-	time.Sleep(100 * time.Millisecond)
 	require.NoError(t, sess.CloseWithError(0, "session closed"))
 
 	close(wait)
@@ -155,7 +157,9 @@ func TestOpenUniStreamAfterSessionClose(t *testing.T) {
 	mockSess := NewMockStreamCreator(ctrl)
 	mockSess.EXPECT().Context().Return(context.WithValue(context.Background(), quic.ConnectionTracingKey, uint64(1337)))
 	wait := make(chan struct{})
+	streamOpen := make(chan struct{})
 	mockSess.EXPECT().OpenUniStreamSync(gomock.Any()).DoAndReturn(func(context.Context) (quic.SendStream, error) {
+		streamOpen <- struct{}{}
 		str := NewMockStream(ctrl)
 		str.EXPECT().CancelWrite(sessionCloseErrorCode)
 		<-wait
@@ -169,8 +173,8 @@ func TestOpenUniStreamAfterSessionClose(t *testing.T) {
 		_, err := sess.OpenUniStreamSync(context.Background())
 		errChan <- err
 	}()
+	<-streamOpen
 
-	time.Sleep(100 * time.Millisecond)
 	require.NoError(t, sess.CloseWithError(0, "session closed"))
 
 	close(wait)
