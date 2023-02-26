@@ -117,3 +117,66 @@ func TestAddStreamAfterSessionClose(t *testing.T) {
 	ustr.EXPECT().CancelRead(sessionCloseErrorCode)
 	sess.addIncomingUniStream(ustr)
 }
+
+func TestOpenStreamAfterSessionClose(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockSess := NewMockStreamCreator(ctrl)
+	mockSess.EXPECT().Context().Return(context.WithValue(context.Background(), quic.ConnectionTracingKey, uint64(1337)))
+	wait := make(chan struct{})
+	streamOpen := make(chan struct{})
+	mockSess.EXPECT().OpenStreamSync(gomock.Any()).DoAndReturn(func(context.Context) (quic.Stream, error) {
+		streamOpen <- struct{}{}
+		str := NewMockStream(ctrl)
+		str.EXPECT().CancelRead(sessionCloseErrorCode)
+		str.EXPECT().CancelWrite(sessionCloseErrorCode)
+		<-wait
+		return str, nil
+	})
+
+	sess := newSession(42, mockSess, newMockRequestStream(ctrl))
+
+	errChan := make(chan error, 1)
+	go func() {
+		_, err := sess.OpenStreamSync(context.Background())
+		errChan <- err
+	}()
+	<-streamOpen
+
+	require.NoError(t, sess.CloseWithError(0, "session closed"))
+
+	close(wait)
+	require.EqualError(t, <-errChan, "session closed")
+}
+
+func TestOpenUniStreamAfterSessionClose(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockSess := NewMockStreamCreator(ctrl)
+	mockSess.EXPECT().Context().Return(context.WithValue(context.Background(), quic.ConnectionTracingKey, uint64(1337)))
+	wait := make(chan struct{})
+	streamOpen := make(chan struct{})
+	mockSess.EXPECT().OpenUniStreamSync(gomock.Any()).DoAndReturn(func(context.Context) (quic.SendStream, error) {
+		streamOpen <- struct{}{}
+		str := NewMockStream(ctrl)
+		str.EXPECT().CancelWrite(sessionCloseErrorCode)
+		<-wait
+		return str, nil
+	})
+
+	sess := newSession(42, mockSess, newMockRequestStream(ctrl))
+
+	errChan := make(chan error, 1)
+	go func() {
+		_, err := sess.OpenUniStreamSync(context.Background())
+		errChan <- err
+	}()
+	<-streamOpen
+
+	require.NoError(t, sess.CloseWithError(0, "session closed"))
+
+	close(wait)
+	require.EqualError(t, <-errChan, "session closed")
+}
