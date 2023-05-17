@@ -58,9 +58,6 @@ func newSendStream(str quic.SendStream, hdr []byte, onClose func()) *sendStream 
 
 func (s *sendStream) maybeSendStreamHeader() (err error) {
 	s.once.Do(func() {
-		if len(s.streamHdr) == 0 {
-			return
-		}
 		if _, e := s.str.Write(s.streamHdr); e != nil {
 			err = e
 			return
