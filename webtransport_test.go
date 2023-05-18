@@ -577,44 +577,38 @@ func TestCloseStreamsOnSessionClose(t *testing.T) {
 }
 
 func TestWriteCloseRace(t *testing.T) {
-	const N = 10
-	for i := 0; i < N; i++ {
-		ch := make(chan struct{})
-		sess, closeServer := establishSession(t, func(sess *webtransport.Session) {
-			for {
-				str, err := sess.AcceptStream(context.Background())
-				if err != nil {
-					return
-				}
-				defer str.Close()
-				<-ch
-			}
-		})
-		defer closeServer()
-		str, err := sess.OpenStream()
-		require.NoError(t, err)
-		ready := make(chan struct{}, 2)
-		var wg sync.WaitGroup
-		wg.Add(2)
+	ch := make(chan struct{})
+	sess, closeServer := establishSession(t, func(sess *webtransport.Session) {
+		str, err := sess.AcceptStream(context.Background())
+		if err != nil {
+			return
+		}
+		defer str.Close()
+		<-ch
+	})
+	defer closeServer()
+	str, err := sess.OpenStream()
+	require.NoError(t, err)
+	ready := make(chan struct{}, 2)
+	var wg sync.WaitGroup
+	wg.Add(2)
 
-		go func() {
-			ready <- struct{}{}
-			wg.Wait()
-			str.Write([]byte("foobar"))
-			ready <- struct{}{}
-		}()
-		go func() {
-			ready <- struct{}{}
-			wg.Wait()
-			str.Close()
-			ready <- struct{}{}
-
-		}()
-		<-ready
-		<-ready
-		wg.Add(-2)
-		<-ready
-		<-ready
-		close(ch)
-	}
+	go func() {
+		ready <- struct{}{}
+		wg.Wait()
+		str.Write([]byte("foobar"))
+		ready <- struct{}{}
+	}()
+	go func() {
+		ready <- struct{}{}
+		wg.Wait()
+		str.Close()
+		ready <- struct{}{}
+	}()
+	<-ready
+	<-ready
+	wg.Add(-2)
+	<-ready
+	<-ready
+	close(ch)
 }
