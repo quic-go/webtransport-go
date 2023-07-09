@@ -17,20 +17,17 @@ if sys.platform == "darwin":
 
 options = webdriver.ChromeOptions()
 options.gpu = False
-options.headless = True
 options.binary_location = chrome_loc
 options.add_argument("--no-sandbox")
 options.add_argument("--enable-quic")
+options.add_argument("--headless")
 options.add_argument("--origin-to-force-quic-on=localhost:12345")
 options.add_argument("--host-resolver-rules='MAP localhost:12345 127.0.0.1:12345'")
-
-dc = DesiredCapabilities.CHROME
-dc["goog:loggingPrefs"] = {"browser": "ALL"}
+options.set_capability("goog:loggingPrefs", {"browser": "ALL"})
 
 driver = webdriver.Chrome(
     service=Service(ChromeDriverManager().install()),
     options=options,
-    desired_capabilities=dc,
 )
 driver.get("http://localhost:8080/webtransport")
 
