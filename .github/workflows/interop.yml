@@ -10,9 +10,18 @@ jobs:
       with:
         # Optional: do not specify to match Chrome's version
         chromedriver-version: '105.0.5195.52'
+    - id: go-mod
+      uses: pl-strflt/uci/.github/actions/read-go-mod@main
+    - id: go
+      env:
+        GO_MOD_VERSION: ${{ fromJSON(steps.go-mod.outputs.json).Go }}
+      run: |
+        MAJOR="${GO_MOD_VERSION%.[0-9]*}"
+        MINOR="${GO_MOD_VERSION#[0-9]*.}"
+        echo "version=$MAJOR.$(($MINOR+1)).x" | tee -a $GITHUB_OUTPUT
     - uses: actions/setup-go@v3
       with:
-        go-version: "1.19.x"
+        go-version: ${{ steps.go.outputs.version }}
     - name: Build interop server
       run: go build -o interopserver interop/main.go
     - uses: actions/setup-python@v4
