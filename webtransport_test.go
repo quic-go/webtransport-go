@@ -27,8 +27,8 @@ import (
 )
 
 // create a qlog file in QLOGDIR, if that environment variable is set
-func getQlogger(t *testing.T) logging.Tracer {
-	return qlog.NewTracer(func(p logging.Perspective, connectionID []byte) io.WriteCloser {
+func getQlogger(t *testing.T) func(context.Context, logging.Perspective, quic.ConnectionID) logging.ConnectionTracer {
+	tracer := func(ctx context.Context, p logging.Perspective, connID quic.ConnectionID) logging.ConnectionTracer {
 		qlogDir := os.Getenv("QLOGDIR")
 		if qlogDir == "" {
 			return nil
@@ -40,12 +40,13 @@ func getQlogger(t *testing.T) logging.Tracer {
 		if p == logging.PerspectiveClient {
 			role = "client"
 		}
-		filename := fmt.Sprintf("./%s/log_%x_%s.qlog", qlogDir, connectionID, role)
+		filename := fmt.Sprintf("./%s/log_%x_%s.qlog", qlogDir, connID, role)
 		t.Log("creating", filename)
 		f, err := os.Create(filename)
 		require.NoError(t, err)
-		return f
-	})
+		return qlog.NewConnectionTracer(f, p, connID)
+	}
+	return tracer
 }
 
 func runServer(t *testing.T, s *webtransport.Server) (addr *net.UDPAddr, close func()) {
