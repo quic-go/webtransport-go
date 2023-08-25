@@ -108,7 +108,7 @@ func TestClientReorderedUpgrade(t *testing.T) {
 		RoundTripper: &http3.RoundTripper{
 			TLSClientConfig: &tls.Config{RootCAs: certPool},
 			Dial: func(ctx context.Context, addr string, tlsCfg *tls.Config, cfg *quic.Config) (quic.EarlyConnection, error) {
-				conn, err := quic.DialAddrEarlyContext(ctx, addr, tlsCfg, cfg)
+				conn, err := quic.DialAddrEarly(ctx, addr, tlsCfg, cfg)
 				if err != nil {
 					return nil, err
 				}
