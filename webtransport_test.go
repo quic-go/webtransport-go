@@ -27,8 +27,8 @@ import (
 )
 
 // create a qlog file in QLOGDIR, if that environment variable is set
-func getQlogger(t *testing.T) func(context.Context, logging.Perspective, quic.ConnectionID) logging.ConnectionTracer {
-	tracer := func(ctx context.Context, p logging.Perspective, connID quic.ConnectionID) logging.ConnectionTracer {
+func getQlogger(t *testing.T) func(context.Context, logging.Perspective, quic.ConnectionID) *logging.ConnectionTracer {
+	tracer := func(ctx context.Context, p logging.Perspective, connID quic.ConnectionID) *logging.ConnectionTracer {
 		qlogDir := os.Getenv("QLOGDIR")
 		if qlogDir == "" {
 			return nil
