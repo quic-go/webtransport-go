@@ -91,6 +91,7 @@ func establishSession(t *testing.T, handler func(*webtransport.Session)) (sess *
 	return sess, func() {
 		closeServer()
 		s.Close()
+		d.RoundTripper.Close()
 	}
 }
 
