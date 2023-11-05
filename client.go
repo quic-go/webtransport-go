@@ -50,6 +50,7 @@ func (d *Dialer) init() {
 	if d.RoundTripper.AdditionalSettings == nil {
 		d.RoundTripper.AdditionalSettings = make(map[uint64]uint64)
 	}
+	d.RoundTripper.AdditionalSettings[settingsEnableWebtransport] = 1
 	d.RoundTripper.StreamHijacker = func(ft http3.FrameType, conn quic.Connection, str quic.Stream, e error) (hijacked bool, err error) {
 		if isWebTransportError(e) {
 			return true, nil
