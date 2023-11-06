@@ -83,14 +83,14 @@ func (d *Dialer) init() {
 }
 
 func (d *Dialer) Dial(ctx context.Context, urlStr string, reqHdr http.Header) (*http.Response, *Session, error) {
-	d.initOnce.Do(func() { d.init() })
+	d.initOnce.Do(d.init)
 
 	u, err := url.Parse(urlStr)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("parsing URL: %w", err)
 	}
 	if reqHdr == nil {
-		reqHdr = http.Header{}
+		reqHdr = make(http.Header)
 	}
 	reqHdr.Set(webTransportDraftOfferHeaderKey, "1")
 	req := &http.Request{
@@ -104,16 +104,26 @@ func (d *Dialer) Dial(ctx context.Context, urlStr string, reqHdr http.Header) (*
 
 	rsp, err := d.RoundTripper.RoundTripOpt(req, http3.RoundTripOpt{DontCloseRequestStream: true})
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("round trip: %w", err)
 	}
 	if rsp.StatusCode < 200 || rsp.StatusCode >= 300 {
 		return rsp, nil, fmt.Errorf("received status %d", rsp.StatusCode)
 	}
-	str := rsp.Body.(http3.HTTPStreamer).HTTPStream()
+
+	str, ok := rsp.Body.(http3.HTTPStreamer)
+	if !ok {
+		return nil, nil, fmt.Errorf("response body type assertion to HTTPStreamer failed")
+	}
+	httpStr := str.HTTPStream()
+	session, ok := rsp.Body.(http3.Hijacker)
+	if !ok {
+		return nil, nil, fmt.Errorf("response body type assertion to Hijacker failed")
+	}
+
 	conn := d.conns.AddSession(
-		rsp.Body.(http3.Hijacker).StreamCreator(),
-		sessionID(str.StreamID()),
-		str,
+		session.StreamCreator(),
+		sessionID(httpStr.StreamID()),
+		httpStr,
 	)
 	return rsp, conn, nil
 }

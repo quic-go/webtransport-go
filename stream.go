@@ -68,10 +68,19 @@ func (s *sendStream) maybeSendStreamHeader() (err error) {
 }
 
 func (s *sendStream) Write(b []byte) (int, error) {
-	if err := s.maybeSendStreamHeader(); err != nil {
+	var n int
+	var err error
+	s.once.Do(func() {
+		if n, err = s.str.Write(s.streamHdr); err != nil {
+			return
+		}
+		s.streamHdr = nil
+	})
+	if err != nil {
 		return 0, err
 	}
-	n, err := s.str.Write(b)
+
+	n, err = s.str.Write(b)
 	if err != nil && !isTimeoutError(err) {
 		s.onClose()
 	}
@@ -196,11 +205,11 @@ func maybeConvertStreamError(err error) error {
 	}
 	var streamErr *quic.StreamError
 	if errors.As(err, &streamErr) {
-		errorCode, cerr := httpCodeToWebtransportCode(streamErr.ErrorCode)
-		if cerr != nil {
+		if errorCode, cerr := httpCodeToWebtransportCode(streamErr.ErrorCode); cerr != nil {
 			return fmt.Errorf("stream reset, but failed to convert stream error %d: %w", streamErr.ErrorCode, cerr)
+		} else {
+			return &StreamError{ErrorCode: errorCode}
 		}
-		return &StreamError{ErrorCode: errorCode}
 	}
 	return err
 }

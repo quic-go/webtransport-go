@@ -83,7 +83,8 @@ func (m *sessionManager) maybeDelete(qconn http3.StreamCreator, id sessionID) {
 func (m *sessionManager) AddUniStream(qconn http3.StreamCreator, str quic.ReceiveStream) {
 	idv, err := quicvarint.Read(quicvarint.NewReader(str))
 	if err != nil {
-		str.CancelRead(1337)
+		str.CancelRead(1337) // Use an appropriate error code.
+		return               // Return early to avoid further processing.
 	}
 	id := sessionID(idv)
 
