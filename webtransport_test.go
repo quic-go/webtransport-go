@@ -71,7 +71,7 @@ func establishSession(t *testing.T, handler func(*webtransport.Session)) (sess *
 	s := &webtransport.Server{
 		H3: http3.Server{
 			TLSConfig:  tlsConf,
-			QuicConfig: &quic.Config{Tracer: getQlogger(t)},
+			QuicConfig: &quic.Config{Tracer: getQlogger(t), EnableDatagrams: true},
 		},
 	}
 	addHandler(t, s, handler)
@@ -80,7 +80,7 @@ func establishSession(t *testing.T, handler func(*webtransport.Session)) (sess *
 	d := webtransport.Dialer{
 		RoundTripper: &http3.RoundTripper{
 			TLSClientConfig: &tls.Config{RootCAs: certPool},
-			QuicConfig:      &quic.Config{Tracer: getQlogger(t)},
+			QuicConfig:      &quic.Config{Tracer: getQlogger(t), EnableDatagrams: true},
 		},
 	}
 	defer d.Close()
@@ -344,7 +344,7 @@ func TestMultipleClients(t *testing.T) {
 			d := webtransport.Dialer{
 				RoundTripper: &http3.RoundTripper{
 					TLSClientConfig: &tls.Config{RootCAs: certPool},
-					QuicConfig:      &quic.Config{Tracer: getQlogger(t)},
+					QuicConfig:      &quic.Config{Tracer: getQlogger(t), EnableDatagrams: true},
 				},
 			}
 			defer d.Close()
@@ -524,7 +524,7 @@ func TestCheckOrigin(t *testing.T) {
 			d := webtransport.Dialer{
 				RoundTripper: &http3.RoundTripper{
 					TLSClientConfig: &tls.Config{RootCAs: certPool},
-					QuicConfig:      &quic.Config{Tracer: getQlogger(t)},
+					QuicConfig:      &quic.Config{Tracer: getQlogger(t), EnableDatagrams: true},
 				},
 			}
 			defer d.Close()

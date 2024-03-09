@@ -2,6 +2,7 @@ package webtransport
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -76,7 +77,7 @@ func (d *Dialer) init() {
 		return true
 	}
 	if d.QuicConfig == nil {
-		d.QuicConfig = &quic.Config{}
+		d.QuicConfig = &quic.Config{EnableDatagrams: true}
 	}
 	if d.QuicConfig.MaxIncomingStreams == 0 {
 		d.QuicConfig.MaxIncomingStreams = 100
@@ -85,6 +86,12 @@ func (d *Dialer) init() {
 
 func (d *Dialer) Dial(ctx context.Context, urlStr string, reqHdr http.Header) (*http.Response, *Session, error) {
 	d.initOnce.Do(func() { d.init() })
+
+	// Technically, this is not true. DATAGRAMs could be sent using the Capsule protocol.
+	// However, quic-go currently enforces QUIC datagram support if HTTP/3 datagrams are enabled.
+	if !d.QuicConfig.EnableDatagrams {
+		return nil, nil, errors.New("WebTransport requires DATAGRAM support, enable it via QuicConfig.EnableDatagrams")
+	}
 
 	u, err := url.Parse(urlStr)
 	if err != nil {
