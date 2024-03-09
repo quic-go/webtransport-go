@@ -14,6 +14,8 @@ import (
 	"github.com/quic-go/quic-go/quicvarint"
 )
 
+var errNoWebTransport = errors.New("server didn't enable WebTransport")
+
 type Dialer struct {
 	// If not set, reasonable defaults will be used.
 	// In order for WebTransport to function, this implementation will:
@@ -110,7 +112,25 @@ func (d *Dialer) Dial(ctx context.Context, urlStr string, reqHdr http.Header) (*
 	}
 	req = req.WithContext(ctx)
 
-	rsp, err := d.RoundTripper.RoundTripOpt(req, http3.RoundTripOpt{DontCloseRequestStream: true})
+	rsp, err := d.RoundTripper.RoundTripOpt(req, http3.RoundTripOpt{
+		DontCloseRequestStream: true,
+		CheckSettings: func(settings http3.Settings) error {
+			if !settings.EnableExtendedConnect {
+				return errors.New("server didn't enable Extended CONNECT")
+			}
+			if !settings.EnableDatagram {
+				return errors.New("server didn't enable HTTP/3 datagram support")
+			}
+			if settings.Other == nil {
+				return errNoWebTransport
+			}
+			s, ok := settings.Other[settingsEnableWebtransport]
+			if !ok || s != 1 {
+				return errNoWebTransport
+			}
+			return nil
+		},
+	})
 	if err != nil {
 		return nil, nil, err
 	}
