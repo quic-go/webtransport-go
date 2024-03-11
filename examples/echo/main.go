@@ -50,8 +50,6 @@ func runServer(certPath, keyPath string) {
 		_, err = stream.Write(bytes)
 		checkErr(err)
 
-		// Note that stream.Close() only closes the send side, so the
-		// stream could continue receiving after this if desired.
 		err = stream.Close()
 		checkErr(err)
 	})
@@ -74,6 +72,8 @@ func runClient(domain string) {
 	_, err = stream.Write([]byte("Hi there"))
 	checkErr(err)
 
+        // Note that stream.Close() only closes the send side. This allows the
+        // stream to receive the reply from the server.
 	err = stream.Close()
 	checkErr(err)
 
