@@ -24,7 +24,7 @@ jobs:
         go-version: ${{ steps.go.outputs.version }}
     - name: Build interop server
       run: go build -o interopserver interop/main.go
-    - uses: actions/setup-python@v4
+    - uses: actions/setup-python@v5
       with:
         python-version: '3.10'
     - name: Install Python dependencies
