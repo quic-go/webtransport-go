@@ -19,7 +19,7 @@ jobs:
         MAJOR="${GO_MOD_VERSION%.[0-9]*}"
         MINOR="${GO_MOD_VERSION#[0-9]*.}"
         echo "version=$MAJOR.$(($MINOR+1)).x" | tee -a $GITHUB_OUTPUT
-    - uses: actions/setup-go@v3
+    - uses: actions/setup-go@v5
       with:
         go-version: ${{ steps.go.outputs.version }}
     - name: Build interop server
