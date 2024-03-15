@@ -5,7 +5,7 @@ jobs:
   interop:
     runs-on: "ubuntu-latest"
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v4
     - uses: nanasess/setup-chromedriver@v1
       with:
         # Optional: do not specify to match Chrome's version
