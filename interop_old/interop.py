@@ -29,25 +29,30 @@ driver = webdriver.Chrome(
     service=Service(ChromeDriverManager().install()),
     options=options,
 )
-driver.get("http://localhost:8080/webtransport")
 
-delay = 5
-failed = False
-try:
-    # when the test finishes successfully, it adds a div#done to the body
-    myElem = WebDriverWait(driver, delay).until(
-        expected_conditions.presence_of_element_located((By.ID, "done"))
-    )
-    print("Test succeeded!")
-except TimeoutException:
-    failed = True
-    print("Test timed out.")
+data = driver.execute_script('return "foobar"')
 
-# for debugging, print all the console messages
-for entry in driver.get_log("browser"):
-    print(entry)
+# Save data to disk
+with open('output.txt', 'w') as file:
+    file.write(str(data))
 
-driver.quit()
-
-if failed:
-    sys.exit(1)
+# delay = 5
+# failed = False
+# try:
+#     # when the test finishes successfully, it adds a div#done to the body
+#     myElem = WebDriverWait(driver, delay).until(
+#         expected_conditions.presence_of_element_located((By.ID, "done"))
+#     )
+#     print("Test succeeded!")
+# except TimeoutException:
+#     failed = True
+#     print("Test timed out.")
+#
+# # for debugging, print all the console messages
+# for entry in driver.get_log("browser"):
+#     print(entry)
+#
+# driver.quit()
+#
+# if failed:
+#     sys.exit(1)
