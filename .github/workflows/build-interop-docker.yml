@@ -1,0 +1,50 @@
+name: Build interop Docker image
+permissions:
+  contents: read
+on:
+  push:
+    branches:
+      - master
+      - interop-runner
+    tags:
+      - 'v*'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'push' }}
+
+jobs:
+  interop:
+    runs-on: ${{ fromJSON(vars['DOCKER_RUNNER_UBUNTU'] || '"ubuntu-latest"') }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          platforms: linux/amd64,linux/arm64
+      - name: Login to Docker Hub
+        if: github.event_name == 'push'
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+      - name: set tag name
+        id: tag
+        # Tagged releases won't be picked up by the interop runner automatically,
+        # but they can be useful when debugging regressions.
+        run: |
+          if [[ $GITHUB_REF == refs/tags/* ]]; then
+            echo "tag=${GITHUB_REF#refs/tags/}" | tee -a $GITHUB_OUTPUT;
+          else
+            echo 'tag=latest' | tee -a $GITHUB_OUTPUT;
+          fi
+      - uses: docker/build-push-action@v6
+        with:
+          context: "."
+          file: "interop/Dockerfile"
+          platforms: linux/amd64,linux/arm64
+          push: ${{ github.event_name == 'push' }}
+          tags: martenseemann/webtransport-go-interop:${{ steps.tag.outputs.tag }}
