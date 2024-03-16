@@ -1,6 +1,7 @@
 coverage:
   ignore:
     - interop/
+    - interop_chrome/
   status:
     project:
       default:
