@@ -116,6 +116,14 @@ func (s *Server) Serve(conn net.PacketConn) error {
 	return s.H3.Serve(conn)
 }
 
+// ServeQUICConn serves an already existing QUIC listener.
+func (s *Server) ServeListener(ln quic.EarlyListener) error {
+	if err := s.initialize(); err != nil {
+		return err
+	}
+	return s.H3.ServeListener(ln)
+}
+
 // ServeQUICConn serves a single QUIC connection.
 func (s *Server) ServeQUICConn(conn quic.Connection) error {
 	if err := s.initialize(); err != nil {
