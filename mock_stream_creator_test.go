@@ -142,6 +142,21 @@ func (mr *MockStreamCreatorMockRecorder) OpenUniStreamSync(arg0 any) *gomock.Cal
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "OpenUniStreamSync", reflect.TypeOf((*MockStreamCreator)(nil).OpenUniStreamSync), arg0)
 }
 
+// ReceiveMessage mocks base method.
+func (m *MockStreamCreator) ReceiveMessage(arg0 context.Context) ([]byte, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ReceiveMessage", arg0)
+	ret0, _ := ret[0].([]byte)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// ReceiveMessage indicates an expected call of ReceiveMessage.
+func (mr *MockStreamCreatorMockRecorder) ReceiveMessage(arg0 any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ReceiveMessage", reflect.TypeOf((*MockStreamCreator)(nil).ReceiveMessage), arg0)
+}
+
 // RemoteAddr mocks base method.
 func (m *MockStreamCreator) RemoteAddr() net.Addr {
 	m.ctrl.T.Helper()
@@ -154,4 +169,18 @@ func (m *MockStreamCreator) RemoteAddr() net.Addr {
 func (mr *MockStreamCreatorMockRecorder) RemoteAddr() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RemoteAddr", reflect.TypeOf((*MockStreamCreator)(nil).RemoteAddr))
+}
+
+// SendMessage mocks base method.
+func (m *MockStreamCreator) SendMessage(arg0 []byte) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "SendMessage", arg0)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// SendMessage indicates an expected call of SendMessage.
+func (mr *MockStreamCreatorMockRecorder) SendMessage(arg0 any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SendMessage", reflect.TypeOf((*MockStreamCreator)(nil).SendMessage), arg0)
 }
