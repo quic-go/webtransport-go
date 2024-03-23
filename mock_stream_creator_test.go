@@ -5,6 +5,7 @@
 //
 //	mockgen -package webtransport -destination mock_stream_creator_test.go github.com/quic-go/quic-go/http3 StreamCreator
 //
+
 // Package webtransport is a generated GoMock package.
 package webtransport
 

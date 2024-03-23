@@ -73,7 +73,7 @@ func (s *Server) init() error {
 
 	// configure the http3.Server
 	if s.H3.AdditionalSettings == nil {
-		s.H3.AdditionalSettings = make(map[uint64]uint64)
+		s.H3.AdditionalSettings = make(map[uint64]uint64, 1)
 	}
 	s.H3.AdditionalSettings[settingsEnableWebtransport] = 1
 	s.H3.EnableDatagrams = true
