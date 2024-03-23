@@ -5,6 +5,7 @@
 //
 //	mockgen -package webtransport -destination mock_stream_test.go github.com/quic-go/quic-go Stream
 //
+
 // Package webtransport is a generated GoMock package.
 package webtransport
 
