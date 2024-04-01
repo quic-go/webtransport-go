@@ -42,7 +42,7 @@ func TestCloseStreamsOnClose(t *testing.T) {
 	ctrl := gomock.NewController(t)
 
 	mockSess := NewMockStreamCreator(ctrl)
-	mockSess.EXPECT().Context().Return(context.WithValue(context.Background(), quic.ConnectionTracingKey, uint64(1337)))
+	mockSess.EXPECT().Context().Return(context.WithValue(context.Background(), quic.ConnectionTracingKey, quic.ConnectionTracingID(1337)))
 	sess := newSession(42, mockSess, newMockRequestStream(ctrl))
 
 	str := NewMockStream(ctrl)
@@ -67,7 +67,7 @@ func TestOpenStreamSyncCancel(t *testing.T) {
 	defer ctrl.Finish()
 
 	mockSess := NewMockStreamCreator(ctrl)
-	mockSess.EXPECT().Context().Return(context.WithValue(context.Background(), quic.ConnectionTracingKey, uint64(1337)))
+	mockSess.EXPECT().Context().Return(context.WithValue(context.Background(), quic.ConnectionTracingKey, quic.ConnectionTracingID(1337)))
 	sess := newSession(42, mockSess, newMockRequestStream(ctrl))
 	defer sess.CloseWithError(0, "")
 
@@ -102,7 +102,7 @@ func TestAddStreamAfterSessionClose(t *testing.T) {
 	defer ctrl.Finish()
 
 	mockSess := NewMockStreamCreator(ctrl)
-	mockSess.EXPECT().Context().Return(context.WithValue(context.Background(), quic.ConnectionTracingKey, uint64(1337)))
+	mockSess.EXPECT().Context().Return(context.WithValue(context.Background(), quic.ConnectionTracingKey, quic.ConnectionTracingID(1337)))
 
 	sess := newSession(42, mockSess, newMockRequestStream(ctrl))
 	require.NoError(t, sess.CloseWithError(0, ""))
@@ -122,7 +122,7 @@ func TestOpenStreamAfterSessionClose(t *testing.T) {
 	defer ctrl.Finish()
 
 	mockSess := NewMockStreamCreator(ctrl)
-	mockSess.EXPECT().Context().Return(context.WithValue(context.Background(), quic.ConnectionTracingKey, uint64(1337)))
+	mockSess.EXPECT().Context().Return(context.WithValue(context.Background(), quic.ConnectionTracingKey, quic.ConnectionTracingID(1337)))
 	wait := make(chan struct{})
 	streamOpen := make(chan struct{})
 	mockSess.EXPECT().OpenStreamSync(gomock.Any()).DoAndReturn(func(context.Context) (quic.Stream, error) {
@@ -154,7 +154,7 @@ func TestOpenUniStreamAfterSessionClose(t *testing.T) {
 	defer ctrl.Finish()
 
 	mockSess := NewMockStreamCreator(ctrl)
-	mockSess.EXPECT().Context().Return(context.WithValue(context.Background(), quic.ConnectionTracingKey, uint64(1337)))
+	mockSess.EXPECT().Context().Return(context.WithValue(context.Background(), quic.ConnectionTracingKey, quic.ConnectionTracingID(1337)))
 	wait := make(chan struct{})
 	streamOpen := make(chan struct{})
 	mockSess.EXPECT().OpenUniStreamSync(gomock.Any()).DoAndReturn(func(context.Context) (quic.SendStream, error) {

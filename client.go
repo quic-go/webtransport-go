@@ -54,7 +54,7 @@ func (d *Dialer) init() {
 		d.RoundTripper.AdditionalSettings = make(map[uint64]uint64)
 	}
 	d.RoundTripper.AdditionalSettings[settingsEnableWebtransport] = 1
-	d.RoundTripper.StreamHijacker = func(ft http3.FrameType, conn quic.Connection, str quic.Stream, e error) (hijacked bool, err error) {
+	d.RoundTripper.StreamHijacker = func(ft http3.FrameType, connTracingID quic.ConnectionTracingID, str quic.Stream, e error) (hijacked bool, err error) {
 		if isWebTransportError(e) {
 			return true, nil
 		}
@@ -68,21 +68,21 @@ func (d *Dialer) init() {
 			}
 			return false, err
 		}
-		d.conns.AddStream(conn, str, sessionID(id))
+		d.conns.AddStream(connTracingID, str, sessionID(id))
 		return true, nil
 	}
-	d.RoundTripper.UniStreamHijacker = func(st http3.StreamType, conn quic.Connection, str quic.ReceiveStream, err error) (hijacked bool) {
+	d.RoundTripper.UniStreamHijacker = func(st http3.StreamType, connTracingID quic.ConnectionTracingID, str quic.ReceiveStream, err error) (hijacked bool) {
 		if st != webTransportUniStreamType && !isWebTransportError(err) {
 			return false
 		}
-		d.conns.AddUniStream(conn, str)
+		d.conns.AddUniStream(connTracingID, str)
 		return true
 	}
-	if d.QuicConfig == nil {
-		d.QuicConfig = &quic.Config{EnableDatagrams: true}
+	if d.QUICConfig == nil {
+		d.QUICConfig = &quic.Config{EnableDatagrams: true}
 	}
-	if d.QuicConfig.MaxIncomingStreams == 0 {
-		d.QuicConfig.MaxIncomingStreams = 100
+	if d.QUICConfig.MaxIncomingStreams == 0 {
+		d.QUICConfig.MaxIncomingStreams = 100
 	}
 }
 
@@ -91,8 +91,8 @@ func (d *Dialer) Dial(ctx context.Context, urlStr string, reqHdr http.Header) (*
 
 	// Technically, this is not true. DATAGRAMs could be sent using the Capsule protocol.
 	// However, quic-go currently enforces QUIC datagram support if HTTP/3 datagrams are enabled.
-	if !d.QuicConfig.EnableDatagrams {
-		return nil, nil, errors.New("WebTransport requires DATAGRAM support, enable it via QuicConfig.EnableDatagrams")
+	if !d.QUICConfig.EnableDatagrams {
+		return nil, nil, errors.New("WebTransport requires DATAGRAM support, enable it via QUICConfig.EnableDatagrams")
 	}
 
 	u, err := url.Parse(urlStr)
