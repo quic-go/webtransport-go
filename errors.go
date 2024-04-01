@@ -66,13 +66,13 @@ func (e *StreamError) Error() string {
 	return fmt.Sprintf("stream canceled with error code %d", e.ErrorCode)
 }
 
-// ConnectionError is a WebTransport connection error.
-type ConnectionError struct {
+// SessionError is a WebTransport connection error.
+type SessionError struct {
 	Remote    bool
 	ErrorCode SessionErrorCode
 	Message   string
 }
 
-var _ error = &ConnectionError{}
+var _ error = &SessionError{}
 
-func (e *ConnectionError) Error() string { return e.Message }
+func (e *SessionError) Error() string { return e.Message }
