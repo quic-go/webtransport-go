@@ -107,11 +107,7 @@ func TestClientInvalidResponseHandling(t *testing.T) {
 		}
 	}()
 
-	d := webtransport.Dialer{
-		RoundTripper: &http3.RoundTripper{
-			TLSClientConfig: &tls.Config{RootCAs: certPool},
-		},
-	}
+	d := webtransport.Dialer{TLSClientConfig: &tls.Config{RootCAs: certPool}}
 	_, _, err = d.Dial(context.Background(), fmt.Sprintf("https://localhost:%d", s.Addr().(*net.UDPAddr).Port), nil)
 	require.Error(t, err)
 	var sErr error
@@ -163,7 +159,7 @@ func TestClientInvalidSettingsHandling(t *testing.T) {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			tlsConf := tlsConf.Clone()
-			tlsConf.NextProtos = []string{"h3"}
+			tlsConf.NextProtos = []string{http3.NextProtoH3}
 			s, err := quic.ListenAddr("localhost:0", tlsConf, &quic.Config{EnableDatagrams: true})
 			require.NoError(t, err)
 			go func() {
@@ -176,11 +172,7 @@ func TestClientInvalidSettingsHandling(t *testing.T) {
 				require.NoError(t, err)
 			}()
 
-			d := webtransport.Dialer{
-				RoundTripper: &http3.RoundTripper{
-					TLSClientConfig: &tls.Config{RootCAs: certPool},
-				},
-			}
+			d := webtransport.Dialer{TLSClientConfig: &tls.Config{RootCAs: certPool}}
 			_, _, err = d.Dial(context.Background(), fmt.Sprintf("https://localhost:%d", s.Addr().(*net.UDPAddr).Port), nil)
 			require.Error(t, err)
 			require.ErrorContains(t, err, tc.errorStr)
@@ -208,15 +200,13 @@ func TestClientReorderedUpgrade(t *testing.T) {
 	go s.Serve(udpConn)
 
 	d := webtransport.Dialer{
-		RoundTripper: &http3.RoundTripper{
-			TLSClientConfig: &tls.Config{RootCAs: certPool},
-			Dial: func(ctx context.Context, addr string, tlsCfg *tls.Config, cfg *quic.Config) (quic.EarlyConnection, error) {
-				conn, err := quic.DialAddrEarly(ctx, addr, tlsCfg, cfg)
-				if err != nil {
-					return nil, err
-				}
-				return &requestStreamDelayingConn{done: blockUpgrade, EarlyConnection: conn}, nil
-			},
+		TLSClientConfig: &tls.Config{RootCAs: certPool},
+		DialAddr: func(ctx context.Context, addr string, tlsCfg *tls.Config, cfg *quic.Config) (quic.EarlyConnection, error) {
+			conn, err := quic.DialAddrEarly(ctx, addr, tlsCfg, cfg)
+			if err != nil {
+				return nil, err
+			}
+			return &requestStreamDelayingConn{done: blockUpgrade, EarlyConnection: conn}, nil
 		},
 	}
 	connChan := make(chan *webtransport.Session)
