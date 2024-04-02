@@ -112,10 +112,10 @@ func newSession(sessionID sessionID, qconn http3.StreamCreator, requestStr quic.
 }
 
 func (s *Session) handleConn() {
-	var closeErr *ConnectionError
+	var closeErr *SessionError
 	err := s.parseNextCapsule()
 	if !errors.As(err, &closeErr) {
-		closeErr = &ConnectionError{Remote: true}
+		closeErr = &SessionError{Remote: true}
 	}
 
 	s.closeMx.Lock()
@@ -131,7 +131,7 @@ func (s *Session) handleConn() {
 }
 
 // parseNextCapsule parses the next Capsule sent on the request stream.
-// It returns a ConnectionError, if the capsule received is a CLOSE_WEBTRANSPORT_SESSION Capsule.
+// It returns a SessionError, if the capsule received is a CLOSE_WEBTRANSPORT_SESSION Capsule.
 func (s *Session) parseNextCapsule() error {
 	for {
 		// TODO: enforce max size
@@ -150,7 +150,7 @@ func (s *Session) parseNextCapsule() error {
 			if err != nil {
 				return err
 			}
-			return &ConnectionError{
+			return &SessionError{
 				Remote:    true,
 				ErrorCode: SessionErrorCode(appErrCode),
 				Message:   string(appErrMsg),
@@ -397,7 +397,7 @@ func (s *Session) closeWithError(code SessionErrorCode, msg string) (bool /* fir
 	if s.closeErr != nil {
 		return false, nil
 	}
-	s.closeErr = &ConnectionError{
+	s.closeErr = &SessionError{
 		ErrorCode: code,
 		Message:   msg,
 	}

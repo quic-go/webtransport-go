@@ -387,26 +387,26 @@ func TestShutdown(t *testing.T) {
 	done := make(chan struct{})
 	sess, closeServer := establishSession(t, func(sess *webtransport.Session) {
 		sess.CloseWithError(1337, "foobar")
-		var connErr *webtransport.ConnectionError
+		var sessErr *webtransport.SessionError
 		_, err := sess.OpenStream()
-		require.True(t, errors.As(err, &connErr))
-		require.False(t, connErr.Remote)
-		require.Equal(t, webtransport.SessionErrorCode(1337), connErr.ErrorCode)
-		require.Equal(t, "foobar", connErr.Message)
+		require.True(t, errors.As(err, &sessErr))
+		require.False(t, sessErr.Remote)
+		require.Equal(t, webtransport.SessionErrorCode(1337), sessErr.ErrorCode)
+		require.Equal(t, "foobar", sessErr.Message)
 		_, err = sess.OpenUniStream()
-		require.True(t, errors.As(err, &connErr))
-		require.False(t, connErr.Remote)
+		require.True(t, errors.As(err, &sessErr))
+		require.False(t, sessErr.Remote)
 
 		close(done) // don't defer this, the HTTP handler catches panics
 	})
 	defer closeServer()
 
-	var connErr *webtransport.ConnectionError
+	var sessErr *webtransport.SessionError
 	_, err := sess.AcceptStream(context.Background())
-	require.True(t, errors.As(err, &connErr))
-	require.True(t, connErr.Remote)
-	require.Equal(t, webtransport.SessionErrorCode(1337), connErr.ErrorCode)
-	require.Equal(t, "foobar", connErr.Message)
+	require.True(t, errors.As(err, &sessErr))
+	require.True(t, sessErr.Remote)
+	require.Equal(t, webtransport.SessionErrorCode(1337), sessErr.ErrorCode)
+	require.Equal(t, "foobar", sessErr.Message)
 	_, err = sess.AcceptUniStream(context.Background())
 	require.Error(t, err)
 	<-done
@@ -435,8 +435,8 @@ func TestOpenStreamSyncShutdown(t *testing.T) {
 		require.Eventually(t, func() bool { return len(errChan) == num }, scaleDuration(100*time.Millisecond), 10*time.Millisecond)
 		for i := 0; i < num; i++ {
 			err := <-errChan
-			var connErr *webtransport.ConnectionError
-			require.ErrorAs(t, err, &connErr)
+			var sessErr *webtransport.SessionError
+			require.ErrorAs(t, err, &sessErr)
 		}
 	}
 
