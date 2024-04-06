@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net"
 	"net/http"
 	"net/url"
 	"sync"
@@ -29,6 +28,9 @@ const (
 
 type Server struct {
 	H3 http3.Server
+
+	mx          sync.Mutex
+	connections map[quic.ConnectionTracingID]quic.Connection
 
 	// StreamReorderingTime is the time an incoming WebTransport stream that cannot be associated
 	// with a session is buffered.
@@ -109,34 +111,49 @@ func (s *Server) init() error {
 	return nil
 }
 
-func (s *Server) Serve(conn net.PacketConn) error {
-	if err := s.initialize(); err != nil {
-		return err
-	}
-	return s.H3.Serve(conn)
-}
+// func (s *Server) Serve(conn net.PacketConn) error {
+// 	if err := s.initialize(); err != nil {
+// 		return err
+// 	}
+// 	return s.H3.Serve(conn)
+// }
 
 // ServeQUICConn serves a single QUIC connection.
 func (s *Server) ServeQUICConn(conn quic.Connection) error {
 	if err := s.initialize(); err != nil {
 		return err
 	}
+	return s.serveQUICConn(conn)
+}
+
+func (s *Server) serveQUICConn(conn quic.Connection) error {
+	id := conn.Context().Value(quic.ConnectionTracingKey).(quic.ConnectionTracingID)
+	s.mx.Lock()
+	s.connections[id] = conn
+	s.mx.Unlock()
+
+	defer func() {
+		s.mx.Lock()
+		delete(s.connections, id)
+		s.mx.Unlock()
+	}()
+
 	return s.H3.ServeQUICConn(conn)
 }
 
-func (s *Server) ListenAndServe() error {
-	if err := s.initialize(); err != nil {
-		return err
-	}
-	return s.H3.ListenAndServe()
-}
-
-func (s *Server) ListenAndServeTLS(certFile, keyFile string) error {
-	if err := s.initialize(); err != nil {
-		return err
-	}
-	return s.H3.ListenAndServeTLS(certFile, keyFile)
-}
+// func (s *Server) ListenAndServe() error {
+// 	if err := s.initialize(); err != nil {
+// 		return err
+// 	}
+// 	return s.H3.ListenAndServe()
+// }
+//
+// func (s *Server) ListenAndServeTLS(certFile, keyFile string) error {
+// 	if err := s.initialize(); err != nil {
+// 		return err
+// 	}
+// 	return s.H3.ListenAndServeTLS(certFile, keyFile)
+// }
 
 func (s *Server) Close() error {
 	// Make sure that ctxCancel is defined.
@@ -168,26 +185,20 @@ func (s *Server) Upgrade(w http.ResponseWriter, r *http.Request) (*Session, erro
 	if !s.CheckOrigin(r) {
 		return nil, errors.New("webtransport: request origin not allowed")
 	}
+	id := r.Context().Value(quic.ConnectionTracingKey).(quic.ConnectionTracingID)
+	s.mx.Lock()
+	conn, ok := s.connections[id]
+	s.mx.Unlock()
+	if !ok {
+		return nil, errors.New("webtransport: QUIC connection not found")
+	}
 	w.Header().Add(webTransportDraftHeaderKey, webTransportDraftHeaderValue)
 	w.WriteHeader(http.StatusOK)
 	w.(http.Flusher).Flush()
 
-	httpStreamer, ok := r.Body.(http3.HTTPStreamer)
-	if !ok { // should never happen, unless quic-go changed the API
-		return nil, errors.New("failed to take over HTTP stream")
-	}
-	str := httpStreamer.HTTPStream()
+	str := r.Body.(http3.HTTPStreamer).HTTPStream()
 	sID := sessionID(str.StreamID())
-
-	hijacker, ok := w.(http3.Hijacker)
-	if !ok { // should never happen, unless quic-go changed the API
-		return nil, errors.New("failed to hijack")
-	}
-	return s.conns.AddSession(
-		hijacker.StreamCreator(),
-		sID,
-		r.Body.(http3.HTTPStreamer).HTTPStream(),
-	), nil
+	return s.conns.AddSession(conn, sID, str), nil
 }
 
 // copied from https://github.com/gorilla/websocket
