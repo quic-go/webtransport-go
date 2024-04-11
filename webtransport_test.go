@@ -71,17 +71,15 @@ func establishSession(t *testing.T, handler func(*webtransport.Session)) (sess *
 	s := &webtransport.Server{
 		H3: http3.Server{
 			TLSConfig:  tlsConf,
-			QuicConfig: &quic.Config{Tracer: getQlogger(t), EnableDatagrams: true},
+			QUICConfig: &quic.Config{Tracer: getQlogger(t), EnableDatagrams: true},
 		},
 	}
 	addHandler(t, s, handler)
 
 	addr, closeServer := runServer(t, s)
 	d := webtransport.Dialer{
-		RoundTripper: &http3.RoundTripper{
-			TLSClientConfig: &tls.Config{RootCAs: certPool},
-			QuicConfig:      &quic.Config{Tracer: getQlogger(t), EnableDatagrams: true},
-		},
+		TLSClientConfig: &tls.Config{RootCAs: certPool},
+		QUICConfig:      &quic.Config{Tracer: getQlogger(t), EnableDatagrams: true},
 	}
 	defer d.Close()
 	url := fmt.Sprintf("https://localhost:%d/webtransport", addr.Port)
@@ -91,7 +89,7 @@ func establishSession(t *testing.T, handler func(*webtransport.Session)) (sess *
 	return sess, func() {
 		closeServer()
 		s.Close()
-		d.RoundTripper.Close()
+		d.Close()
 	}
 }
 
@@ -221,9 +219,9 @@ func TestStreamsImmediateClose(t *testing.T) {
 
 	t.Run("unidirectional", func(t *testing.T) {
 		t.Run("client-initiated", func(t *testing.T) {
-			sess, closeServer := establishSession(t, func(c *webtransport.Session) {
-				defer c.CloseWithError(0, "")
-				str, err := c.AcceptUniStream(context.Background())
+			sess, closeServer := establishSession(t, func(sess *webtransport.Session) {
+				defer sess.CloseWithError(0, "")
+				str, err := sess.AcceptUniStream(context.Background())
 				require.NoError(t, err)
 				n, err := str.Read([]byte{0})
 				require.Zero(t, n)
@@ -238,8 +236,8 @@ func TestStreamsImmediateClose(t *testing.T) {
 		})
 
 		t.Run("server-initiated", func(t *testing.T) {
-			sess, closeServer := establishSession(t, func(c *webtransport.Session) {
-				str, err := c.OpenUniStream()
+			sess, closeServer := establishSession(t, func(sess *webtransport.Session) {
+				str, err := sess.OpenUniStream()
 				require.NoError(t, err)
 				require.NoError(t, str.Close())
 			})
@@ -342,10 +340,8 @@ func TestMultipleClients(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			d := webtransport.Dialer{
-				RoundTripper: &http3.RoundTripper{
-					TLSClientConfig: &tls.Config{RootCAs: certPool},
-					QuicConfig:      &quic.Config{Tracer: getQlogger(t), EnableDatagrams: true},
-				},
+				TLSClientConfig: &tls.Config{RootCAs: certPool},
+				QUICConfig:      &quic.Config{Tracer: getQlogger(t), EnableDatagrams: true},
 			}
 			defer d.Close()
 			url := fmt.Sprintf("https://localhost:%d/webtransport", addr.Port)
@@ -522,10 +518,8 @@ func TestCheckOrigin(t *testing.T) {
 			defer closeServer()
 
 			d := webtransport.Dialer{
-				RoundTripper: &http3.RoundTripper{
-					TLSClientConfig: &tls.Config{RootCAs: certPool},
-					QuicConfig:      &quic.Config{Tracer: getQlogger(t), EnableDatagrams: true},
-				},
+				TLSClientConfig: &tls.Config{RootCAs: certPool},
+				QUICConfig:      &quic.Config{Tracer: getQlogger(t), EnableDatagrams: true},
 			}
 			defer d.Close()
 			url := fmt.Sprintf("https://localhost:%d/webtransport", addr.Port)

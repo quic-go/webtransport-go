@@ -80,7 +80,7 @@ func (s *Server) init() error {
 	if s.H3.StreamHijacker != nil {
 		return errors.New("StreamHijacker already set")
 	}
-	s.H3.StreamHijacker = func(ft http3.FrameType, qconn quic.Connection, str quic.Stream, err error) (bool /* hijacked */, error) {
+	s.H3.StreamHijacker = func(ft http3.FrameType, connTracingID quic.ConnectionTracingID, str quic.Stream, err error) (bool /* hijacked */, error) {
 		if isWebTransportError(err) {
 			return true, nil
 		}
@@ -96,14 +96,14 @@ func (s *Server) init() error {
 			}
 			return false, err
 		}
-		s.conns.AddStream(qconn, str, sessionID(id))
+		s.conns.AddStream(connTracingID, str, sessionID(id))
 		return true, nil
 	}
-	s.H3.UniStreamHijacker = func(st http3.StreamType, qconn quic.Connection, str quic.ReceiveStream, err error) (hijacked bool) {
+	s.H3.UniStreamHijacker = func(st http3.StreamType, connTracingID quic.ConnectionTracingID, str quic.ReceiveStream, err error) (hijacked bool) {
 		if st != webTransportUniStreamType && !isWebTransportError(err) {
 			return false
 		}
-		s.conns.AddUniStream(qconn, str)
+		s.conns.AddUniStream(connTracingID, str)
 		return true
 	}
 	return nil
@@ -172,21 +172,14 @@ func (s *Server) Upgrade(w http.ResponseWriter, r *http.Request) (*Session, erro
 	w.WriteHeader(http.StatusOK)
 	w.(http.Flusher).Flush()
 
-	httpStreamer, ok := r.Body.(http3.HTTPStreamer)
-	if !ok { // should never happen, unless quic-go changed the API
-		return nil, errors.New("failed to take over HTTP stream")
-	}
+	httpStreamer := r.Body.(http3.HTTPStreamer)
 	str := httpStreamer.HTTPStream()
 	sID := sessionID(str.StreamID())
 
-	hijacker, ok := w.(http3.Hijacker)
-	if !ok { // should never happen, unless quic-go changed the API
-		return nil, errors.New("failed to hijack")
-	}
 	return s.conns.AddSession(
-		hijacker.StreamCreator(),
+		w.(http3.Hijacker).Connection(),
 		sID,
-		r.Body.(http3.HTTPStreamer).HTTPStream(),
+		httpStreamer.HTTPStream(),
 	), nil
 }
 

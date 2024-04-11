@@ -62,7 +62,7 @@ func (q *acceptQueue[T]) Chan() <-chan struct{} { return q.c }
 
 type Session struct {
 	sessionID  sessionID
-	qconn      http3.StreamCreator
+	qconn      http3.Connection
 	requestStr quic.Stream
 
 	streamHdr    []byte
@@ -82,8 +82,8 @@ type Session struct {
 	streams streamsMap
 }
 
-func newSession(sessionID sessionID, qconn http3.StreamCreator, requestStr quic.Stream) *Session {
-	tracingID := qconn.Context().Value(quic.ConnectionTracingKey).(uint64)
+func newSession(sessionID sessionID, qconn http3.Connection, requestStr quic.Stream) *Session {
+	tracingID := qconn.Context().Value(quic.ConnectionTracingKey).(quic.ConnectionTracingID)
 	ctx, ctxCancel := context.WithCancel(context.WithValue(context.Background(), quic.ConnectionTracingKey, tracingID))
 	c := &Session{
 		sessionID:       sessionID,
