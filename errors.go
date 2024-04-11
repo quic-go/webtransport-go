@@ -55,6 +55,7 @@ const WebTransportBufferedStreamRejectedErrorCode quic.StreamErrorCode = 0x3994b
 // StreamError is the error that is returned from stream operations (Read, Write) when the stream is canceled.
 type StreamError struct {
 	ErrorCode StreamErrorCode
+	Remote    bool
 }
 
 func (e *StreamError) Is(target error) bool {
