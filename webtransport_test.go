@@ -356,6 +356,7 @@ func TestMultipleClients(t *testing.T) {
 
 func TestStreamResetError(t *testing.T) {
 	const errorCode webtransport.StreamErrorCode = 127
+	strChan := make(chan webtransport.Stream, 1)
 	sess, closeServer := establishSession(t, func(sess *webtransport.Session) {
 		for {
 			str, err := sess.AcceptStream(context.Background())
@@ -364,10 +365,12 @@ func TestStreamResetError(t *testing.T) {
 			}
 			str.CancelRead(errorCode)
 			str.CancelWrite(errorCode)
+			strChan <- str
 		}
 	})
 	defer closeServer()
 
+	// client side
 	str, err := sess.OpenStream()
 	require.NoError(t, err)
 	_, err = str.Write([]byte("foobar"))
@@ -377,6 +380,15 @@ func TestStreamResetError(t *testing.T) {
 	var strErr *webtransport.StreamError
 	require.True(t, errors.As(err, &strErr))
 	require.Equal(t, strErr.ErrorCode, errorCode)
+	require.True(t, strErr.Remote)
+
+	// server side
+	str = <-strChan
+	_, err = str.Read([]byte{0})
+	require.Error(t, err)
+	require.True(t, errors.As(err, &strErr))
+	require.Equal(t, strErr.ErrorCode, errorCode)
+	require.False(t, strErr.Remote)
 }
 
 func TestShutdown(t *testing.T) {
