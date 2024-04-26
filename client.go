@@ -62,7 +62,7 @@ func (d *Dialer) Dial(ctx context.Context, urlStr string, reqHdr http.Header) (*
 	if quicConf == nil {
 		quicConf = &quic.Config{EnableDatagrams: true}
 	} else if !d.QUICConfig.EnableDatagrams {
-		return nil, nil, errors.New("WebTransport requires DATAGRAM support, enable it via QUICConfig.EnableDatagrams")
+		return nil, nil, errors.New("webtransport: DATAGRAM support required, enable it via QUICConfig.EnableDatagrams")
 	}
 
 	tlsConf := d.TLSClientConfig
@@ -101,7 +101,8 @@ func (d *Dialer) Dial(ctx context.Context, urlStr string, reqHdr http.Header) (*
 		return nil, nil, err
 	}
 	rt := &http3.SingleDestinationRoundTripper{
-		Connection: qconn,
+		Connection:      qconn,
+		EnableDatagrams: true,
 		StreamHijacker: func(ft http3.FrameType, connTracingID quic.ConnectionTracingID, str quic.Stream, e error) (hijacked bool, err error) {
 			if isWebTransportError(e) {
 				return true, nil
