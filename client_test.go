@@ -201,30 +201,40 @@ func TestClientReorderedUpgrade(t *testing.T) {
 
 	d := webtransport.Dialer{
 		TLSClientConfig: &tls.Config{RootCAs: certPool},
-		DialAddr: func(ctx context.Context, addr string, tlsCfg *tls.Config, cfg *quic.Config) (quic.EarlyConnection, error) {
-			conn, err := quic.DialAddrEarly(ctx, addr, tlsCfg, cfg)
+		QUICConfig:      &quic.Config{EnableDatagrams: true},
+		DialAddr: func(ctx context.Context, addr string, tlsConf *tls.Config, conf *quic.Config) (quic.EarlyConnection, error) {
+			conn, err := quic.DialAddrEarly(ctx, addr, tlsConf, conf)
 			if err != nil {
 				return nil, err
 			}
 			return &requestStreamDelayingConn{done: blockUpgrade, EarlyConnection: conn}, nil
 		},
 	}
-	connChan := make(chan *webtransport.Session)
+	sessChan := make(chan *webtransport.Session)
+	errChan := make(chan error)
 	go func() {
 		// This will block until blockUpgrade is closed.
-		rsp, conn, err := d.Dial(context.Background(), fmt.Sprintf("https://localhost:%d/webtransport", port), nil)
-		require.NoError(t, err)
+		rsp, sess, err := d.Dial(context.Background(), fmt.Sprintf("https://localhost:%d/webtransport", port), nil)
+		if err != nil {
+			errChan <- err
+			return
+		}
 		require.Equal(t, 200, rsp.StatusCode)
-		connChan <- conn
+		sessChan <- sess
 	}()
 
 	time.Sleep(timeout)
 	close(blockUpgrade)
-	conn := <-connChan
-	defer conn.CloseWithError(0, "")
+	var sess *webtransport.Session
+	select {
+	case sess = <-sessChan:
+	case err := <-errChan:
+		require.NoError(t, err)
+	}
+	defer sess.CloseWithError(0, "")
 	ctx, cancel := context.WithTimeout(context.Background(), scaleDuration(100*time.Millisecond))
 	defer cancel()
-	str, err := conn.AcceptStream(ctx)
+	str, err := sess.AcceptStream(ctx)
 	require.NoError(t, err)
 	data, err := io.ReadAll(str)
 	require.NoError(t, err)
