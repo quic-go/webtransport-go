@@ -30,12 +30,13 @@ const (
 type Server struct {
 	H3 http3.Server
 
-	// StreamReorderingTime is the time an incoming WebTransport stream that cannot be associated
-	// with a session is buffered.
+	// ReorderingTimeout is the maximum time an incoming WebTransport stream that cannot be associated
+	// with a session is buffered. It is also the maximum time a WebTransport connection request is
+	// blocked waiting for the client's SETTINGS are received.
 	// This can happen if the CONNECT request (that creates a new session) is reordered, and arrives
 	// after the first WebTransport stream(s) for that session.
 	// Defaults to 5 seconds.
-	StreamReorderingTimeout time.Duration
+	ReorderingTimeout time.Duration
 
 	// CheckOrigin is used to validate the request origin, thereby preventing cross-site request forgery.
 	// CheckOrigin returns true if the request Origin header is acceptable.
@@ -60,13 +61,18 @@ func (s *Server) initialize() error {
 	return s.initErr
 }
 
+func (s *Server) timeout() time.Duration {
+	timeout := s.ReorderingTimeout
+	if timeout == 0 {
+		return 5 * time.Second
+	}
+	return timeout
+}
+
 func (s *Server) init() error {
 	s.ctx, s.ctxCancel = context.WithCancel(context.Background())
-	timeout := s.StreamReorderingTimeout
-	if timeout == 0 {
-		timeout = 5 * time.Second
-	}
-	s.conns = newSessionManager(timeout)
+
+	s.conns = newSessionManager(s.timeout())
 	if s.CheckOrigin == nil {
 		s.CheckOrigin = checkSameOrigin
 	}
@@ -168,6 +174,21 @@ func (s *Server) Upgrade(w http.ResponseWriter, r *http.Request) (*Session, erro
 	if !s.CheckOrigin(r) {
 		return nil, errors.New("webtransport: request origin not allowed")
 	}
+
+	// Wait for SETTINGS
+	conn := w.(http3.Hijacker).Connection()
+	timer := time.NewTimer(s.timeout())
+	defer timer.Stop()
+	select {
+	case <-conn.ReceivedSettings():
+	case <-timer.C:
+		return nil, errors.New("webtransport: didn't receive the client's SETTINGS on time")
+	}
+	settings := conn.Settings()
+	if !settings.EnableDatagram {
+		return nil, errors.New("webtransport: missing datagram support")
+	}
+
 	w.Header().Add(webTransportDraftHeaderKey, webTransportDraftHeaderValue)
 	w.WriteHeader(http.StatusOK)
 	w.(http.Flusher).Flush()
@@ -177,7 +198,7 @@ func (s *Server) Upgrade(w http.ResponseWriter, r *http.Request) (*Session, erro
 	sID := sessionID(str.StreamID())
 
 	return s.conns.AddSession(
-		w.(http3.Hijacker).Connection(),
+		conn,
 		sID,
 		httpStreamer.HTTPStream(),
 	), nil

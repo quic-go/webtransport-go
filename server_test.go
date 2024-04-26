@@ -146,8 +146,8 @@ func TestServerReorderedUpgradeRequest(t *testing.T) {
 func TestServerReorderedUpgradeRequestTimeout(t *testing.T) {
 	timeout := scaleDuration(100 * time.Millisecond)
 	s := webtransport.Server{
-		H3:                      http3.Server{TLSConfig: tlsConf, EnableDatagrams: true},
-		StreamReorderingTimeout: timeout,
+		H3:                http3.Server{TLSConfig: tlsConf, EnableDatagrams: true},
+		ReorderingTimeout: timeout,
 	}
 	defer s.Close()
 	connChan := make(chan *webtransport.Session)
@@ -212,8 +212,8 @@ func TestServerReorderedUpgradeRequestTimeout(t *testing.T) {
 func TestServerReorderedMultipleStreams(t *testing.T) {
 	timeout := scaleDuration(150 * time.Millisecond)
 	s := webtransport.Server{
-		H3:                      http3.Server{TLSConfig: tlsConf, EnableDatagrams: true},
-		StreamReorderingTimeout: timeout,
+		H3:                http3.Server{TLSConfig: tlsConf, EnableDatagrams: true},
+		ReorderingTimeout: timeout,
 	}
 	defer s.Close()
 	connChan := make(chan *webtransport.Session)
@@ -271,6 +271,43 @@ func TestServerReorderedMultipleStreams(t *testing.T) {
 	data, err := io.ReadAll(sstr)
 	require.NoError(t, err)
 	require.Equal(t, []byte("raboof"), data)
+}
+
+func TestServerSettingsCheck(t *testing.T) {
+	timeout := scaleDuration(150 * time.Millisecond)
+	s := webtransport.Server{
+		H3:                http3.Server{TLSConfig: tlsConf, EnableDatagrams: true},
+		ReorderingTimeout: timeout,
+	}
+	errChan := make(chan error, 1)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/webtransport", func(w http.ResponseWriter, r *http.Request) {
+		_, err := s.Upgrade(w, r)
+		w.WriteHeader(http.StatusNotImplemented)
+		errChan <- err
+	})
+	s.H3.Handler = mux
+	udpConn, err := net.ListenUDP("udp", nil)
+	require.NoError(t, err)
+	port := udpConn.LocalAddr().(*net.UDPAddr).Port
+	go s.Serve(udpConn)
+
+	cconn, err := quic.DialAddr(
+		context.Background(),
+		fmt.Sprintf("localhost:%d", port),
+		&tls.Config{RootCAs: certPool, NextProtos: []string{http3.NextProtoH3}},
+		&quic.Config{EnableDatagrams: true},
+	)
+	require.NoError(t, err)
+	rt := http3.SingleDestinationRoundTripper{Connection: cconn} // datagrams disabled
+	requestStr, err := rt.OpenRequestStream(context.Background())
+	require.NoError(t, err)
+	require.NoError(t, requestStr.SendRequestHeader(newWebTransportRequest(t, fmt.Sprintf("https://localhost:%d/webtransport", port))))
+	rsp, err := requestStr.ReadResponse()
+	require.NoError(t, err)
+	require.Equal(t, http.StatusNotImplemented, rsp.StatusCode)
+
+	require.ErrorContains(t, <-errChan, "webtransport: missing datagram support")
 }
 
 func TestImmediateClose(t *testing.T) {
