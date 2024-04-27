@@ -9,7 +9,7 @@ jobs:
     - uses: nanasess/setup-chromedriver@v2
       with:
         # Optional: do not specify to match Chrome's version
-        chromedriver-version: '114.0.5735.90'
+        chromedriver-version: '124.0.6367.62'
     - id: go-mod
       uses: pl-strflt/uci/.github/actions/read-go-mod@main
     - id: go
