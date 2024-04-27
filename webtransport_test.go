@@ -2,7 +2,6 @@ package webtransport_test
 
 import (
 	"context"
-	"crypto/rand"
 	"crypto/tls"
 	"errors"
 	"fmt"
@@ -14,6 +13,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"golang.org/x/exp/rand"
 
 	"github.com/quic-go/webtransport-go"
 
@@ -594,4 +595,58 @@ func TestWriteCloseRace(t *testing.T) {
 	<-ready
 	<-ready
 	close(ch)
+}
+
+func TestDatagrams(t *testing.T) {
+	const num = 100
+	var mx sync.Mutex
+	m := make(map[string]bool, num)
+
+	var counter int
+	done := make(chan struct{})
+	serverErrChan := make(chan error, 1)
+	sess, closeServer := establishSession(t, func(sess *webtransport.Session) {
+		defer close(done)
+		for {
+			b, err := sess.ReceiveDatagram(context.Background())
+			if err != nil {
+				return
+			}
+			mx.Lock()
+			if _, ok := m[string(b)]; !ok {
+				serverErrChan <- errors.New("received unexpected datagram")
+				return
+			}
+			m[string(b)] = true
+			mx.Unlock()
+			counter++
+		}
+	})
+	defer closeServer()
+
+	errChan := make(chan error, 1)
+
+	for i := 0; i < num; i++ {
+		b := make([]byte, 800)
+		rand.Read(b)
+		mx.Lock()
+		m[string(b)] = false
+		mx.Unlock()
+		if err := sess.SendDatagram(b); err != nil {
+			break
+		}
+	}
+	time.Sleep(scaleDuration(10 * time.Millisecond))
+	sess.CloseWithError(0, "")
+	select {
+	case err := <-serverErrChan:
+		t.Fatal(err)
+	case err := <-errChan:
+		t.Fatal(err)
+	case <-done:
+		t.Logf("sent: %d, received: %d", num, counter)
+		require.Greater(t, counter, num*4/5)
+	case <-time.After(5 * time.Second):
+		t.Fatal("timeout")
+	}
 }

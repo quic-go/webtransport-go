@@ -63,7 +63,7 @@ func (q *acceptQueue[T]) Chan() <-chan struct{} { return q.c }
 type Session struct {
 	sessionID  sessionID
 	qconn      http3.Connection
-	requestStr quic.Stream
+	requestStr http3.Stream
 
 	streamHdr    []byte
 	uniStreamHdr []byte
@@ -82,7 +82,7 @@ type Session struct {
 	streams streamsMap
 }
 
-func newSession(sessionID sessionID, qconn http3.Connection, requestStr quic.Stream) *Session {
+func newSession(sessionID sessionID, qconn http3.Connection, requestStr http3.Stream) *Session {
 	tracingID := qconn.Context().Value(quic.ConnectionTracingKey).(quic.ConnectionTracingID)
 	ctx, ctxCancel := context.WithCancel(context.WithValue(context.Background(), quic.ConnectionTracingKey, tracingID))
 	c := &Session{
@@ -390,6 +390,14 @@ func (s *Session) CloseWithError(code SessionErrorCode, msg string) error {
 	return err
 }
 
+func (s *Session) SendDatagram(b []byte) error {
+	return s.requestStr.SendDatagram(b)
+}
+
+func (s *Session) ReceiveDatagram(ctx context.Context) ([]byte, error) {
+	return s.requestStr.ReceiveDatagram(ctx)
+}
+
 func (s *Session) closeWithError(code SessionErrorCode, msg string) (bool /* first call to close session */, error) {
 	s.closeMx.Lock()
 	defer s.closeMx.Unlock()
@@ -413,6 +421,6 @@ func (s *Session) closeWithError(code SessionErrorCode, msg string) (bool /* fir
 	)
 }
 
-func (c *Session) ConnectionState() quic.ConnectionState {
-	return c.qconn.ConnectionState()
+func (s *Session) ConnectionState() quic.ConnectionState {
+	return s.qconn.ConnectionState()
 }
