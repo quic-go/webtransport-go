@@ -146,7 +146,7 @@ func (d *Dialer) Dial(ctx context.Context, urlStr string, reqHdr http.Header) (*
 	if !settings.EnableExtendedConnect {
 		return nil, nil, errors.New("server didn't enable Extended CONNECT")
 	}
-	if !settings.EnableDatagram {
+	if !settings.EnableDatagrams {
 		return nil, nil, errors.New("server didn't enable HTTP/3 datagram support")
 	}
 	if settings.Other == nil {

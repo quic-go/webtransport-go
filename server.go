@@ -185,7 +185,7 @@ func (s *Server) Upgrade(w http.ResponseWriter, r *http.Request) (*Session, erro
 		return nil, errors.New("webtransport: didn't receive the client's SETTINGS on time")
 	}
 	settings := conn.Settings()
-	if !settings.EnableDatagram {
+	if !settings.EnableDatagrams {
 		return nil, errors.New("webtransport: missing datagram support")
 	}
 
@@ -193,15 +193,9 @@ func (s *Server) Upgrade(w http.ResponseWriter, r *http.Request) (*Session, erro
 	w.WriteHeader(http.StatusOK)
 	w.(http.Flusher).Flush()
 
-	httpStreamer := r.Body.(http3.HTTPStreamer)
-	str := httpStreamer.HTTPStream()
-	sID := sessionID(str.StreamID())
-
-	return s.conns.AddSession(
-		conn,
-		sID,
-		httpStreamer.HTTPStream(),
-	), nil
+	str := w.(http3.HTTPStreamer).HTTPStream()
+	sessID := sessionID(str.StreamID())
+	return s.conns.AddSession(conn, sessID, str), nil
 }
 
 // copied from https://github.com/gorilla/websocket

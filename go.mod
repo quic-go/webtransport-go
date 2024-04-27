@@ -3,7 +3,7 @@ module github.com/quic-go/webtransport-go
 go 1.21
 
 require (
-	github.com/quic-go/quic-go v0.42.1-0.20240411165505-da410a7b5935
+	github.com/quic-go/quic-go v0.43.0
 	github.com/stretchr/testify v1.8.0
 	go.uber.org/mock v0.4.0
 )
