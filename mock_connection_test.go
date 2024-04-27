@@ -42,36 +42,6 @@ func (m *MockConnection) EXPECT() *MockConnectionMockRecorder {
 	return m.recorder
 }
 
-// AcceptStream mocks base method.
-func (m *MockConnection) AcceptStream(arg0 context.Context) (quic.Stream, error) {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "AcceptStream", arg0)
-	ret0, _ := ret[0].(quic.Stream)
-	ret1, _ := ret[1].(error)
-	return ret0, ret1
-}
-
-// AcceptStream indicates an expected call of AcceptStream.
-func (mr *MockConnectionMockRecorder) AcceptStream(arg0 any) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AcceptStream", reflect.TypeOf((*MockConnection)(nil).AcceptStream), arg0)
-}
-
-// AcceptUniStream mocks base method.
-func (m *MockConnection) AcceptUniStream(arg0 context.Context) (quic.ReceiveStream, error) {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "AcceptUniStream", arg0)
-	ret0, _ := ret[0].(quic.ReceiveStream)
-	ret1, _ := ret[1].(error)
-	return ret0, ret1
-}
-
-// AcceptUniStream indicates an expected call of AcceptUniStream.
-func (mr *MockConnectionMockRecorder) AcceptUniStream(arg0 any) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AcceptUniStream", reflect.TypeOf((*MockConnection)(nil).AcceptUniStream), arg0)
-}
-
 // CloseWithError mocks base method.
 func (m *MockConnection) CloseWithError(arg0 quic.ApplicationErrorCode, arg1 string) error {
 	m.ctrl.T.Helper()
@@ -188,21 +158,6 @@ func (mr *MockConnectionMockRecorder) OpenUniStreamSync(arg0 any) *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "OpenUniStreamSync", reflect.TypeOf((*MockConnection)(nil).OpenUniStreamSync), arg0)
 }
 
-// ReceiveDatagram mocks base method.
-func (m *MockConnection) ReceiveDatagram(arg0 context.Context) ([]byte, error) {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "ReceiveDatagram", arg0)
-	ret0, _ := ret[0].([]byte)
-	ret1, _ := ret[1].(error)
-	return ret0, ret1
-}
-
-// ReceiveDatagram indicates an expected call of ReceiveDatagram.
-func (mr *MockConnectionMockRecorder) ReceiveDatagram(arg0 any) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ReceiveDatagram", reflect.TypeOf((*MockConnection)(nil).ReceiveDatagram), arg0)
-}
-
 // ReceivedSettings mocks base method.
 func (m *MockConnection) ReceivedSettings() <-chan struct{} {
 	m.ctrl.T.Helper()
@@ -229,20 +184,6 @@ func (m *MockConnection) RemoteAddr() net.Addr {
 func (mr *MockConnectionMockRecorder) RemoteAddr() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RemoteAddr", reflect.TypeOf((*MockConnection)(nil).RemoteAddr))
-}
-
-// SendDatagram mocks base method.
-func (m *MockConnection) SendDatagram(arg0 []byte) error {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "SendDatagram", arg0)
-	ret0, _ := ret[0].(error)
-	return ret0
-}
-
-// SendDatagram indicates an expected call of SendDatagram.
-func (mr *MockConnectionMockRecorder) SendDatagram(arg0 any) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SendDatagram", reflect.TypeOf((*MockConnection)(nil).SendDatagram), arg0)
 }
 
 // Settings mocks base method.
