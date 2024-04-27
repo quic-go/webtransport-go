@@ -160,22 +160,36 @@ func TestClientInvalidSettingsHandling(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			tlsConf := tlsConf.Clone()
 			tlsConf.NextProtos = []string{http3.NextProtoH3}
-			s, err := quic.ListenAddr("localhost:0", tlsConf, &quic.Config{EnableDatagrams: true})
+			ln, err := quic.ListenAddr("localhost:0", tlsConf, &quic.Config{EnableDatagrams: true})
 			require.NoError(t, err)
+			defer ln.Close()
+
+			done := make(chan struct{})
+			ctx, cancel := context.WithCancel(context.Background())
 			go func() {
-				conn, err := s.Accept(context.Background())
+				defer close(done)
+				conn, err := ln.Accept(context.Background())
 				require.NoError(t, err)
 				// send the SETTINGS frame
 				settingsStr, err := conn.OpenUniStream()
 				require.NoError(t, err)
 				_, err = settingsStr.Write(appendSettingsFrame([]byte{0} /* stream type */, tc.settings))
 				require.NoError(t, err)
+				if _, err := conn.AcceptStream(ctx); err == nil || !errors.Is(err, context.Canceled) {
+					require.Fail(t, "didn't expect any stream to be accepted")
+				}
 			}()
 
 			d := webtransport.Dialer{TLSClientConfig: &tls.Config{RootCAs: certPool}}
-			_, _, err = d.Dial(context.Background(), fmt.Sprintf("https://localhost:%d", s.Addr().(*net.UDPAddr).Port), nil)
+			_, _, err = d.Dial(context.Background(), fmt.Sprintf("https://localhost:%d", ln.Addr().(*net.UDPAddr).Port), nil)
 			require.Error(t, err)
 			require.ErrorContains(t, err, tc.errorStr)
+			cancel()
+			select {
+			case <-done:
+			case <-time.After(5 * time.Second):
+				t.Fatal("timeout")
+			}
 		})
 
 	}

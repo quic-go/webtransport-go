@@ -130,13 +130,6 @@ func (d *Dialer) Dial(ctx context.Context, urlStr string, reqHdr http.Header) (*
 	}
 
 	conn := rt.Start()
-	requestStr, err := rt.OpenRequestStream(ctx) // TODO: put this on the Connection (maybe introduce a ClientConnection?)
-	if err != nil {
-		return nil, nil, err
-	}
-	if err := requestStr.SendRequestHeader(req); err != nil {
-		return nil, nil, err
-	}
 	select {
 	case <-conn.ReceivedSettings():
 	case <-d.ctx.Done():
@@ -157,6 +150,14 @@ func (d *Dialer) Dial(ctx context.Context, urlStr string, reqHdr http.Header) (*
 		return nil, nil, errNoWebTransport
 	}
 
+	requestStr, err := rt.OpenRequestStream(ctx) // TODO: put this on the Connection (maybe introduce a ClientConnection?)
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := requestStr.SendRequestHeader(req); err != nil {
+		return nil, nil, err
+	}
+	// TODO(#136): create the session to allow optimistic opening of streams and sending of datagrams
 	rsp, err := requestStr.ReadResponse()
 	if err != nil {
 		return nil, nil, err
