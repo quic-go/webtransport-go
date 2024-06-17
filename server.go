@@ -211,6 +211,13 @@ func checkSameOrigin(r *http.Request) bool {
 	return equalASCIIFold(u.Host, r.Host)
 }
 
+func (s *Server) ServeListener(ln http3.QUICEarlyListener) error {
+	if err := s.initialize(); err != nil {
+		return err
+	}
+	return s.H3.ServeListener(ln)
+}
+
 // copied from https://github.com/gorilla/websocket
 func equalASCIIFold(s, t string) bool {
 	for s != "" && t != "" {
