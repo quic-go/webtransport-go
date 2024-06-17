@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/quic-go/webtransport-go"
+	"github.com/mincho-artesoft/webtransport-go"
 
 	"github.com/quic-go/quic-go"
 	"github.com/quic-go/quic-go/http3"
