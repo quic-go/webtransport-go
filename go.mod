@@ -5,7 +5,7 @@ go 1.22
 toolchain go1.22.1
 
 require (
-	github.com/quic-go/quic-go v0.47.0
+	github.com/quic-go/quic-go v0.48.0
 	github.com/stretchr/testify v1.9.0
 	go.uber.org/mock v0.4.0
 	golang.org/x/exp v0.0.0-20240506185415-9bf2ced13842

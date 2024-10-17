@@ -47,7 +47,7 @@ func establishSession(t *testing.T, handler func(*webtransport.Session)) (sess *
 	s := &webtransport.Server{
 		H3: http3.Server{
 			TLSConfig:  tlsConf,
-			QUICConfig: &quic.Config{Tracer: qlog.DefaultTracer, EnableDatagrams: true},
+			QUICConfig: &quic.Config{Tracer: qlog.DefaultConnectionTracer, EnableDatagrams: true},
 		},
 	}
 	addHandler(t, s, handler)
@@ -55,7 +55,7 @@ func establishSession(t *testing.T, handler func(*webtransport.Session)) (sess *
 	addr, closeServer := runServer(t, s)
 	d := webtransport.Dialer{
 		TLSClientConfig: &tls.Config{RootCAs: certPool},
-		QUICConfig:      &quic.Config{Tracer: qlog.DefaultTracer, EnableDatagrams: true},
+		QUICConfig:      &quic.Config{Tracer: qlog.DefaultConnectionTracer, EnableDatagrams: true},
 	}
 	defer d.Close()
 	url := fmt.Sprintf("https://localhost:%d/webtransport", addr.Port)
@@ -317,7 +317,7 @@ func TestMultipleClients(t *testing.T) {
 			defer wg.Done()
 			d := webtransport.Dialer{
 				TLSClientConfig: &tls.Config{RootCAs: certPool},
-				QUICConfig:      &quic.Config{Tracer: qlog.DefaultTracer, EnableDatagrams: true},
+				QUICConfig:      &quic.Config{Tracer: qlog.DefaultConnectionTracer, EnableDatagrams: true},
 			}
 			defer d.Close()
 			url := fmt.Sprintf("https://localhost:%d/webtransport", addr.Port)
@@ -507,7 +507,7 @@ func TestCheckOrigin(t *testing.T) {
 
 			d := webtransport.Dialer{
 				TLSClientConfig: &tls.Config{RootCAs: certPool},
-				QUICConfig:      &quic.Config{Tracer: qlog.DefaultTracer, EnableDatagrams: true},
+				QUICConfig:      &quic.Config{Tracer: qlog.DefaultConnectionTracer, EnableDatagrams: true},
 			}
 			defer d.Close()
 			url := fmt.Sprintf("https://localhost:%d/webtransport", addr.Port)
