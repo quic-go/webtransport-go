@@ -107,10 +107,10 @@ func TestServerReorderedUpgradeRequest(t *testing.T) {
 	require.NoError(t, err)
 	// Open a new stream for a WebTransport session we'll establish later. Stream ID: 0.
 	createStreamAndWrite(t, cconn, 4, []byte("foobar"))
-	rt := http3.SingleDestinationRoundTripper{
-		Connection:      cconn,
+	transport := http3.Transport{
 		EnableDatagrams: true,
 	}
+	rt := transport.NewClientConn(cconn)
 
 	// make sure this request actually arrives first
 	time.Sleep(scaleDuration(50 * time.Millisecond))
@@ -173,10 +173,10 @@ func TestServerReorderedUpgradeRequestTimeout(t *testing.T) {
 
 	time.Sleep(2 * timeout)
 
-	rt := http3.SingleDestinationRoundTripper{
-		Connection:      cconn,
+	transport := http3.Transport{
 		EnableDatagrams: true,
 	}
+	rt := transport.NewClientConn(cconn)
 
 	// Reordering was too long. The stream should now have been reset by the server.
 	_, err = str.Read([]byte{0})
@@ -251,10 +251,10 @@ func TestServerReorderedMultipleStreams(t *testing.T) {
 	require.GreaterOrEqual(t, took, timeout)
 	require.Less(t, took, timeout*5/4)
 
-	rt := http3.SingleDestinationRoundTripper{
-		Connection:      cconn,
+	transport := http3.Transport{
 		EnableDatagrams: true,
 	}
+	rt := transport.NewClientConn(cconn)
 	// Now establish the session. Make sure we don't accept the stream.
 	requestStr, err := rt.OpenRequestStream(context.Background())
 	require.NoError(t, err)
@@ -299,7 +299,8 @@ func TestServerSettingsCheck(t *testing.T) {
 		&quic.Config{EnableDatagrams: true},
 	)
 	require.NoError(t, err)
-	rt := http3.SingleDestinationRoundTripper{Connection: cconn} // datagrams disabled
+	transport := http3.Transport{} // datagrams disabled
+	rt := transport.NewClientConn(cconn)
 	requestStr, err := rt.OpenRequestStream(context.Background())
 	require.NoError(t, err)
 	require.NoError(t, requestStr.SendRequestHeader(newWebTransportRequest(t, fmt.Sprintf("https://localhost:%d/webtransport", port))))
