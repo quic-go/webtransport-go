@@ -1,4 +1,4 @@
-module github.com/quic-go/webtransport-go
+module github.com/marcopolo/webtransport-go
 
 go 1.22
 
