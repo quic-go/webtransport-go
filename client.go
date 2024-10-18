@@ -96,12 +96,10 @@ func (d *Dialer) Dial(ctx context.Context, urlStr string, reqHdr http.Header) (*
 	if dialAddr == nil {
 		dialAddr = quic.DialAddrEarly
 	}
-	qconn, err := dialAddr(ctx, u.Host, tlsConf, quicConf)
-	if err != nil {
-		return nil, nil, err
-	}
-	rt := &http3.SingleDestinationRoundTripper{
-		Connection:      qconn,
+	t := http3.Transport{
+		TLSClientConfig: tlsConf,
+		QUICConfig:      quicConf,
+		Dial:            dialAddr,
 		EnableDatagrams: true,
 		StreamHijacker: func(ft http3.FrameType, connTracingID quic.ConnectionTracingID, str quic.Stream, e error) (hijacked bool, err error) {
 			if isWebTransportError(e) {
@@ -129,13 +127,17 @@ func (d *Dialer) Dial(ctx context.Context, urlStr string, reqHdr http.Header) (*
 		},
 	}
 
-	conn := rt.Start()
+	qconn, err := dialAddr(ctx, u.Host, tlsConf, quicConf)
+	if err != nil {
+		return nil, nil, err
+	}
+	clientConn := t.NewClientConn(qconn)
 	select {
-	case <-conn.ReceivedSettings():
+	case <-clientConn.ReceivedSettings():
 	case <-d.ctx.Done():
 		return nil, nil, context.Cause(d.ctx)
 	}
-	settings := conn.Settings()
+	settings := clientConn.Settings()
 	if !settings.EnableExtendedConnect {
 		return nil, nil, errors.New("server didn't enable Extended CONNECT")
 	}
@@ -150,7 +152,7 @@ func (d *Dialer) Dial(ctx context.Context, urlStr string, reqHdr http.Header) (*
 		return nil, nil, errNoWebTransport
 	}
 
-	requestStr, err := rt.OpenRequestStream(ctx) // TODO: put this on the Connection (maybe introduce a ClientConnection?)
+	requestStr, err := clientConn.OpenRequestStream(ctx) // TODO: put this on the Connection (maybe introduce a ClientConnection?)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -165,7 +167,7 @@ func (d *Dialer) Dial(ctx context.Context, urlStr string, reqHdr http.Header) (*
 	if rsp.StatusCode < 200 || rsp.StatusCode >= 300 {
 		return rsp, nil, fmt.Errorf("received status %d", rsp.StatusCode)
 	}
-	return rsp, d.conns.AddSession(conn, sessionID(requestStr.StreamID()), requestStr), nil
+	return rsp, d.conns.AddSession(clientConn, sessionID(requestStr.StreamID()), requestStr), nil
 }
 
 func (d *Dialer) Close() error {
