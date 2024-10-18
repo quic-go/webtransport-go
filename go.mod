@@ -1,6 +1,6 @@
 module github.com/quic-go/webtransport-go
 
-go 1.22.0
+go 1.22
 
 require (
 	github.com/quic-go/quic-go v0.48.0
