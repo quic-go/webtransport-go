@@ -61,9 +61,9 @@ func (q *acceptQueue[T]) Next() T {
 func (q *acceptQueue[T]) Chan() <-chan struct{} { return q.c }
 
 type Session struct {
-	sessionID  sessionID
-	qconn      http3.Connection
-	requestStr http3.Stream
+	sessionID sessionID
+	qconn     http3.Connection
+	str       *http3.Stream
 
 	streamHdr    []byte
 	uniStreamHdr []byte
@@ -75,24 +75,24 @@ type Session struct {
 	// When the session is closed, this allows us to cancel all these contexts and make those calls return.
 	streamCtxs map[int]context.CancelFunc
 
-	bidiAcceptQueue acceptQueue[Stream]
-	uniAcceptQueue  acceptQueue[ReceiveStream]
+	bidiAcceptQueue acceptQueue[*Stream]
+	uniAcceptQueue  acceptQueue[*ReceiveStream]
 
 	// TODO: garbage collect streams from when they are closed
 	streams streamsMap
 }
 
-func newSession(sessionID sessionID, qconn http3.Connection, requestStr http3.Stream) *Session {
+func newSession(sessionID sessionID, qconn http3.Connection, str *http3.Stream) *Session {
 	tracingID := qconn.Context().Value(quic.ConnectionTracingKey).(quic.ConnectionTracingID)
 	ctx, ctxCancel := context.WithCancel(context.WithValue(context.Background(), quic.ConnectionTracingKey, tracingID))
 	c := &Session{
 		sessionID:       sessionID,
 		qconn:           qconn,
-		requestStr:      requestStr,
+		str:             str,
 		ctx:             ctx,
 		streamCtxs:      make(map[int]context.CancelFunc),
-		bidiAcceptQueue: *newAcceptQueue[Stream](),
-		uniAcceptQueue:  *newAcceptQueue[ReceiveStream](),
+		bidiAcceptQueue: *newAcceptQueue[*Stream](),
+		uniAcceptQueue:  *newAcceptQueue[*ReceiveStream](),
 		streams:         *newStreamsMap(),
 	}
 	// precompute the headers for unidirectional streams
@@ -135,7 +135,7 @@ func (s *Session) handleConn() {
 func (s *Session) parseNextCapsule() error {
 	for {
 		// TODO: enforce max size
-		typ, r, err := http3.ParseCapsule(quicvarint.NewReader(s.requestStr))
+		typ, r, err := http3.ParseCapsule(quicvarint.NewReader(s.str))
 		if err != nil {
 			return err
 		}
@@ -164,7 +164,7 @@ func (s *Session) parseNextCapsule() error {
 	}
 }
 
-func (s *Session) addStream(qstr quic.Stream, addStreamHeader bool) Stream {
+func (s *Session) addStream(qstr *quic.Stream, addStreamHeader bool) *Stream {
 	var hdr []byte
 	if addStreamHeader {
 		hdr = s.streamHdr
@@ -174,7 +174,7 @@ func (s *Session) addStream(qstr quic.Stream, addStreamHeader bool) Stream {
 	return str
 }
 
-func (s *Session) addReceiveStream(qstr quic.ReceiveStream) ReceiveStream {
+func (s *Session) addReceiveStream(qstr *quic.ReceiveStream) *ReceiveStream {
 	str := newReceiveStream(qstr, func() { s.streams.RemoveStream(qstr.StreamID()) })
 	s.streams.AddStream(qstr.StreamID(), func() {
 		str.closeWithSession()
@@ -182,14 +182,14 @@ func (s *Session) addReceiveStream(qstr quic.ReceiveStream) ReceiveStream {
 	return str
 }
 
-func (s *Session) addSendStream(qstr quic.SendStream) SendStream {
+func (s *Session) addSendStream(qstr *quic.SendStream) *SendStream {
 	str := newSendStream(qstr, s.uniStreamHdr, func() { s.streams.RemoveStream(qstr.StreamID()) })
 	s.streams.AddStream(qstr.StreamID(), str.closeWithSession)
 	return str
 }
 
 // addIncomingStream adds a bidirectional stream that the remote peer opened
-func (s *Session) addIncomingStream(qstr quic.Stream) {
+func (s *Session) addIncomingStream(qstr *quic.Stream) {
 	s.closeMx.Lock()
 	closeErr := s.closeErr
 	if closeErr != nil {
@@ -205,7 +205,7 @@ func (s *Session) addIncomingStream(qstr quic.Stream) {
 }
 
 // addIncomingUniStream adds a unidirectional stream that the remote peer opened
-func (s *Session) addIncomingUniStream(qstr quic.ReceiveStream) {
+func (s *Session) addIncomingUniStream(qstr *quic.ReceiveStream) {
 	s.closeMx.Lock()
 	closeErr := s.closeErr
 	if closeErr != nil {
@@ -224,7 +224,7 @@ func (s *Session) Context() context.Context {
 	return s.ctx
 }
 
-func (s *Session) AcceptStream(ctx context.Context) (Stream, error) {
+func (s *Session) AcceptStream(ctx context.Context) (*Stream, error) {
 	s.closeMx.Lock()
 	closeErr := s.closeErr
 	s.closeMx.Unlock()
@@ -248,7 +248,7 @@ func (s *Session) AcceptStream(ctx context.Context) (Stream, error) {
 	}
 }
 
-func (s *Session) AcceptUniStream(ctx context.Context) (ReceiveStream, error) {
+func (s *Session) AcceptUniStream(ctx context.Context) (*ReceiveStream, error) {
 	s.closeMx.Lock()
 	closeErr := s.closeErr
 	s.closeMx.Unlock()
@@ -272,7 +272,7 @@ func (s *Session) AcceptUniStream(ctx context.Context) (ReceiveStream, error) {
 	}
 }
 
-func (s *Session) OpenStream() (Stream, error) {
+func (s *Session) OpenStream() (*Stream, error) {
 	s.closeMx.Lock()
 	defer s.closeMx.Unlock()
 
@@ -297,7 +297,7 @@ rand:
 	return id
 }
 
-func (s *Session) OpenStreamSync(ctx context.Context) (Stream, error) {
+func (s *Session) OpenStreamSync(ctx context.Context) (*Stream, error) {
 	s.closeMx.Lock()
 	if s.closeErr != nil {
 		s.closeMx.Unlock()
@@ -327,7 +327,7 @@ func (s *Session) OpenStreamSync(ctx context.Context) (Stream, error) {
 	return s.addStream(qstr, true), nil
 }
 
-func (s *Session) OpenUniStream() (SendStream, error) {
+func (s *Session) OpenUniStream() (*SendStream, error) {
 	s.closeMx.Lock()
 	defer s.closeMx.Unlock()
 
@@ -341,7 +341,7 @@ func (s *Session) OpenUniStream() (SendStream, error) {
 	return s.addSendStream(qstr), nil
 }
 
-func (s *Session) OpenUniStreamSync(ctx context.Context) (str SendStream, err error) {
+func (s *Session) OpenUniStreamSync(ctx context.Context) (str *SendStream, err error) {
 	s.closeMx.Lock()
 	if s.closeErr != nil {
 		s.closeMx.Unlock()
@@ -384,18 +384,18 @@ func (s *Session) CloseWithError(code SessionErrorCode, msg string) error {
 		return err
 	}
 
-	s.requestStr.CancelRead(1337)
-	err = s.requestStr.Close()
+	s.str.CancelRead(1337)
+	err = s.str.Close()
 	<-s.ctx.Done()
 	return err
 }
 
 func (s *Session) SendDatagram(b []byte) error {
-	return s.requestStr.SendDatagram(b)
+	return s.str.SendDatagram(b)
 }
 
 func (s *Session) ReceiveDatagram(ctx context.Context) ([]byte, error) {
-	return s.requestStr.ReceiveDatagram(ctx)
+	return s.str.ReceiveDatagram(ctx)
 }
 
 func (s *Session) closeWithError(code SessionErrorCode, msg string) (bool /* first call to close session */, error) {
@@ -415,7 +415,7 @@ func (s *Session) closeWithError(code SessionErrorCode, msg string) (bool /* fir
 	b = append(b, []byte(msg)...)
 
 	return true, http3.WriteCapsule(
-		quicvarint.NewWriter(s.requestStr),
+		quicvarint.NewWriter(s.str),
 		closeWebtransportSessionCapsuleType,
 		b,
 	)
