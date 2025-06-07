@@ -13,8 +13,8 @@ import (
 	"go.uber.org/mock/gomock"
 )
 
-//go:generate sh -c "go run go.uber.org/mock/mockgen -package webtransport -destination mock_connection_test.go github.com/quic-go/quic-go/http3 Connection && cat mock_connection_test.go | sed s@qerr\\.ApplicationErrorCode@quic.ApplicationErrorCode@g > tmp.go && mv tmp.go mock_connection_test.go && goimports -w mock_connection_test.go"
-//go:generate sh -c "go run go.uber.org/mock/mockgen -package webtransport -destination mock_stream_test.go github.com/quic-go/quic-go/http3 Stream && cat mock_stream_test.go | sed s@protocol\\.StreamID@quic.StreamID@g | sed s@qerr\\.StreamErrorCode@quic.StreamErrorCode@g > tmp.go && mv tmp.go mock_stream_test.go && goimports -w mock_stream_test.go"
+//go:generate sh -c "go run go.uber.org/mock/mockgen -package webtransport -destination mock_connection_test.go github.com/quic-go/quic-go/http3 Connection && cat mock_connection_test.go | sed s@qerr\\.ApplicationErrorCode@quic.ApplicationErrorCode@g > tmp.go && mv tmp.go mock_connection_test.go && go run golang.org/x/tools/cmd/goimports -w mock_connection_test.go"
+//go:generate sh -c "go run go.uber.org/mock/mockgen -package webtransport -destination mock_stream_test.go github.com/quic-go/quic-go/http3 Stream && cat mock_stream_test.go | sed s@protocol\\.StreamID@quic.StreamID@g | sed s@qerr\\.StreamErrorCode@quic.StreamErrorCode@g > tmp.go && mv tmp.go mock_stream_test.go && go run golang.org/x/tools/cmd/goimports -w mock_stream_test.go"
 
 type mockRequestStream struct {
 	*MockStream
