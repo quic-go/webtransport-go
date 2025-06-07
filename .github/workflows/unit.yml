@@ -1,0 +1,33 @@
+on: [push, pull_request]
+
+jobs:
+  unit:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ "ubuntu", "windows", "macos" ]
+        go: [ "1.23.x", "1.24.x" ]
+    runs-on: ${{ fromJSON(vars[format('UNIT_RUNNER_{0}', matrix.os)] || format('"{0}-latest"', matrix.os)) }}
+    name: Unit tests (${{ matrix.os}}, Go ${{ matrix.go }})
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ matrix.go }}
+      - run: go version
+      - name: Run tests
+        env:
+          TIMESCALE_FACTOR: 10
+        run: go test -v -cover -coverprofile coverage.txt ./...
+      - name: Run tests (32 bit)
+        if: ${{ matrix.os != 'macos' }} # can't run 32 bit tests on OSX.
+        env:
+          TIMESCALE_FACTOR: 10
+          GOARCH: 386
+        run: go test -v -cover
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          files: coverage.txt,coverage-root.txt
+          env_vars: OS,GO
+          token: ${{ secrets.CODECOV_TOKEN }}
