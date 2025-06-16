@@ -1,4 +1,4 @@
-package webtransport_test
+package webtransport
 
 import (
 	"crypto/rand"
@@ -8,14 +8,18 @@ import (
 	"crypto/x509/pkix"
 	"log"
 	"math/big"
+	"net/http"
+	"net/url"
+	"testing"
 	"time"
+
+	"github.com/quic-go/quic-go/http3"
+	"github.com/stretchr/testify/require"
 )
 
-const alpn = "webtransport-go / quic-go"
-
 var (
-	tlsConf  *tls.Config
-	certPool *x509.CertPool
+	TLSConf  *tls.Config
+	CertPool *x509.CertPool
 )
 
 func init() {
@@ -27,14 +31,14 @@ func init() {
 	if err != nil {
 		log.Fatal("failed to generate leaf certificate:", err)
 	}
-	certPool = x509.NewCertPool()
-	certPool.AddCert(ca)
-	tlsConf = &tls.Config{
+	CertPool = x509.NewCertPool()
+	CertPool.AddCert(ca)
+	TLSConf = &tls.Config{
 		Certificates: []tls.Certificate{{
 			Certificate: [][]byte{leafCert.Raw},
 			PrivateKey:  leafPrivateKey,
 		}},
-		NextProtos: []string{alpn},
+		NextProtos: []string{http3.NextProtoH3},
 	}
 }
 
@@ -86,4 +90,20 @@ func generateLeafCert(ca *x509.Certificate, caPrivateKey *rsa.PrivateKey) (*x509
 		return nil, nil, err
 	}
 	return cert, privKey, nil
+}
+
+func NewWebTransportRequest(t *testing.T, addr string) *http.Request {
+	t.Helper()
+
+	u, err := url.Parse(addr)
+	require.NoError(t, err)
+	hdr := make(http.Header)
+	hdr.Add("Sec-Webtransport-Http3-Draft02", "1")
+	return &http.Request{
+		Method: http.MethodConnect,
+		Header: hdr,
+		Proto:  "webtransport",
+		Host:   u.Host,
+		URL:    u,
+	}
 }

@@ -8,7 +8,6 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"os"
 	"testing"
 	"time"
@@ -54,21 +53,6 @@ func TestUpgradeFailures(t *testing.T) {
 	})
 }
 
-func newWebTransportRequest(t *testing.T, addr string) *http.Request {
-	t.Helper()
-	u, err := url.Parse(addr)
-	require.NoError(t, err)
-	hdr := make(http.Header)
-	hdr.Add("Sec-Webtransport-Http3-Draft02", "1")
-	return &http.Request{
-		Method: http.MethodConnect,
-		Header: hdr,
-		Proto:  "webtransport",
-		Host:   u.Host,
-		URL:    u,
-	}
-}
-
 func createStreamAndWrite(t *testing.T, conn quic.Connection, sessionID uint64, data []byte) quic.Stream {
 	t.Helper()
 	str, err := conn.OpenStream()
@@ -85,7 +69,7 @@ func createStreamAndWrite(t *testing.T, conn quic.Connection, sessionID uint64, 
 
 func TestServerReorderedUpgradeRequest(t *testing.T) {
 	s := webtransport.Server{
-		H3: http3.Server{TLSConfig: tlsConf},
+		H3: http3.Server{TLSConfig: webtransport.TLSConf},
 	}
 	defer s.Close()
 	connChan := make(chan *webtransport.Session)
@@ -101,7 +85,7 @@ func TestServerReorderedUpgradeRequest(t *testing.T) {
 	cconn, err := quic.DialAddr(
 		context.Background(),
 		fmt.Sprintf("localhost:%d", port),
-		&tls.Config{RootCAs: certPool, NextProtos: []string{http3.NextProtoH3}},
+		&tls.Config{RootCAs: webtransport.CertPool, NextProtos: []string{http3.NextProtoH3}},
 		&quic.Config{EnableDatagrams: true},
 	)
 	require.NoError(t, err)
@@ -116,7 +100,9 @@ func TestServerReorderedUpgradeRequest(t *testing.T) {
 	// Create a new WebTransport session. Stream ID: 4.
 	str, err := conn.OpenRequestStream(context.Background())
 	require.NoError(t, err)
-	require.NoError(t, str.SendRequestHeader(newWebTransportRequest(t, fmt.Sprintf("https://localhost:%d/webtransport", port))))
+	require.NoError(t, str.SendRequestHeader(
+		webtransport.NewWebTransportRequest(t, fmt.Sprintf("https://localhost:%d/webtransport", port)),
+	))
 	rsp, err := str.ReadResponse()
 	require.NoError(t, err)
 	require.Equal(t, http.StatusOK, rsp.StatusCode)
@@ -144,7 +130,7 @@ func TestServerReorderedUpgradeRequest(t *testing.T) {
 func TestServerReorderedUpgradeRequestTimeout(t *testing.T) {
 	timeout := scaleDuration(100 * time.Millisecond)
 	s := webtransport.Server{
-		H3:                http3.Server{TLSConfig: tlsConf, EnableDatagrams: true},
+		H3:                http3.Server{TLSConfig: webtransport.TLSConf, EnableDatagrams: true},
 		ReorderingTimeout: timeout,
 	}
 	defer s.Close()
@@ -161,7 +147,7 @@ func TestServerReorderedUpgradeRequestTimeout(t *testing.T) {
 	cconn, err := quic.DialAddr(
 		context.Background(),
 		fmt.Sprintf("localhost:%d", port),
-		&tls.Config{RootCAs: certPool, NextProtos: []string{http3.NextProtoH3}},
+		&tls.Config{RootCAs: webtransport.CertPool, NextProtos: []string{http3.NextProtoH3}},
 		&quic.Config{EnableDatagrams: true},
 	)
 	require.NoError(t, err)
@@ -183,7 +169,9 @@ func TestServerReorderedUpgradeRequestTimeout(t *testing.T) {
 	// Now establish the session. Make sure we don't accept the stream.
 	requestStr, err := conn.OpenRequestStream(context.Background())
 	require.NoError(t, err)
-	require.NoError(t, requestStr.SendRequestHeader(newWebTransportRequest(t, fmt.Sprintf("https://localhost:%d/webtransport", port))))
+	require.NoError(t, requestStr.SendRequestHeader(
+		webtransport.NewWebTransportRequest(t, fmt.Sprintf("https://localhost:%d/webtransport", port)),
+	))
 	rsp, err := requestStr.ReadResponse()
 	require.NoError(t, err)
 	require.Equal(t, http.StatusOK, rsp.StatusCode)
@@ -208,7 +196,7 @@ func TestServerReorderedUpgradeRequestTimeout(t *testing.T) {
 func TestServerReorderedMultipleStreams(t *testing.T) {
 	timeout := scaleDuration(150 * time.Millisecond)
 	s := webtransport.Server{
-		H3:                http3.Server{TLSConfig: tlsConf, EnableDatagrams: true},
+		H3:                http3.Server{TLSConfig: webtransport.TLSConf, EnableDatagrams: true},
 		ReorderingTimeout: timeout,
 	}
 	defer s.Close()
@@ -225,7 +213,7 @@ func TestServerReorderedMultipleStreams(t *testing.T) {
 	cconn, err := quic.DialAddr(
 		context.Background(),
 		fmt.Sprintf("localhost:%d", port),
-		&tls.Config{RootCAs: certPool, NextProtos: []string{http3.NextProtoH3}},
+		&tls.Config{RootCAs: webtransport.CertPool, NextProtos: []string{http3.NextProtoH3}},
 		&quic.Config{EnableDatagrams: true},
 	)
 	require.NoError(t, err)
@@ -252,7 +240,9 @@ func TestServerReorderedMultipleStreams(t *testing.T) {
 	// Now establish the session. Make sure we don't accept the stream.
 	requestStr, err := conn.OpenRequestStream(context.Background())
 	require.NoError(t, err)
-	require.NoError(t, requestStr.SendRequestHeader(newWebTransportRequest(t, fmt.Sprintf("https://localhost:%d/webtransport", port))))
+	require.NoError(t, requestStr.SendRequestHeader(
+		webtransport.NewWebTransportRequest(t, fmt.Sprintf("https://localhost:%d/webtransport", port)),
+	))
 	rsp, err := requestStr.ReadResponse()
 	require.NoError(t, err)
 	require.Equal(t, http.StatusOK, rsp.StatusCode)
@@ -270,7 +260,7 @@ func TestServerReorderedMultipleStreams(t *testing.T) {
 func TestServerSettingsCheck(t *testing.T) {
 	timeout := scaleDuration(150 * time.Millisecond)
 	s := webtransport.Server{
-		H3:                http3.Server{TLSConfig: tlsConf, EnableDatagrams: true},
+		H3:                http3.Server{TLSConfig: webtransport.TLSConf, EnableDatagrams: true},
 		ReorderingTimeout: timeout,
 	}
 	errChan := make(chan error, 1)
@@ -289,7 +279,7 @@ func TestServerSettingsCheck(t *testing.T) {
 	cconn, err := quic.DialAddr(
 		context.Background(),
 		fmt.Sprintf("localhost:%d", port),
-		&tls.Config{RootCAs: certPool, NextProtos: []string{http3.NextProtoH3}},
+		&tls.Config{RootCAs: webtransport.CertPool, NextProtos: []string{http3.NextProtoH3}},
 		&quic.Config{EnableDatagrams: true},
 	)
 	require.NoError(t, err)
@@ -297,7 +287,9 @@ func TestServerSettingsCheck(t *testing.T) {
 	conn := tr.NewClientConn(cconn)
 	requestStr, err := conn.OpenRequestStream(context.Background())
 	require.NoError(t, err)
-	require.NoError(t, requestStr.SendRequestHeader(newWebTransportRequest(t, fmt.Sprintf("https://localhost:%d/webtransport", port))))
+	require.NoError(t, requestStr.SendRequestHeader(
+		webtransport.NewWebTransportRequest(t, fmt.Sprintf("https://localhost:%d/webtransport", port)),
+	))
 	rsp, err := requestStr.ReadResponse()
 	require.NoError(t, err)
 	require.Equal(t, http.StatusNotImplemented, rsp.StatusCode)
