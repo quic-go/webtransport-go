@@ -297,6 +297,12 @@ func (s *Session) OpenStreamSync(ctx context.Context) (Stream, error) {
 	defer s.closeMx.Unlock()
 	delete(s.streamCtxs, id)
 
+	// the session might have been closed concurrently with OpenStreamSync returning
+	if qstr != nil && s.closeErr != nil {
+		qstr.CancelRead(sessionCloseErrorCode)
+		qstr.CancelWrite(sessionCloseErrorCode)
+		return nil, s.closeErr
+	}
 	if err != nil {
 		if s.closeErr != nil {
 			return nil, s.closeErr
@@ -337,6 +343,11 @@ func (s *Session) OpenUniStreamSync(ctx context.Context) (str SendStream, err er
 	defer s.closeMx.Unlock()
 	delete(s.streamCtxs, id)
 
+	// the session might have been closed concurrently with OpenStreamSync returning
+	if qstr != nil && s.closeErr != nil {
+		qstr.CancelWrite(sessionCloseErrorCode)
+		return nil, s.closeErr
+	}
 	if err != nil {
 		if s.closeErr != nil {
 			return nil, s.closeErr
