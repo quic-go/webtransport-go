@@ -3,7 +3,6 @@ package webtransport
 import (
 	"context"
 	"encoding/binary"
-	"errors"
 	"io"
 	"math/rand"
 	"net"
@@ -112,22 +111,8 @@ func newSession(sessionID sessionID, qconn http3.Connection, requestStr http3.St
 }
 
 func (s *Session) handleConn() {
-	var closeErr *SessionError
 	err := s.parseNextCapsule()
-	if !errors.As(err, &closeErr) {
-		closeErr = &SessionError{Remote: true}
-	}
-
-	s.closeMx.Lock()
-	defer s.closeMx.Unlock()
-	// If we closed the connection, the closeErr will be set in Close.
-	if s.closeErr == nil {
-		s.closeErr = closeErr
-	}
-	for _, cancel := range s.streamCtxs {
-		cancel()
-	}
-	s.streams.CloseSession()
+	s.closeWithError(err)
 }
 
 // parseNextCapsule parses the next Capsule sent on the request stream.
@@ -176,9 +161,7 @@ func (s *Session) addStream(qstr quic.Stream, addStreamHeader bool) Stream {
 
 func (s *Session) addReceiveStream(qstr quic.ReceiveStream) ReceiveStream {
 	str := newReceiveStream(qstr, func() { s.streams.RemoveStream(qstr.StreamID()) })
-	s.streams.AddStream(qstr.StreamID(), func() {
-		str.closeWithSession()
-	})
+	s.streams.AddStream(qstr.StreamID(), str.closeWithSession)
 	return str
 }
 
@@ -307,22 +290,18 @@ func (s *Session) OpenStreamSync(ctx context.Context) (Stream, error) {
 	id := s.addStreamCtxCancel(cancel)
 	s.closeMx.Unlock()
 
+	// open a new bidirectional stream without holding the mutex: this call might block
 	qstr, err := s.qconn.OpenStreamSync(ctx)
+
+	s.closeMx.Lock()
+	defer s.closeMx.Unlock()
+	delete(s.streamCtxs, id)
+
 	if err != nil {
 		if s.closeErr != nil {
 			return nil, s.closeErr
 		}
 		return nil, err
-	}
-
-	s.closeMx.Lock()
-	defer s.closeMx.Unlock()
-	delete(s.streamCtxs, id)
-	// Some time might have passed. Check if the session is still alive
-	if s.closeErr != nil {
-		qstr.CancelWrite(sessionCloseErrorCode)
-		qstr.CancelRead(sessionCloseErrorCode)
-		return nil, s.closeErr
 	}
 	return s.addStream(qstr, true), nil
 }
@@ -351,21 +330,18 @@ func (s *Session) OpenUniStreamSync(ctx context.Context) (str SendStream, err er
 	id := s.addStreamCtxCancel(cancel)
 	s.closeMx.Unlock()
 
+	// open a new unidirectional stream without holding the mutex: this call might block
 	qstr, err := s.qconn.OpenUniStreamSync(ctx)
+
+	s.closeMx.Lock()
+	defer s.closeMx.Unlock()
+	delete(s.streamCtxs, id)
+
 	if err != nil {
 		if s.closeErr != nil {
 			return nil, s.closeErr
 		}
 		return nil, err
-	}
-
-	s.closeMx.Lock()
-	defer s.closeMx.Unlock()
-	delete(s.streamCtxs, id)
-	// Some time might have passed. Check if the session is still alive
-	if s.closeErr != nil {
-		qstr.CancelWrite(sessionCloseErrorCode)
-		return nil, s.closeErr
 	}
 	return s.addSendStream(qstr), nil
 }
@@ -379,8 +355,19 @@ func (s *Session) RemoteAddr() net.Addr {
 }
 
 func (s *Session) CloseWithError(code SessionErrorCode, msg string) error {
-	first, err := s.closeWithError(code, msg)
+	first, err := s.closeWithError(&SessionError{ErrorCode: code, Message: msg})
 	if err != nil || !first {
+		return err
+	}
+
+	b := make([]byte, 4, 4+len(msg))
+	binary.BigEndian.PutUint32(b, uint32(code))
+	b = append(b, []byte(msg)...)
+	if err := http3.WriteCapsule(
+		quicvarint.NewWriter(s.requestStr),
+		closeWebtransportSessionCapsuleType,
+		b,
+	); err != nil {
 		return err
 	}
 
@@ -398,27 +385,21 @@ func (s *Session) ReceiveDatagram(ctx context.Context) ([]byte, error) {
 	return s.requestStr.ReceiveDatagram(ctx)
 }
 
-func (s *Session) closeWithError(code SessionErrorCode, msg string) (bool /* first call to close session */, error) {
+func (s *Session) closeWithError(closeErr error) (bool /* first call to close session */, error) {
 	s.closeMx.Lock()
 	defer s.closeMx.Unlock()
 	// Duplicate call, or the remote already closed this session.
 	if s.closeErr != nil {
 		return false, nil
 	}
-	s.closeErr = &SessionError{
-		ErrorCode: code,
-		Message:   msg,
+	s.closeErr = closeErr
+
+	for _, cancel := range s.streamCtxs {
+		cancel()
 	}
+	s.streams.CloseSession()
 
-	b := make([]byte, 4, 4+len(msg))
-	binary.BigEndian.PutUint32(b, uint32(code))
-	b = append(b, []byte(msg)...)
-
-	return true, http3.WriteCapsule(
-		quicvarint.NewWriter(s.requestStr),
-		closeWebtransportSessionCapsuleType,
-		b,
-	)
+	return true, nil
 }
 
 func (s *Session) ConnectionState() quic.ConnectionState {

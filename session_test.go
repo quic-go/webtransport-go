@@ -124,15 +124,11 @@ func TestOpenStreamAfterSessionClose(t *testing.T) {
 
 	mockSess := NewMockConnection(ctrl)
 	mockSess.EXPECT().Context().Return(context.WithValue(context.Background(), quic.ConnectionTracingKey, quic.ConnectionTracingID(1337)))
-	wait := make(chan struct{})
 	streamOpen := make(chan struct{})
-	mockSess.EXPECT().OpenStreamSync(gomock.Any()).DoAndReturn(func(context.Context) (quic.Stream, error) {
+	mockSess.EXPECT().OpenStreamSync(gomock.Any()).DoAndReturn(func(ctx context.Context) (quic.Stream, error) {
 		streamOpen <- struct{}{}
-		str := NewMockStream(ctrl)
-		str.EXPECT().CancelRead(sessionCloseErrorCode)
-		str.EXPECT().CancelWrite(sessionCloseErrorCode)
-		<-wait
-		return str, nil
+		<-ctx.Done()
+		return nil, ctx.Err()
 	})
 
 	sess := newSession(42, mockSess, newMockRequestStream(ctrl))
@@ -145,8 +141,6 @@ func TestOpenStreamAfterSessionClose(t *testing.T) {
 	<-streamOpen
 
 	require.NoError(t, sess.CloseWithError(0, "session closed"))
-
-	close(wait)
 	require.EqualError(t, <-errChan, "session closed")
 }
 
@@ -156,14 +150,11 @@ func TestOpenUniStreamAfterSessionClose(t *testing.T) {
 
 	mockSess := NewMockConnection(ctrl)
 	mockSess.EXPECT().Context().Return(context.WithValue(context.Background(), quic.ConnectionTracingKey, quic.ConnectionTracingID(1337)))
-	wait := make(chan struct{})
 	streamOpen := make(chan struct{})
-	mockSess.EXPECT().OpenUniStreamSync(gomock.Any()).DoAndReturn(func(context.Context) (quic.SendStream, error) {
+	mockSess.EXPECT().OpenUniStreamSync(gomock.Any()).DoAndReturn(func(ctx context.Context) (quic.SendStream, error) {
 		streamOpen <- struct{}{}
-		str := NewMockStream(ctrl)
-		str.EXPECT().CancelWrite(sessionCloseErrorCode)
-		<-wait
-		return str, nil
+		<-ctx.Done()
+		return nil, ctx.Err()
 	})
 
 	sess := newSession(42, mockSess, newMockRequestStream(ctrl))
@@ -176,7 +167,5 @@ func TestOpenUniStreamAfterSessionClose(t *testing.T) {
 	<-streamOpen
 
 	require.NoError(t, sess.CloseWithError(0, "session closed"))
-
-	close(wait)
 	require.EqualError(t, <-errChan, "session closed")
 }
