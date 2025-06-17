@@ -3,7 +3,7 @@ module github.com/quic-go/webtransport-go
 go 1.23
 
 require (
-	github.com/quic-go/quic-go v0.48.0
+	github.com/quic-go/quic-go v0.52.0
 	github.com/stretchr/testify v1.9.0
 )
 
@@ -19,7 +19,6 @@ require (
 	github.com/rogpeppe/go-internal v1.10.0 // indirect
 	go.uber.org/mock v0.5.0 // indirect
 	golang.org/x/crypto v0.26.0 // indirect
-	golang.org/x/exp v0.0.0-20240506185415-9bf2ced13842 // indirect
 	golang.org/x/mod v0.18.0 // indirect
 	golang.org/x/net v0.28.0 // indirect
 	golang.org/x/sync v0.8.0 // indirect
