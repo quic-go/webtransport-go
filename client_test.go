@@ -154,7 +154,6 @@ func TestClientInvalidSettingsHandling(t *testing.T) {
 			errorStr: "server didn't enable WebTransport",
 		},
 	} {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			ln, err := quic.ListenAddr("localhost:0", webtransport.TLSConf, &quic.Config{EnableDatagrams: true})
 			require.NoError(t, err)
@@ -187,7 +186,6 @@ func TestClientInvalidSettingsHandling(t *testing.T) {
 				t.Fatal("timeout")
 			}
 		})
-
 	}
 }
 

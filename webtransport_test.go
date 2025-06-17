@@ -408,7 +408,7 @@ func TestOpenStreamSyncShutdown(t *testing.T) {
 
 		const num = 3
 		errChan := make(chan error, num)
-		for i := 0; i < num; i++ {
+		for range num {
 			go func() { errChan <- openStreamSync() }()
 		}
 
@@ -416,7 +416,7 @@ func TestOpenStreamSyncShutdown(t *testing.T) {
 		require.Never(t, func() bool { return len(errChan) > 0 }, 100*time.Millisecond, 10*time.Millisecond)
 		close(done)
 		require.Eventually(t, func() bool { return len(errChan) == num }, scaleDuration(100*time.Millisecond), 10*time.Millisecond)
-		for i := 0; i < num; i++ {
+		for range num {
 			err := <-errChan
 			var sessErr *webtransport.SessionError
 			require.ErrorAs(t, err, &sessErr)
@@ -492,7 +492,6 @@ func TestCheckOrigin(t *testing.T) {
 	}
 
 	for _, tc := range tcs {
-		tc := tc
 		t.Run(tc.Name, func(t *testing.T) {
 			s := &webtransport.Server{
 				H3:          http3.Server{TLSConfig: webtransport.TLSConf},

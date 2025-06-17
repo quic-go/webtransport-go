@@ -3,20 +3,17 @@ package webtransport
 import (
 	"errors"
 	"math"
-	"math/rand"
+	"math/rand/v2"
 	"testing"
-	"time"
 
 	"github.com/quic-go/quic-go"
 
 	"github.com/stretchr/testify/require"
 )
 
-var random = rand.New(rand.NewSource(time.Now().UnixNano()))
-
 func TestErrorCodeRoundTrip(t *testing.T) {
 	for i := 0; i < 1e4; i++ {
-		n := StreamErrorCode(random.Int63())
+		n := StreamErrorCode(rand.Int64())
 		httpCode := webtransportCodeToHTTPCode(n)
 		errorCode, err := httpCodeToWebtransportCode(httpCode)
 		require.NoError(t, err)
@@ -44,7 +41,7 @@ func TestErrorCodeConversionErrors(t *testing.T) {
 	t.Run("greased value", func(t *testing.T) {
 		var counter int
 		for i := 0; i < 1e4; i++ {
-			c := firstErrorCode + uint64(uint32(random.Int63()))
+			c := firstErrorCode + uint64(rand.Uint32())
 			if (c-0x21)%0x1f != 0 {
 				continue
 			}

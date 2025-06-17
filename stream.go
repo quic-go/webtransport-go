@@ -178,12 +178,9 @@ func (s *stream) closeWithSession() {
 }
 
 func (s *stream) SetDeadline(t time.Time) error {
-	err1 := s.sendStream.SetWriteDeadline(t)
-	err2 := s.receiveStream.SetReadDeadline(t)
-	if err1 != nil {
-		return err1
-	}
-	return err2
+	err1 := s.SetWriteDeadline(t)
+	err2 := s.SetReadDeadline(t)
+	return errors.Join(err1, err2)
 }
 
 func (s *stream) StreamID() quic.StreamID {

@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/binary"
 	"io"
-	"math/rand"
+	"math/rand/v2"
 	"net"
 	"sync"
 

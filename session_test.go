@@ -99,23 +99,20 @@ func setupSession(t *testing.T, clientConn, serverConn quic.Connection, sessionI
 		},
 	}
 
-	_, serverAddr := startSimpleWebTransportServer(t, serverConn, &http3.Server{})
-
+	serverAddr := startSimpleWebTransportServer(t, serverConn, &http3.Server{})
 	reqStr, conn := setupRequestStr(t, tr, clientConn, serverAddr)
 	sess = newSession(sessionID, conn, reqStr)
 	return sess
 }
 
-func startSimpleWebTransportServer(t *testing.T, serverConn quic.Connection, server *http3.Server) (_ <-chan http3.Stream, serverAddr string) {
+func startSimpleWebTransportServer(t *testing.T, serverConn quic.Connection, server *http3.Server) (serverAddr string) {
 	// TODO: use t.Context once we switch to Go 1.24
 	testCtx, testCtxCancel := context.WithCancel(context.Background())
 
-	strChan := make(chan http3.Stream, 1)
 	mux := http.NewServeMux()
 	mux.HandleFunc("/webtransport", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.(http.Flusher).Flush()
-		strChan <- w.(http3.HTTPStreamer).HTTPStream()
 		<-testCtx.Done() // block until the test is done
 	})
 	server.Handler = mux
@@ -124,7 +121,7 @@ func startSimpleWebTransportServer(t *testing.T, serverConn quic.Connection, ser
 		server.Close()
 	})
 	go server.ServeQUICConn(serverConn)
-	return strChan, fmt.Sprintf("https://localhost:%d/webtransport", serverConn.LocalAddr().(*net.UDPAddr).Port)
+	return fmt.Sprintf("https://localhost:%d/webtransport", serverConn.LocalAddr().(*net.UDPAddr).Port)
 }
 
 func setupRequestStr(t *testing.T, tr *http3.Transport, clientConn quic.Connection, serverAddr string) (http3.RequestStream, *http3.ClientConn) {
@@ -316,8 +313,8 @@ func testOpenStreamSyncAfterSessionClose(t *testing.T, bidirectional bool) {
 			return false
 		}
 	}
-	_, serverAddr := startSimpleWebTransportServer(t, serverConn, server)
 
+	serverAddr := startSimpleWebTransportServer(t, serverConn, server)
 	reqStr, conn := setupRequestStr(t, &http3.Transport{}, clientConn, serverAddr)
 	unblockOpenStreamSync := make(chan struct{})
 	mockConn := &mockConn{
