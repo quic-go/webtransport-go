@@ -29,6 +29,11 @@ linters:
     usetesting:
       context-background: false
       context-todo: false
+  exclusions:
+    rules:
+      - linters:
+          - staticcheck
+        text: 'SA1019:.+quic\.ConnectionTracing(ID|Key)'
 formatters:
   enable:
     - gofmt
