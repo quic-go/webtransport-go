@@ -73,9 +73,7 @@ func appendSettingsFrame(b []byte, values map[uint64]uint64) []byte {
 }
 
 func TestClientInvalidResponseHandling(t *testing.T) {
-	tlsConf := tlsConf.Clone()
-	tlsConf.NextProtos = []string{"h3"}
-	s, err := quic.ListenAddr("localhost:0", tlsConf, &quic.Config{EnableDatagrams: true})
+	s, err := quic.ListenAddr("localhost:0", webtransport.TLSConf, &quic.Config{EnableDatagrams: true})
 	require.NoError(t, err)
 	errChan := make(chan error)
 	go func() {
@@ -107,7 +105,7 @@ func TestClientInvalidResponseHandling(t *testing.T) {
 		}
 	}()
 
-	d := webtransport.Dialer{TLSClientConfig: &tls.Config{RootCAs: certPool}}
+	d := webtransport.Dialer{TLSClientConfig: &tls.Config{RootCAs: webtransport.CertPool}}
 	_, _, err = d.Dial(context.Background(), fmt.Sprintf("https://localhost:%d", s.Addr().(*net.UDPAddr).Port), nil)
 	require.Error(t, err)
 	var sErr error
@@ -158,9 +156,7 @@ func TestClientInvalidSettingsHandling(t *testing.T) {
 	} {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
-			tlsConf := tlsConf.Clone()
-			tlsConf.NextProtos = []string{http3.NextProtoH3}
-			ln, err := quic.ListenAddr("localhost:0", tlsConf, &quic.Config{EnableDatagrams: true})
+			ln, err := quic.ListenAddr("localhost:0", webtransport.TLSConf, &quic.Config{EnableDatagrams: true})
 			require.NoError(t, err)
 			defer ln.Close()
 
@@ -180,7 +176,7 @@ func TestClientInvalidSettingsHandling(t *testing.T) {
 				}
 			}()
 
-			d := webtransport.Dialer{TLSClientConfig: &tls.Config{RootCAs: certPool}}
+			d := webtransport.Dialer{TLSClientConfig: &tls.Config{RootCAs: webtransport.CertPool}}
 			_, _, err = d.Dial(context.Background(), fmt.Sprintf("https://localhost:%d", ln.Addr().(*net.UDPAddr).Port), nil)
 			require.Error(t, err)
 			require.ErrorContains(t, err, tc.errorStr)
@@ -199,7 +195,7 @@ func TestClientReorderedUpgrade(t *testing.T) {
 	timeout := scaleDuration(100 * time.Millisecond)
 	blockUpgrade := make(chan struct{})
 	s := webtransport.Server{
-		H3: http3.Server{TLSConfig: tlsConf},
+		H3: http3.Server{TLSConfig: webtransport.TLSConf},
 	}
 	addHandler(t, &s, func(c *webtransport.Session) {
 		str, err := c.OpenStream()
@@ -214,7 +210,7 @@ func TestClientReorderedUpgrade(t *testing.T) {
 	go s.Serve(udpConn)
 
 	d := webtransport.Dialer{
-		TLSClientConfig: &tls.Config{RootCAs: certPool},
+		TLSClientConfig: &tls.Config{RootCAs: webtransport.CertPool},
 		QUICConfig:      &quic.Config{EnableDatagrams: true},
 		DialAddr: func(ctx context.Context, addr string, tlsConf *tls.Config, conf *quic.Config) (quic.EarlyConnection, error) {
 			conn, err := quic.DialAddrEarly(ctx, addr, tlsConf, conf)

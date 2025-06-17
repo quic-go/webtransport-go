@@ -45,7 +45,7 @@ func runServer(t *testing.T, s *webtransport.Server) (addr *net.UDPAddr, close f
 func establishSession(t *testing.T, handler func(*webtransport.Session)) (sess *webtransport.Session, close func()) {
 	s := &webtransport.Server{
 		H3: http3.Server{
-			TLSConfig:  tlsConf,
+			TLSConfig:  webtransport.TLSConf,
 			QUICConfig: &quic.Config{Tracer: qlog.DefaultConnectionTracer, EnableDatagrams: true},
 		},
 	}
@@ -53,7 +53,7 @@ func establishSession(t *testing.T, handler func(*webtransport.Session)) (sess *
 
 	addr, closeServer := runServer(t, s)
 	d := webtransport.Dialer{
-		TLSClientConfig: &tls.Config{RootCAs: certPool},
+		TLSClientConfig: &tls.Config{RootCAs: webtransport.CertPool},
 		QUICConfig:      &quic.Config{Tracer: qlog.DefaultConnectionTracer, EnableDatagrams: true},
 	}
 	defer d.Close()
@@ -301,7 +301,7 @@ func TestUnidirectionalStreams(t *testing.T) {
 func TestMultipleClients(t *testing.T) {
 	const numClients = 5
 	s := &webtransport.Server{
-		H3: http3.Server{TLSConfig: tlsConf},
+		H3: http3.Server{TLSConfig: webtransport.TLSConf},
 	}
 	defer s.Close()
 	addHandler(t, s, newEchoHandler(t))
@@ -315,7 +315,7 @@ func TestMultipleClients(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			d := webtransport.Dialer{
-				TLSClientConfig: &tls.Config{RootCAs: certPool},
+				TLSClientConfig: &tls.Config{RootCAs: webtransport.CertPool},
 				QUICConfig:      &quic.Config{Tracer: qlog.DefaultConnectionTracer, EnableDatagrams: true},
 			}
 			defer d.Close()
@@ -495,7 +495,7 @@ func TestCheckOrigin(t *testing.T) {
 		tc := tc
 		t.Run(tc.Name, func(t *testing.T) {
 			s := &webtransport.Server{
-				H3:          http3.Server{TLSConfig: tlsConf},
+				H3:          http3.Server{TLSConfig: webtransport.TLSConf},
 				CheckOrigin: tc.CheckOrigin,
 			}
 			defer s.Close()
@@ -505,7 +505,7 @@ func TestCheckOrigin(t *testing.T) {
 			defer closeServer()
 
 			d := webtransport.Dialer{
-				TLSClientConfig: &tls.Config{RootCAs: certPool},
+				TLSClientConfig: &tls.Config{RootCAs: webtransport.CertPool},
 				QUICConfig:      &quic.Config{Tracer: qlog.DefaultConnectionTracer, EnableDatagrams: true},
 			}
 			defer d.Close()

@@ -10,7 +10,7 @@ cp -r "$DIR" generated
 
 cd generated
 # delete all go-generated files generated (that adhere to the comment convention)
-grep --include \*.go -lrIZ "^// Code generated .* DO NOT EDIT\.$" . | xargs --null rm
+grep --include \*.go -lrIZ "^// Code generated .* DO NOT EDIT\.$" . | xargs -r --null rm
 
 # generate everything
 go generate ./...
