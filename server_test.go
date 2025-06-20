@@ -53,7 +53,7 @@ func TestUpgradeFailures(t *testing.T) {
 	})
 }
 
-func createStreamAndWrite(t *testing.T, conn quic.Connection, sessionID uint64, data []byte) quic.Stream {
+func createStreamAndWrite(t *testing.T, conn *quic.Conn, sessionID uint64, data []byte) *quic.Stream {
 	t.Helper()
 	str, err := conn.OpenStream()
 	require.NoError(t, err)
