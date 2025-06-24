@@ -43,7 +43,7 @@ func newUDPConnLocalhost(t testing.TB) *net.UDPConn {
 	return conn
 }
 
-func newConnPair(t *testing.T) (client, server quic.Connection) {
+func newConnPair(t *testing.T) (client, server *quic.Conn) {
 	t.Helper()
 
 	ln, err := quic.ListenEarly(
@@ -86,14 +86,14 @@ func newConnPair(t *testing.T) (client, server quic.Connection) {
 	return cl, conn
 }
 
-func setupSession(t *testing.T, clientConn, serverConn quic.Connection, sessionID sessionID) *Session {
+func setupSession(t *testing.T, clientConn, serverConn *quic.Conn, sessionID sessionID) *Session {
 	var sess *Session
 	tr := &http3.Transport{
-		UniStreamHijacker: func(_ http3.StreamType, _ quic.ConnectionTracingID, str quic.ReceiveStream, _ error) (hijacked bool) {
+		UniStreamHijacker: func(_ http3.StreamType, _ quic.ConnectionTracingID, str *quic.ReceiveStream, _ error) (hijacked bool) {
 			sess.addIncomingUniStream(str)
 			return true
 		},
-		StreamHijacker: func(_ http3.FrameType, _ quic.ConnectionTracingID, str quic.Stream, _ error) (hijacked bool, err error) {
+		StreamHijacker: func(_ http3.FrameType, _ quic.ConnectionTracingID, str *quic.Stream, _ error) (hijacked bool, err error) {
 			sess.addIncomingStream(str)
 			return true, nil
 		},
@@ -101,11 +101,11 @@ func setupSession(t *testing.T, clientConn, serverConn quic.Connection, sessionI
 
 	serverAddr := startSimpleWebTransportServer(t, serverConn, &http3.Server{})
 	reqStr, conn := setupRequestStr(t, tr, clientConn, serverAddr)
-	sess = newSession(sessionID, conn, reqStr)
+	sess = newSession(sessionID, conn.Conn(), reqStr)
 	return sess
 }
 
-func startSimpleWebTransportServer(t *testing.T, serverConn quic.Connection, server *http3.Server) (serverAddr string) {
+func startSimpleWebTransportServer(t *testing.T, serverConn *quic.Conn, server *http3.Server) (serverAddr string) {
 	// TODO: use t.Context once we switch to Go 1.24
 	testCtx, testCtxCancel := context.WithCancel(context.Background())
 
@@ -124,7 +124,7 @@ func startSimpleWebTransportServer(t *testing.T, serverConn quic.Connection, ser
 	return fmt.Sprintf("https://localhost:%d/webtransport", serverConn.LocalAddr().(*net.UDPAddr).Port)
 }
 
-func setupRequestStr(t *testing.T, tr *http3.Transport, clientConn quic.Connection, serverAddr string) (http3.RequestStream, *http3.ClientConn) {
+func setupRequestStr(t *testing.T, tr *http3.Transport, clientConn *quic.Conn, serverAddr string) (*http3.RequestStream, *http3.ClientConn) {
 	t.Helper()
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -242,15 +242,15 @@ func testOpenStreamSyncSessionClose(t *testing.T, openStream func(*Session) erro
 }
 
 type mockConn struct {
-	http3.Connection
+	http3Conn
 	hijackMagicNumber   uint64
 	blockOpenStreamSync chan struct{}
 }
 
-var _ http3.Connection = &mockConn{}
+var _ http3Conn = &mockConn{}
 
-func (c *mockConn) OpenStreamSync(ctx context.Context) (quic.Stream, error) {
-	str, err := c.Connection.OpenStreamSync(ctx)
+func (c *mockConn) OpenStreamSync(ctx context.Context) (*quic.Stream, error) {
+	str, err := c.http3Conn.OpenStreamSync(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -262,8 +262,8 @@ func (c *mockConn) OpenStreamSync(ctx context.Context) (quic.Stream, error) {
 	return str, nil
 }
 
-func (c *mockConn) OpenUniStreamSync(ctx context.Context) (quic.SendStream, error) {
-	str, err := c.Connection.OpenUniStreamSync(ctx)
+func (c *mockConn) OpenUniStreamSync(ctx context.Context) (*quic.SendStream, error) {
+	str, err := c.http3Conn.OpenUniStreamSync(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -297,7 +297,7 @@ func testOpenStreamSyncAfterSessionClose(t *testing.T, bidirectional bool) {
 	server := &http3.Server{}
 	switch bidirectional {
 	case true:
-		server.StreamHijacker = func(ft http3.FrameType, connTracingID quic.ConnectionTracingID, str quic.Stream, err error) (bool /* hijacked */, error) {
+		server.StreamHijacker = func(ft http3.FrameType, connTracingID quic.ConnectionTracingID, str *quic.Stream, err error) (bool /* hijacked */, error) {
 			if ft == magicNumber {
 				serverStrChan <- str
 				return true, nil
@@ -305,7 +305,7 @@ func testOpenStreamSyncAfterSessionClose(t *testing.T, bidirectional bool) {
 			return false, nil
 		}
 	case false:
-		server.UniStreamHijacker = func(ft http3.StreamType, connTracingID quic.ConnectionTracingID, str quic.ReceiveStream, err error) bool /* hijacked */ {
+		server.UniStreamHijacker = func(ft http3.StreamType, connTracingID quic.ConnectionTracingID, str *quic.ReceiveStream, err error) bool /* hijacked */ {
 			if ft == magicNumber {
 				serverStrChan <- str
 				return true
@@ -318,7 +318,7 @@ func testOpenStreamSyncAfterSessionClose(t *testing.T, bidirectional bool) {
 	reqStr, conn := setupRequestStr(t, &http3.Transport{}, clientConn, serverAddr)
 	unblockOpenStreamSync := make(chan struct{})
 	mockConn := &mockConn{
-		Connection:          conn,
+		http3Conn:           conn.Conn(),
 		hijackMagicNumber:   magicNumber,
 		blockOpenStreamSync: unblockOpenStreamSync,
 	}

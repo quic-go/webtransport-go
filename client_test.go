@@ -5,9 +5,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
-	"io"
 	"net"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -19,33 +17,6 @@ import (
 
 	"github.com/stretchr/testify/require"
 )
-
-type delayedStream struct {
-	done <-chan struct{}
-	quic.Stream
-}
-
-func (s *delayedStream) Read(b []byte) (int, error) {
-	<-s.done
-	return s.Stream.Read(b)
-}
-
-type requestStreamDelayingConn struct {
-	done    <-chan struct{}
-	counter int32
-	quic.EarlyConnection
-}
-
-func (c *requestStreamDelayingConn) OpenStreamSync(ctx context.Context) (quic.Stream, error) {
-	str, err := c.EarlyConnection.OpenStreamSync(ctx)
-	if err != nil {
-		return nil, err
-	}
-	if atomic.CompareAndSwapInt32(&c.counter, 0, 1) {
-		return &delayedStream{done: c.done, Stream: str}, nil
-	}
-	return str, nil
-}
 
 const (
 	// Extended CONNECT, RFC 9220
@@ -187,64 +158,4 @@ func TestClientInvalidSettingsHandling(t *testing.T) {
 			}
 		})
 	}
-}
-
-func TestClientReorderedUpgrade(t *testing.T) {
-	timeout := scaleDuration(100 * time.Millisecond)
-	blockUpgrade := make(chan struct{})
-	s := webtransport.Server{
-		H3: http3.Server{TLSConfig: webtransport.TLSConf},
-	}
-	addHandler(t, &s, func(c *webtransport.Session) {
-		str, err := c.OpenStream()
-		require.NoError(t, err)
-		_, err = str.Write([]byte("foobar"))
-		require.NoError(t, err)
-		require.NoError(t, str.Close())
-	})
-	udpConn, err := net.ListenUDP("udp", nil)
-	require.NoError(t, err)
-	port := udpConn.LocalAddr().(*net.UDPAddr).Port
-	go s.Serve(udpConn)
-
-	d := webtransport.Dialer{
-		TLSClientConfig: &tls.Config{RootCAs: webtransport.CertPool},
-		QUICConfig:      &quic.Config{EnableDatagrams: true},
-		DialAddr: func(ctx context.Context, addr string, tlsConf *tls.Config, conf *quic.Config) (quic.EarlyConnection, error) {
-			conn, err := quic.DialAddrEarly(ctx, addr, tlsConf, conf)
-			if err != nil {
-				return nil, err
-			}
-			return &requestStreamDelayingConn{done: blockUpgrade, EarlyConnection: conn}, nil
-		},
-	}
-	sessChan := make(chan *webtransport.Session)
-	errChan := make(chan error)
-	go func() {
-		// This will block until blockUpgrade is closed.
-		rsp, sess, err := d.Dial(context.Background(), fmt.Sprintf("https://localhost:%d/webtransport", port), nil)
-		if err != nil {
-			errChan <- err
-			return
-		}
-		require.Equal(t, 200, rsp.StatusCode)
-		sessChan <- sess
-	}()
-
-	time.Sleep(timeout)
-	close(blockUpgrade)
-	var sess *webtransport.Session
-	select {
-	case sess = <-sessChan:
-	case err := <-errChan:
-		require.NoError(t, err)
-	}
-	defer sess.CloseWithError(0, "")
-	ctx, cancel := context.WithTimeout(context.Background(), scaleDuration(100*time.Millisecond))
-	defer cancel()
-	str, err := sess.AcceptStream(ctx)
-	require.NoError(t, err)
-	data, err := io.ReadAll(str)
-	require.NoError(t, err)
-	require.Equal(t, []byte("foobar"), data)
 }
