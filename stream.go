@@ -1,6 +1,7 @@
 package webtransport
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -17,6 +18,7 @@ type quicSendStream interface {
 	io.WriteCloser
 	StreamID() quic.StreamID
 	CancelWrite(quic.StreamErrorCode)
+	Context() context.Context
 	SetWriteDeadline(time.Time) error
 }
 
@@ -94,6 +96,10 @@ func (s *SendStream) Close() error {
 	}
 	s.onClose()
 	return maybeConvertStreamError(s.str.Close())
+}
+
+func (s *SendStream) Context() context.Context {
+	return s.str.Context()
 }
 
 func (s *SendStream) SetWriteDeadline(t time.Time) error {
@@ -199,6 +205,10 @@ func (s *Stream) registerClose(isSendSide bool) {
 func (s *Stream) closeWithSession() {
 	s.sendStr.closeWithSession()
 	s.recvStr.closeWithSession()
+}
+
+func (s *Stream) Context() context.Context {
+	return s.sendStr.Context()
 }
 
 func (s *Stream) SetWriteDeadline(t time.Time) error {
