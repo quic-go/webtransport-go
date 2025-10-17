@@ -123,7 +123,7 @@ func (s *Server) Serve(conn net.PacketConn) error {
 }
 
 // ServeQUICConn serves an already existing QUIC listener.
-func (s *Server) ServeListener(ln quic.EarlyListener) error {
+func (s *Server) ServeListener(ln *quic.EarlyListener) error {
 	if err := s.initialize(); err != nil {
 		return err
 	}
