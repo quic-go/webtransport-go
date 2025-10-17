@@ -4,18 +4,22 @@ name: Interop
 jobs:
   interop:
     runs-on: "ubuntu-latest"
+    strategy:
+      fail-fast: false
+      matrix:
+        go: [ "1.23.x", "1.24.x" ]
     steps:
-    - uses: actions/checkout@v3
-    - uses: nanasess/setup-chromedriver@v1
+    - uses: actions/checkout@v4
+    - uses: nanasess/setup-chromedriver@v2
       with:
         # Optional: do not specify to match Chrome's version
-        chromedriver-version: '105.0.5195.52'
-    - uses: actions/setup-go@v3
+        chromedriver-version: '124.0.6367.62'
+    - uses: actions/setup-go@v5
       with:
-        go-version: "1.19.x"
+        go-version: ${{ matrix.go }}
     - name: Build interop server
       run: go build -o interopserver interop/main.go
-    - uses: actions/setup-python@v4
+    - uses: actions/setup-python@v5
       with:
         python-version: '3.10'
     - name: Install Python dependencies

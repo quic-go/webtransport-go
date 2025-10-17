@@ -8,7 +8,6 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"os"
 	"testing"
 	"time"
@@ -21,6 +20,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 )
+
+const webTransportFrameType = 0x41
 
 func scaleDuration(d time.Duration) time.Duration {
 	if os.Getenv("CI") != "" {
@@ -52,27 +53,12 @@ func TestUpgradeFailures(t *testing.T) {
 	})
 }
 
-func newWebTransportRequest(t *testing.T, addr string) *http.Request {
+func createStreamAndWrite(t *testing.T, conn *quic.Conn, sessionID uint64, data []byte) *quic.Stream {
 	t.Helper()
-	u, err := url.Parse(addr)
-	require.NoError(t, err)
-	hdr := make(http.Header)
-	hdr.Add("Sec-Webtransport-Http3-Draft02", "1")
-	return &http.Request{
-		Method: http.MethodConnect,
-		Header: hdr,
-		Proto:  "webtransport",
-		Host:   u.Host,
-		URL:    u,
-	}
-}
-
-func createStreamAndWrite(t *testing.T, qconn http3.StreamCreator, sessionID uint64, data []byte) quic.Stream {
-	t.Helper()
-	str, err := qconn.OpenStream()
+	str, err := conn.OpenStream()
 	require.NoError(t, err)
 	var buf []byte
-	buf = quicvarint.Append(buf, 0x41)
+	buf = quicvarint.Append(buf, webTransportFrameType)
 	buf = quicvarint.Append(buf, sessionID) // stream ID of the stream used to establish the WebTransport session.
 	buf = append(buf, data...)
 	_, err = str.Write(buf)
@@ -83,7 +69,7 @@ func createStreamAndWrite(t *testing.T, qconn http3.StreamCreator, sessionID uin
 
 func TestServerReorderedUpgradeRequest(t *testing.T) {
 	s := webtransport.Server{
-		H3: http3.Server{TLSConfig: tlsConf},
+		H3: http3.Server{TLSConfig: webtransport.TLSConf},
 	}
 	defer s.Close()
 	connChan := make(chan *webtransport.Session)
@@ -96,28 +82,30 @@ func TestServerReorderedUpgradeRequest(t *testing.T) {
 	port := udpConn.LocalAddr().(*net.UDPAddr).Port
 	go s.Serve(udpConn)
 
-	rt := http3.RoundTripper{
-		TLSClientConfig: &tls.Config{RootCAs: certPool},
-	}
-	defer rt.Close()
-	// This sends a request, so that we can hijack the connection. Stream ID: 0.
-	req, err := http.NewRequest(http.MethodGet, fmt.Sprintf("https://localhost:%d/", port), nil)
+	cconn, err := quic.DialAddr(
+		context.Background(),
+		fmt.Sprintf("localhost:%d", port),
+		&tls.Config{RootCAs: webtransport.CertPool, NextProtos: []string{http3.NextProtoH3}},
+		&quic.Config{EnableDatagrams: true},
+	)
 	require.NoError(t, err)
-	rsp, err := rt.RoundTrip(req)
-	require.NoError(t, err)
-	qconn := rsp.Body.(http3.Hijacker).StreamCreator()
-	// Open a new stream for a WebTransport session we'll establish later. Stream ID: 4.
-	createStreamAndWrite(t, qconn, 8, []byte("foobar"))
+	// Open a new stream for a WebTransport session we'll establish later. Stream ID: 0.
+	createStreamAndWrite(t, cconn, 4, []byte("foobar"))
+	tr := &http3.Transport{EnableDatagrams: true}
+	conn := tr.NewClientConn(cconn)
 
 	// make sure this request actually arrives first
 	time.Sleep(scaleDuration(50 * time.Millisecond))
 
-	rsp, err = rt.RoundTripOpt(
-		newWebTransportRequest(t, fmt.Sprintf("https://localhost:%d/webtransport", port)),
-		http3.RoundTripOpt{DontCloseRequestStream: true},
-	)
+	// Create a new WebTransport session. Stream ID: 4.
+	str, err := conn.OpenRequestStream(context.Background())
 	require.NoError(t, err)
-	require.Equal(t, 200, rsp.StatusCode)
+	require.NoError(t, str.SendRequestHeader(
+		webtransport.NewWebTransportRequest(t, fmt.Sprintf("https://localhost:%d/webtransport", port)),
+	))
+	rsp, err := str.ReadResponse()
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, rsp.StatusCode)
 	sconn := <-connChan
 	defer sconn.CloseWithError(0, "")
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
@@ -129,7 +117,7 @@ func TestServerReorderedUpgradeRequest(t *testing.T) {
 	require.Equal(t, []byte("foobar"), data)
 
 	// Establish another stream and make sure it's accepted now.
-	createStreamAndWrite(t, qconn, 8, []byte("raboof"))
+	createStreamAndWrite(t, cconn, 4, []byte("raboof"))
 	ctx, cancel = context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
 	sstr, err = sconn.AcceptStream(ctx)
@@ -142,8 +130,8 @@ func TestServerReorderedUpgradeRequest(t *testing.T) {
 func TestServerReorderedUpgradeRequestTimeout(t *testing.T) {
 	timeout := scaleDuration(100 * time.Millisecond)
 	s := webtransport.Server{
-		H3:                      http3.Server{TLSConfig: tlsConf},
-		StreamReorderingTimeout: timeout,
+		H3:                http3.Server{TLSConfig: webtransport.TLSConf, EnableDatagrams: true},
+		ReorderingTimeout: timeout,
 	}
 	defer s.Close()
 	connChan := make(chan *webtransport.Session)
@@ -156,20 +144,21 @@ func TestServerReorderedUpgradeRequestTimeout(t *testing.T) {
 	port := udpConn.LocalAddr().(*net.UDPAddr).Port
 	go s.Serve(udpConn)
 
-	rt := http3.RoundTripper{
-		TLSClientConfig: &tls.Config{RootCAs: certPool},
-	}
-	defer rt.Close()
-	// This sends a request, so that we can hijack the connection. Stream ID: 0.
-	req, err := http.NewRequest(http.MethodGet, fmt.Sprintf("https://localhost:%d/", port), nil)
+	cconn, err := quic.DialAddr(
+		context.Background(),
+		fmt.Sprintf("localhost:%d", port),
+		&tls.Config{RootCAs: webtransport.CertPool, NextProtos: []string{http3.NextProtoH3}},
+		&quic.Config{EnableDatagrams: true},
+	)
 	require.NoError(t, err)
-	rsp, err := rt.RoundTrip(req)
-	require.NoError(t, err)
-	qconn := rsp.Body.(http3.Hijacker).StreamCreator()
-	// Open a new stream for a WebTransport session we'll establish later. Stream ID: 4.
-	str := createStreamAndWrite(t, qconn, 8, []byte("foobar"))
+
+	// Open a new stream for a WebTransport session we'll establish later. Stream ID: 0.
+	str := createStreamAndWrite(t, cconn, 4, []byte("foobar"))
 
 	time.Sleep(2 * timeout)
+
+	tr := &http3.Transport{EnableDatagrams: true}
+	conn := tr.NewClientConn(cconn)
 
 	// Reordering was too long. The stream should now have been reset by the server.
 	_, err = str.Read([]byte{0})
@@ -178,12 +167,14 @@ func TestServerReorderedUpgradeRequestTimeout(t *testing.T) {
 	require.Equal(t, webtransport.WebTransportBufferedStreamRejectedErrorCode, streamErr.ErrorCode)
 
 	// Now establish the session. Make sure we don't accept the stream.
-	rsp, err = rt.RoundTripOpt(
-		newWebTransportRequest(t, fmt.Sprintf("https://localhost:%d/webtransport", port)),
-		http3.RoundTripOpt{DontCloseRequestStream: true},
-	)
+	requestStr, err := conn.OpenRequestStream(context.Background())
 	require.NoError(t, err)
-	require.Equal(t, 200, rsp.StatusCode)
+	require.NoError(t, requestStr.SendRequestHeader(
+		webtransport.NewWebTransportRequest(t, fmt.Sprintf("https://localhost:%d/webtransport", port)),
+	))
+	rsp, err := requestStr.ReadResponse()
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, rsp.StatusCode)
 	sconn := <-connChan
 	defer sconn.CloseWithError(0, "")
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
@@ -192,7 +183,7 @@ func TestServerReorderedUpgradeRequestTimeout(t *testing.T) {
 	require.ErrorIs(t, err, context.DeadlineExceeded)
 
 	// Establish another stream and make sure it's accepted now.
-	createStreamAndWrite(t, qconn, 8, []byte("raboof"))
+	createStreamAndWrite(t, cconn, 4, []byte("raboof"))
 	ctx, cancel = context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
 	sstr, err := sconn.AcceptStream(ctx)
@@ -205,8 +196,8 @@ func TestServerReorderedUpgradeRequestTimeout(t *testing.T) {
 func TestServerReorderedMultipleStreams(t *testing.T) {
 	timeout := scaleDuration(150 * time.Millisecond)
 	s := webtransport.Server{
-		H3:                      http3.Server{TLSConfig: tlsConf},
-		StreamReorderingTimeout: timeout,
+		H3:                http3.Server{TLSConfig: webtransport.TLSConf, EnableDatagrams: true},
+		ReorderingTimeout: timeout,
 	}
 	defer s.Close()
 	connChan := make(chan *webtransport.Session)
@@ -219,24 +210,21 @@ func TestServerReorderedMultipleStreams(t *testing.T) {
 	port := udpConn.LocalAddr().(*net.UDPAddr).Port
 	go s.Serve(udpConn)
 
-	rt := http3.RoundTripper{
-		TLSClientConfig: &tls.Config{RootCAs: certPool},
-	}
-	defer rt.Close()
-	// This sends a request, so that we can hijack the connection. Stream ID: 0.
-	req, err := http.NewRequest(http.MethodGet, fmt.Sprintf("https://localhost:%d/", port), nil)
+	cconn, err := quic.DialAddr(
+		context.Background(),
+		fmt.Sprintf("localhost:%d", port),
+		&tls.Config{RootCAs: webtransport.CertPool, NextProtos: []string{http3.NextProtoH3}},
+		&quic.Config{EnableDatagrams: true},
+	)
 	require.NoError(t, err)
-	rsp, err := rt.RoundTrip(req)
-	require.NoError(t, err)
-	qconn := rsp.Body.(http3.Hijacker).StreamCreator()
 	start := time.Now()
-	// Open a new stream for a WebTransport session we'll establish later. Stream ID: 4.
-	str1 := createStreamAndWrite(t, qconn, 12, []byte("foobar"))
+	// Open a new stream for a WebTransport session we'll establish later. Stream ID: 0.
+	str1 := createStreamAndWrite(t, cconn, 8, []byte("foobar"))
 
 	// After a while, open another stream.
 	time.Sleep(timeout / 2)
-	// Open a new stream for a WebTransport session we'll establish later. Stream ID: 8.
-	createStreamAndWrite(t, qconn, 12, []byte("raboof"))
+	// Open a new stream for a WebTransport session we'll establish later. Stream ID: 4.
+	createStreamAndWrite(t, cconn, 8, []byte("raboof"))
 
 	// Reordering was too long. The stream should now have been reset by the server.
 	_, err = str1.Read([]byte{0})
@@ -247,13 +235,17 @@ func TestServerReorderedMultipleStreams(t *testing.T) {
 	require.GreaterOrEqual(t, took, timeout)
 	require.Less(t, took, timeout*5/4)
 
+	tr := &http3.Transport{EnableDatagrams: true}
+	conn := tr.NewClientConn(cconn)
 	// Now establish the session. Make sure we don't accept the stream.
-	rsp, err = rt.RoundTripOpt(
-		newWebTransportRequest(t, fmt.Sprintf("https://localhost:%d/webtransport", port)),
-		http3.RoundTripOpt{DontCloseRequestStream: true},
-	)
+	requestStr, err := conn.OpenRequestStream(context.Background())
 	require.NoError(t, err)
-	require.Equal(t, 200, rsp.StatusCode)
+	require.NoError(t, requestStr.SendRequestHeader(
+		webtransport.NewWebTransportRequest(t, fmt.Sprintf("https://localhost:%d/webtransport", port)),
+	))
+	rsp, err := requestStr.ReadResponse()
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, rsp.StatusCode)
 	sconn := <-connChan
 	defer sconn.CloseWithError(0, "")
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
@@ -263,6 +255,46 @@ func TestServerReorderedMultipleStreams(t *testing.T) {
 	data, err := io.ReadAll(sstr)
 	require.NoError(t, err)
 	require.Equal(t, []byte("raboof"), data)
+}
+
+func TestServerSettingsCheck(t *testing.T) {
+	timeout := scaleDuration(150 * time.Millisecond)
+	s := webtransport.Server{
+		H3:                http3.Server{TLSConfig: webtransport.TLSConf, EnableDatagrams: true},
+		ReorderingTimeout: timeout,
+	}
+	errChan := make(chan error, 1)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/webtransport", func(w http.ResponseWriter, r *http.Request) {
+		_, err := s.Upgrade(w, r)
+		w.WriteHeader(http.StatusNotImplemented)
+		errChan <- err
+	})
+	s.H3.Handler = mux
+	udpConn, err := net.ListenUDP("udp", nil)
+	require.NoError(t, err)
+	port := udpConn.LocalAddr().(*net.UDPAddr).Port
+	go s.Serve(udpConn)
+
+	cconn, err := quic.DialAddr(
+		context.Background(),
+		fmt.Sprintf("localhost:%d", port),
+		&tls.Config{RootCAs: webtransport.CertPool, NextProtos: []string{http3.NextProtoH3}},
+		&quic.Config{EnableDatagrams: true},
+	)
+	require.NoError(t, err)
+	tr := &http3.Transport{EnableDatagrams: false}
+	conn := tr.NewClientConn(cconn)
+	requestStr, err := conn.OpenRequestStream(context.Background())
+	require.NoError(t, err)
+	require.NoError(t, requestStr.SendRequestHeader(
+		webtransport.NewWebTransportRequest(t, fmt.Sprintf("https://localhost:%d/webtransport", port)),
+	))
+	rsp, err := requestStr.ReadResponse()
+	require.NoError(t, err)
+	require.Equal(t, http.StatusNotImplemented, rsp.StatusCode)
+
+	require.ErrorContains(t, <-errChan, "webtransport: missing datagram support")
 }
 
 func TestImmediateClose(t *testing.T) {

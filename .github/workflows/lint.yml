@@ -1,0 +1,39 @@
+on: [push, pull_request]
+
+jobs:
+  check:
+    strategy:
+      fail-fast: false
+      matrix:
+        go: [ "1.23.x", "1.24.x" ]
+    runs-on: ubuntu-latest
+    name: Lint
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ matrix.go }}
+      - name: Check for //go:build ignore in .go files
+        run: |
+          IGNORED_FILES=$(grep -rl '//go:build ignore' . --include='*.go') || true
+          if [ -n "$IGNORED_FILES" ]; then
+            echo "::error::Found ignored Go files: $IGNORED_FILES"
+            exit 1
+          fi
+      - name: Check that go.mod is tidied
+        if: success() || failure() # run this step even if the previous one failed
+        run: |
+          cp go.mod go.mod.orig
+          cp go.sum go.sum.orig
+          go mod tidy
+          diff go.mod go.mod.orig
+          diff go.sum go.sum.orig
+      - name: Run code generators
+        if: success() || failure() # run this step even if the previous one failed
+        run: .github/workflows/go-generate.sh
+      - name: golangci-lint
+        if: success() || failure() # run this step even if the previous one failed
+        uses: golangci/golangci-lint-action@v8
+        with:
+          args: --timeout=3m
+          version: v2.1.6

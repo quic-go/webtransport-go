@@ -8,14 +8,14 @@ import (
 )
 
 // StreamErrorCode is an error code used for stream termination.
-type StreamErrorCode uint8
+type StreamErrorCode uint32
 
 // SessionErrorCode is an error code for session termination.
 type SessionErrorCode uint32
 
 const (
 	firstErrorCode = 0x52e4a40fa8db
-	lastErrorCode  = 0x52e4a40fa9e2
+	lastErrorCode  = 0x52e5ac983162
 )
 
 func webtransportCodeToHTTPCode(n StreamErrorCode) quic.StreamErrorCode {
@@ -55,6 +55,7 @@ const WebTransportBufferedStreamRejectedErrorCode quic.StreamErrorCode = 0x3994b
 // StreamError is the error that is returned from stream operations (Read, Write) when the stream is canceled.
 type StreamError struct {
 	ErrorCode StreamErrorCode
+	Remote    bool
 }
 
 func (e *StreamError) Is(target error) bool {
@@ -66,13 +67,13 @@ func (e *StreamError) Error() string {
 	return fmt.Sprintf("stream canceled with error code %d", e.ErrorCode)
 }
 
-// ConnectionError is a WebTransport connection error.
-type ConnectionError struct {
+// SessionError is a WebTransport connection error.
+type SessionError struct {
 	Remote    bool
 	ErrorCode SessionErrorCode
 	Message   string
 }
 
-var _ error = &ConnectionError{}
+var _ error = &SessionError{}
 
-func (e *ConnectionError) Error() string { return e.Message }
+func (e *SessionError) Error() string { return e.Message }

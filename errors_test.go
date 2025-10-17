@@ -3,6 +3,7 @@ package webtransport
 import (
 	"errors"
 	"math"
+	"math/rand/v2"
 	"testing"
 
 	"github.com/quic-go/quic-go"
@@ -11,31 +12,45 @@ import (
 )
 
 func TestErrorCodeRoundTrip(t *testing.T) {
-	for i := 0; i < math.MaxUint8; i++ {
-		httpCode := webtransportCodeToHTTPCode(StreamErrorCode(i))
+	for i := 0; i < 1e4; i++ {
+		n := StreamErrorCode(rand.Int64())
+		httpCode := webtransportCodeToHTTPCode(n)
 		errorCode, err := httpCodeToWebtransportCode(httpCode)
 		require.NoError(t, err)
-		require.Equal(t, StreamErrorCode(i), errorCode)
+		require.Equal(t, n, errorCode)
 	}
 }
 
 func TestErrorCodeConversionErrors(t *testing.T) {
 	t.Run("too small", func(t *testing.T) {
-		_, err := httpCodeToWebtransportCode(firstErrorCode - 1)
+		first, err := httpCodeToWebtransportCode(firstErrorCode)
+		require.NoError(t, err)
+		require.Zero(t, first)
+		_, err = httpCodeToWebtransportCode(firstErrorCode - 1)
 		require.EqualError(t, err, "error code outside of expected range")
 	})
 
 	t.Run("too large", func(t *testing.T) {
-		_, err := httpCodeToWebtransportCode(lastErrorCode + 1)
+		last, err := httpCodeToWebtransportCode(lastErrorCode)
+		require.NoError(t, err)
+		require.Equal(t, StreamErrorCode(math.MaxUint32), last)
+		_, err = httpCodeToWebtransportCode(lastErrorCode + 1)
 		require.EqualError(t, err, "error code outside of expected range")
 	})
 
 	t.Run("greased value", func(t *testing.T) {
-		invalids := []quic.StreamErrorCode{0x52e4a40fa8f9, 0x52e4a40fa918, 0x52e4a40fa937, 0x52e4a40fa956, 0x52e4a40fa975, 0x52e4a40fa994, 0x52e4a40fa9b3, 0x52e4a40fa9d2}
-		for _, c := range invalids {
-			_, err := httpCodeToWebtransportCode(c)
+		var counter int
+		for i := 0; i < 1e4; i++ {
+			c := firstErrorCode + uint64(rand.Uint32())
+			if (c-0x21)%0x1f != 0 {
+				continue
+			}
+			counter++
+			_, err := httpCodeToWebtransportCode(quic.StreamErrorCode(c))
 			require.EqualError(t, err, "invalid error code")
 		}
+		t.Logf("checked %d greased values", counter)
+		require.NotZero(t, counter)
 	})
 }
 
