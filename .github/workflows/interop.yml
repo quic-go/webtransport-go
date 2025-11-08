@@ -14,7 +14,7 @@ jobs:
       with:
         # Optional: do not specify to match Chrome's version
         chromedriver-version: '124.0.6367.62'
-    - uses: actions/setup-go@v5
+    - uses: actions/setup-go@v6
       with:
         go-version: ${{ matrix.go }}
     - name: Build interop server
