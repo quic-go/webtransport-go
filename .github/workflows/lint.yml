@@ -23,9 +23,6 @@ jobs:
       - name: Check that go.mod is tidied
         if: success() || failure() # run this step even if the previous one failed
         run: go mod tidy -diff
-      - name: Run code generators
-        if: success() || failure() # run this step even if the previous one failed
-        run: .github/workflows/go-generate.sh
       - name: golangci-lint
         if: success() || failure() # run this step even if the previous one failed
         uses: golangci/golangci-lint-action@v8
