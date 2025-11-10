@@ -25,7 +25,7 @@ jobs:
         run: go mod tidy -diff
       - name: golangci-lint
         if: success() || failure() # run this step even if the previous one failed
-        uses: golangci/golangci-lint-action@v8
+        uses: golangci/golangci-lint-action@v9
         with:
           args: --timeout=3m
           version: v2.1.6
