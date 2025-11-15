@@ -86,6 +86,12 @@ var _ http3Conn = &http3.Conn{}
 
 var _ http3Conn = &http3.Conn{}
 
+// SessionState contains the state of a WebTransport session
+type SessionState struct {
+	// ConnectionState contains the QUIC connection state, including TLS handshake information
+	ConnectionState quic.ConnectionState
+}
+
 type Session struct {
 	sessionID sessionID
 	conn      http3Conn
@@ -440,6 +446,9 @@ func (s *Session) closeWithError(closeErr error) (bool /* first call to close se
 	return true, nil
 }
 
-func (s *Session) ConnectionState() quic.ConnectionState {
-	return s.conn.ConnectionState()
+// SessionState returns the current state of the session
+func (s *Session) SessionState() SessionState {
+	return SessionState{
+		ConnectionState: s.conn.ConnectionState(),
+	}
 }
