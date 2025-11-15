@@ -183,13 +183,7 @@ func (s *Server) Upgrade(w http.ResponseWriter, r *http.Request) (*Session, erro
 	if !s.CheckOrigin(r) {
 		return nil, errors.New("webtransport: request origin not allowed")
 	}
-	selectedProtocol, err := selectProtocol(
-		r.Header[http.CanonicalHeaderKey(wtAvailableProtocolsHeader)],
-		s.ApplicationProtocols,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("failed to select protocol: %w", err)
-	}
+	selectedProtocol := s.selectProtocol(r.Header[http.CanonicalHeaderKey(wtAvailableProtocolsHeader)])
 
 	// Wait for SETTINGS
 	conn := w.(http3.Hijacker).Connection()
@@ -207,7 +201,10 @@ func (s *Server) Upgrade(w http.ResponseWriter, r *http.Request) (*Session, erro
 
 	w.Header().Add(webTransportDraftHeaderKey, webTransportDraftHeaderValue)
 	if selectedProtocol != "" {
-		v, _ := httpsfv.Marshal(httpsfv.NewItem(selectedProtocol))
+		v, err := httpsfv.Marshal(httpsfv.NewItem(selectedProtocol))
+		if err != nil {
+			return nil, fmt.Errorf("failed to marshal selected protocol: %w", err)
+		}
 		w.Header().Add(wtProtocolHeader, v)
 	}
 	w.WriteHeader(http.StatusOK)
@@ -218,31 +215,31 @@ func (s *Server) Upgrade(w http.ResponseWriter, r *http.Request) (*Session, erro
 	return s.conns.AddSession(conn, sessID, str, selectedProtocol), nil
 }
 
-func selectProtocol(theirs, ours []string) (string, error) {
+func (s *Server) selectProtocol(theirs []string) string {
 	list, err := httpsfv.UnmarshalList(theirs)
 	if err != nil {
-		return "", fmt.Errorf("failed to unmarshal application protocols: %w", err)
+		return ""
 	}
 	offered := make([]string, 0, len(list))
 	for _, item := range list {
 		i, ok := item.(httpsfv.Item)
 		if !ok {
-			return "", fmt.Errorf("failed to assert type httpsfv.Item for offered protocol: %v", item)
+			return ""
 		}
-		s, ok := i.Value.(string)
+		protocol, ok := i.Value.(string)
 		if !ok {
-			return "", fmt.Errorf("failed to assert type string for offered protocol value: %v", i.Value)
+			return ""
 		}
-		offered = append(offered, s)
+		offered = append(offered, protocol)
 	}
 	var selectedProtocol string
-	for _, offered := range offered {
-		if slices.Contains(ours, offered) {
-			selectedProtocol = offered
+	for _, p := range offered {
+		if slices.Contains(s.ApplicationProtocols, p) {
+			selectedProtocol = p
 			break
 		}
 	}
-	return selectedProtocol, nil
+	return selectedProtocol
 }
 
 // copied from https://github.com/gorilla/websocket

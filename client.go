@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"slices"
 	"sync"
 	"time"
 
@@ -181,20 +182,26 @@ func (d *Dialer) Dial(ctx context.Context, urlStr string, reqHdr http.Header) (*
 	if rsp.StatusCode < 200 || rsp.StatusCode >= 300 {
 		return rsp, nil, fmt.Errorf("received status %d", rsp.StatusCode)
 	}
-
-	var negotiatedProtocol string
+	var protocol string
 	if protocolHeader, ok := rsp.Header[http.CanonicalHeaderKey(wtProtocolHeader)]; ok {
-		negotiatedProtocolItem, err := httpsfv.UnmarshalItem(protocolHeader)
-		if err != nil {
-			return nil, nil, fmt.Errorf("failed to unmarshal negotiated protocol: %w", err)
-		}
-		var ok bool
-		negotiatedProtocol, ok = negotiatedProtocolItem.Value.(string)
-		if !ok {
-			return nil, nil, fmt.Errorf("negotiated protocol is not a string: %v", negotiatedProtocolItem.Value)
-		}
+		protocol = d.negotiateProtocol(protocolHeader)
 	}
-	return rsp, d.conns.AddSession(conn.Conn(), sessionID(requestStr.StreamID()), requestStr, negotiatedProtocol), nil
+	return rsp, d.conns.AddSession(conn.Conn(), sessionID(requestStr.StreamID()), requestStr, protocol), nil
+}
+
+func (d *Dialer) negotiateProtocol(theirs []string) string {
+	negotiatedProtocolItem, err := httpsfv.UnmarshalItem(theirs)
+	if err != nil {
+		return ""
+	}
+	negotiatedProtocol, ok := negotiatedProtocolItem.Value.(string)
+	if !ok {
+		return ""
+	}
+	if !slices.Contains(d.ApplicationProtocols, negotiatedProtocol) {
+		return ""
+	}
+	return negotiatedProtocol
 }
 
 func (d *Dialer) Close() error {
