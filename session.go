@@ -446,10 +446,6 @@ func (s *Session) closeWithError(closeErr error) (bool /* first call to close se
 	return true, nil
 }
 
-func (s *Session) ConnectionState() quic.ConnectionState {
-	return s.conn.ConnectionState()
-}
-
 // SessionState returns the current state of the session
 func (s *Session) SessionState() SessionState {
 	return SessionState{
