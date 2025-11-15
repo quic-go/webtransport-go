@@ -1,5 +1,7 @@
-on: [push, pull_request]
 name: Interop
+permissions:
+  contents: read
+on: [push, pull_request]
 
 jobs:
   interop:
