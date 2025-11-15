@@ -44,13 +44,6 @@ func TestUpgradeFailures(t *testing.T) {
 		_, err := s.Upgrade(httptest.NewRecorder(), req)
 		require.EqualError(t, err, "unexpected protocol: HTTP/1.1")
 	})
-
-	t.Run("missing WebTransport header", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodConnect, "/webtransport", nil)
-		req.Proto = "webtransport"
-		_, err := s.Upgrade(httptest.NewRecorder(), req)
-		require.EqualError(t, err, "missing or invalid Sec-Webtransport-Http3-Draft02 header")
-	})
 }
 
 func createStreamAndWrite(t *testing.T, conn *quic.Conn, sessionID uint64, data []byte) *quic.Stream {

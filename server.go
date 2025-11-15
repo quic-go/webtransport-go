@@ -20,11 +20,8 @@ import (
 )
 
 const (
-	webTransportDraftOfferHeaderKey = "Sec-Webtransport-Http3-Draft02"
-	webTransportDraftHeaderKey      = "Sec-Webtransport-Http3-Draft"
-	webTransportDraftHeaderValue    = "draft02"
-	wtAvailableProtocolsHeader      = "WT-Available-Protocols"
-	wtProtocolHeader                = "WT-Protocol"
+	wtAvailableProtocolsHeader = "WT-Available-Protocols"
+	wtProtocolHeader           = "WT-Protocol"
 )
 
 const (
@@ -177,9 +174,6 @@ func (s *Server) Upgrade(w http.ResponseWriter, r *http.Request) (*Session, erro
 	if r.Proto != protocolHeader {
 		return nil, fmt.Errorf("unexpected protocol: %s", r.Proto)
 	}
-	if v, ok := r.Header[webTransportDraftOfferHeaderKey]; !ok || len(v) != 1 || v[0] != "1" {
-		return nil, fmt.Errorf("missing or invalid %s header", webTransportDraftOfferHeaderKey)
-	}
 	if !s.CheckOrigin(r) {
 		return nil, errors.New("webtransport: request origin not allowed")
 	}
@@ -199,7 +193,6 @@ func (s *Server) Upgrade(w http.ResponseWriter, r *http.Request) (*Session, erro
 		return nil, errors.New("webtransport: missing datagram support")
 	}
 
-	w.Header().Add(webTransportDraftHeaderKey, webTransportDraftHeaderValue)
 	if selectedProtocol != "" {
 		v, err := httpsfv.Marshal(httpsfv.NewItem(selectedProtocol))
 		if err != nil {

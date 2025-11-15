@@ -100,7 +100,6 @@ func (d *Dialer) Dial(ctx context.Context, urlStr string, reqHdr http.Header) (*
 		}
 		reqHdr.Set(wtAvailableProtocolsHeader, protocols)
 	}
-	reqHdr.Set(webTransportDraftOfferHeaderKey, "1")
 	req := &http.Request{
 		Method: http.MethodConnect,
 		Header: reqHdr,
