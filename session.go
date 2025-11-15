@@ -90,12 +90,16 @@ var _ http3Conn = &http3.Conn{}
 type SessionState struct {
 	// ConnectionState contains the QUIC connection state, including TLS handshake information
 	ConnectionState quic.ConnectionState
+
+	// ApplicationProtocol contains the application protocol negotiated for the session
+	ApplicationProtocol string
 }
 
 type Session struct {
-	sessionID sessionID
-	conn      http3Conn
-	str       http3Stream
+	sessionID           sessionID
+	conn                http3Conn
+	str                 http3Stream
+	applicationProtocol string
 
 	streamHdr    []byte
 	uniStreamHdr []byte
@@ -114,18 +118,19 @@ type Session struct {
 	streams streamsMap
 }
 
-func newSession(sessionID sessionID, conn http3Conn, str http3Stream) *Session {
+func newSession(sessionID sessionID, conn http3Conn, str http3Stream, applicationProtocol string) *Session {
 	tracingID := conn.Context().Value(quic.ConnectionTracingKey).(quic.ConnectionTracingID)
 	ctx, ctxCancel := context.WithCancel(context.WithValue(context.Background(), quic.ConnectionTracingKey, tracingID))
 	c := &Session{
-		sessionID:       sessionID,
-		conn:            conn,
-		str:             str,
-		ctx:             ctx,
-		streamCtxs:      make(map[int]context.CancelFunc),
-		bidiAcceptQueue: *newAcceptQueue[*Stream](),
-		uniAcceptQueue:  *newAcceptQueue[*ReceiveStream](),
-		streams:         *newStreamsMap(),
+		sessionID:           sessionID,
+		conn:                conn,
+		str:                 str,
+		applicationProtocol: applicationProtocol,
+		ctx:                 ctx,
+		streamCtxs:          make(map[int]context.CancelFunc),
+		bidiAcceptQueue:     *newAcceptQueue[*Stream](),
+		uniAcceptQueue:      *newAcceptQueue[*ReceiveStream](),
+		streams:             *newStreamsMap(),
 	}
 	// precompute the headers for unidirectional streams
 	c.uniStreamHdr = make([]byte, 0, 2+quicvarint.Len(uint64(c.sessionID)))
@@ -449,6 +454,7 @@ func (s *Session) closeWithError(closeErr error) (bool /* first call to close se
 // SessionState returns the current state of the session
 func (s *Session) SessionState() SessionState {
 	return SessionState{
-		ConnectionState: s.conn.ConnectionState(),
+		ConnectionState:     s.conn.ConnectionState(),
+		ApplicationProtocol: s.applicationProtocol,
 	}
 }

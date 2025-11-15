@@ -21,6 +21,7 @@ import (
 	"github.com/quic-go/quic-go/http3"
 	"github.com/quic-go/quic-go/qlog"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -53,8 +54,9 @@ func establishSession(t *testing.T, handler func(*webtransport.Session)) (sess *
 
 	addr, closeServer := runServer(t, s)
 	d := webtransport.Dialer{
-		TLSClientConfig: &tls.Config{RootCAs: webtransport.CertPool},
-		QUICConfig:      &quic.Config{Tracer: qlog.DefaultConnectionTracer, EnableDatagrams: true},
+		TLSClientConfig:      &tls.Config{RootCAs: webtransport.CertPool},
+		QUICConfig:           &quic.Config{Tracer: qlog.DefaultConnectionTracer, EnableDatagrams: true},
+		ApplicationProtocols: []string{"protocol1", "protocol2"},
 	}
 	defer d.Close()
 	url := fmt.Sprintf("https://localhost:%d/webtransport", addr.Port)
@@ -117,6 +119,56 @@ func getRandomData(l int) []byte {
 	data := make([]byte, l)
 	rand.Read(data)
 	return data
+}
+
+func TestApplicationProtocolNegotiation(t *testing.T) {
+	t.Run("client preferences are respected", func(t *testing.T) {
+		testApplicationProtocolNegotiation(t, []string{"foo", "bar"}, []string{"baz", "bar", "foo"}, "foo")
+	})
+
+	t.Run("no match", func(t *testing.T) {
+		testApplicationProtocolNegotiation(t, []string{"foo", "bar"}, []string{"baz"}, "")
+	})
+
+	t.Run("no client protocols", func(t *testing.T) {
+		testApplicationProtocolNegotiation(t, []string{}, []string{"foo", "bar"}, "")
+	})
+
+	t.Run("no server protocols", func(t *testing.T) {
+		testApplicationProtocolNegotiation(t, []string{"foo", "bar"}, []string{}, "")
+	})
+}
+
+func testApplicationProtocolNegotiation(t *testing.T, clientProtocols, serverProtocols []string, expected string) {
+	s := &webtransport.Server{
+		ApplicationProtocols: serverProtocols,
+		H3: http3.Server{
+			TLSConfig:  webtransport.TLSConf,
+			QUICConfig: &quic.Config{Tracer: qlog.DefaultConnectionTracer, EnableDatagrams: true},
+		},
+	}
+	defer s.Close()
+	var serverProtocol string
+	addHandler(t, s, func(sess *webtransport.Session) {
+		serverProtocol = sess.SessionState().ApplicationProtocol
+	})
+
+	addr, closeServer := runServer(t, s)
+	defer closeServer()
+	d := webtransport.Dialer{
+		TLSClientConfig:      &tls.Config{RootCAs: webtransport.CertPool},
+		QUICConfig:           &quic.Config{Tracer: qlog.DefaultConnectionTracer, EnableDatagrams: true},
+		ApplicationProtocols: clientProtocols,
+	}
+	defer d.Close()
+	url := fmt.Sprintf("https://localhost:%d/webtransport", addr.Port)
+	rsp, sess, err := d.Dial(context.Background(), url, nil)
+	require.NoError(t, err)
+	defer sess.CloseWithError(0, "")
+	require.Equal(t, http.StatusOK, rsp.StatusCode)
+
+	assert.Equal(t, expected, serverProtocol)
+	assert.Equal(t, expected, sess.SessionState().ApplicationProtocol)
 }
 
 func TestBidirectionalStreamsDataTransfer(t *testing.T) {
