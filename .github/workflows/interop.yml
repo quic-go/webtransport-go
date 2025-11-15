@@ -12,8 +12,7 @@ jobs:
     - uses: actions/checkout@v5
     - uses: nanasess/setup-chromedriver@v2
       with:
-        # Optional: do not specify to match Chrome's version
-        chromedriver-version: '124.0.6367.62'
+        chromedriver-version: '142.0.7444.162'
     - uses: actions/setup-go@v6
       with:
         go-version: ${{ matrix.go }}
