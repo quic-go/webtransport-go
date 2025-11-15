@@ -7,12 +7,15 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"slices"
 	"sync"
 	"time"
 
 	"github.com/quic-go/quic-go"
 	"github.com/quic-go/quic-go/http3"
 	"github.com/quic-go/quic-go/quicvarint"
+
+	"github.com/dunglas/httpsfv"
 )
 
 var errNoWebTransport = errors.New("server didn't enable WebTransport")
@@ -24,6 +27,10 @@ type Dialer struct {
 
 	// QUICConfig is the QUIC config used when dialing the QUIC connection.
 	QUICConfig *quic.Config
+
+	// ApplicationProtocols is a list of application protocols that can be negotiated,
+	// see section 3.3 of https://www.ietf.org/archive/id/draft-ietf-webtrans-http3-14 for details.
+	ApplicationProtocols []string
 
 	// StreamReorderingTime is the time an incoming WebTransport stream that cannot be associated
 	// with a session is buffered.
@@ -81,6 +88,17 @@ func (d *Dialer) Dial(ctx context.Context, urlStr string, reqHdr http.Header) (*
 	}
 	if reqHdr == nil {
 		reqHdr = http.Header{}
+	}
+	if len(d.ApplicationProtocols) > 0 && reqHdr.Get(wtAvailableProtocolsHeader) == "" {
+		list := httpsfv.List{}
+		for _, protocol := range d.ApplicationProtocols {
+			list = append(list, httpsfv.NewItem(protocol))
+		}
+		protocols, err := httpsfv.Marshal(list)
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to marshal application protocols: %w", err)
+		}
+		reqHdr.Set(wtAvailableProtocolsHeader, protocols)
 	}
 	reqHdr.Set(webTransportDraftOfferHeaderKey, "1")
 	req := &http.Request{
@@ -164,7 +182,26 @@ func (d *Dialer) Dial(ctx context.Context, urlStr string, reqHdr http.Header) (*
 	if rsp.StatusCode < 200 || rsp.StatusCode >= 300 {
 		return rsp, nil, fmt.Errorf("received status %d", rsp.StatusCode)
 	}
-	return rsp, d.conns.AddSession(conn.Conn(), sessionID(requestStr.StreamID()), requestStr), nil
+	var protocol string
+	if protocolHeader, ok := rsp.Header[http.CanonicalHeaderKey(wtProtocolHeader)]; ok {
+		protocol = d.negotiateProtocol(protocolHeader)
+	}
+	return rsp, d.conns.AddSession(conn.Conn(), sessionID(requestStr.StreamID()), requestStr, protocol), nil
+}
+
+func (d *Dialer) negotiateProtocol(theirs []string) string {
+	negotiatedProtocolItem, err := httpsfv.UnmarshalItem(theirs)
+	if err != nil {
+		return ""
+	}
+	negotiatedProtocol, ok := negotiatedProtocolItem.Value.(string)
+	if !ok {
+		return ""
+	}
+	if !slices.Contains(d.ApplicationProtocols, negotiatedProtocol) {
+		return ""
+	}
+	return negotiatedProtocol
 }
 
 func (d *Dialer) Close() error {

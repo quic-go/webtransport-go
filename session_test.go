@@ -101,7 +101,7 @@ func setupSession(t *testing.T, clientConn, serverConn *quic.Conn, sessionID ses
 
 	serverAddr := startSimpleWebTransportServer(t, serverConn, &http3.Server{})
 	reqStr, conn := setupRequestStr(t, tr, clientConn, serverAddr)
-	sess = newSession(sessionID, conn.Conn(), reqStr)
+	sess = newSession(sessionID, conn.Conn(), reqStr, "")
 	return sess
 }
 
@@ -322,7 +322,7 @@ func testOpenStreamSyncAfterSessionClose(t *testing.T, bidirectional bool) {
 		hijackMagicNumber:   magicNumber,
 		blockOpenStreamSync: unblockOpenStreamSync,
 	}
-	sess := newSession(magicNumber, mockConn, reqStr)
+	sess := newSession(magicNumber, mockConn, reqStr, "")
 
 	errChan := make(chan error, 1)
 	switch bidirectional {

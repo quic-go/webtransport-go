@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"slices"
 	"sync"
 	"time"
 	"unicode/utf8"
@@ -14,12 +15,16 @@ import (
 	"github.com/quic-go/quic-go"
 	"github.com/quic-go/quic-go/http3"
 	"github.com/quic-go/quic-go/quicvarint"
+
+	"github.com/dunglas/httpsfv"
 )
 
 const (
 	webTransportDraftOfferHeaderKey = "Sec-Webtransport-Http3-Draft02"
 	webTransportDraftHeaderKey      = "Sec-Webtransport-Http3-Draft"
 	webTransportDraftHeaderValue    = "draft02"
+	wtAvailableProtocolsHeader      = "WT-Available-Protocols"
+	wtProtocolHeader                = "WT-Protocol"
 )
 
 const (
@@ -29,6 +34,10 @@ const (
 
 type Server struct {
 	H3 http3.Server
+
+	// ApplicationProtocols is a list of application protocols that can be negotiated,
+	// see section 3.3 of https://www.ietf.org/archive/id/draft-ietf-webtrans-http3-14 for details.
+	ApplicationProtocols []string
 
 	// ReorderingTimeout is the maximum time an incoming WebTransport stream that cannot be associated
 	// with a session is buffered. It is also the maximum time a WebTransport connection request is
@@ -174,6 +183,7 @@ func (s *Server) Upgrade(w http.ResponseWriter, r *http.Request) (*Session, erro
 	if !s.CheckOrigin(r) {
 		return nil, errors.New("webtransport: request origin not allowed")
 	}
+	selectedProtocol := s.selectProtocol(r.Header[http.CanonicalHeaderKey(wtAvailableProtocolsHeader)])
 
 	// Wait for SETTINGS
 	conn := w.(http3.Hijacker).Connection()
@@ -190,12 +200,46 @@ func (s *Server) Upgrade(w http.ResponseWriter, r *http.Request) (*Session, erro
 	}
 
 	w.Header().Add(webTransportDraftHeaderKey, webTransportDraftHeaderValue)
+	if selectedProtocol != "" {
+		v, err := httpsfv.Marshal(httpsfv.NewItem(selectedProtocol))
+		if err != nil {
+			return nil, fmt.Errorf("failed to marshal selected protocol: %w", err)
+		}
+		w.Header().Add(wtProtocolHeader, v)
+	}
 	w.WriteHeader(http.StatusOK)
 	w.(http.Flusher).Flush()
 
 	str := w.(http3.HTTPStreamer).HTTPStream()
 	sessID := sessionID(str.StreamID())
-	return s.conns.AddSession(conn, sessID, str), nil
+	return s.conns.AddSession(conn, sessID, str, selectedProtocol), nil
+}
+
+func (s *Server) selectProtocol(theirs []string) string {
+	list, err := httpsfv.UnmarshalList(theirs)
+	if err != nil {
+		return ""
+	}
+	offered := make([]string, 0, len(list))
+	for _, item := range list {
+		i, ok := item.(httpsfv.Item)
+		if !ok {
+			return ""
+		}
+		protocol, ok := i.Value.(string)
+		if !ok {
+			return ""
+		}
+		offered = append(offered, protocol)
+	}
+	var selectedProtocol string
+	for _, p := range offered {
+		if slices.Contains(s.ApplicationProtocols, p) {
+			selectedProtocol = p
+			break
+		}
+	}
+	return selectedProtocol
 }
 
 // copied from https://github.com/gorilla/websocket
