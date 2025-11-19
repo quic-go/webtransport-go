@@ -44,6 +44,13 @@ func TestUpgradeFailures(t *testing.T) {
 		_, err := s.Upgrade(httptest.NewRecorder(), req)
 		require.EqualError(t, err, "unexpected protocol: HTTP/1.1")
 	})
+
+	t.Run("missing WebTransport header", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodConnect, "/webtransport", nil)
+		req.Proto = "webtransport"
+		_, err := s.Upgrade(httptest.NewRecorder(), req)
+		require.EqualError(t, err, "missing or invalid Sec-Webtransport-Http3-Draft02 header")
+	})
 }
 
 func createStreamAndWrite(t *testing.T, conn *quic.Conn, sessionID uint64, data []byte) *quic.Stream {
@@ -84,7 +91,12 @@ func TestServerReorderedUpgradeRequest(t *testing.T) {
 	require.NoError(t, err)
 	// Open a new stream for a WebTransport session we'll establish later. Stream ID: 0.
 	createStreamAndWrite(t, cconn, 4, []byte("foobar"))
-	tr := &http3.Transport{EnableDatagrams: true}
+	tr := &http3.Transport{
+		EnableDatagrams: true,
+		AdditionalSettings: map[uint64]uint64{
+			settingsWTMaxSessions: 100,
+		},
+	}
 	conn := tr.NewClientConn(cconn)
 
 	// make sure this request actually arrives first
@@ -150,7 +162,12 @@ func TestServerReorderedUpgradeRequestTimeout(t *testing.T) {
 
 	time.Sleep(2 * timeout)
 
-	tr := &http3.Transport{EnableDatagrams: true}
+	tr := &http3.Transport{
+		EnableDatagrams: true,
+		AdditionalSettings: map[uint64]uint64{
+			settingsWTMaxSessions: 100,
+		},
+	}
 	conn := tr.NewClientConn(cconn)
 
 	// Reordering was too long. The stream should now have been reset by the server.
@@ -228,7 +245,12 @@ func TestServerReorderedMultipleStreams(t *testing.T) {
 	require.GreaterOrEqual(t, took, timeout)
 	require.Less(t, took, timeout*5/4)
 
-	tr := &http3.Transport{EnableDatagrams: true}
+	tr := &http3.Transport{
+		EnableDatagrams: true,
+		AdditionalSettings: map[uint64]uint64{
+			settingsWTMaxSessions: 100,
+		},
+	}
 	conn := tr.NewClientConn(cconn)
 	// Now establish the session. Make sure we don't accept the stream.
 	requestStr, err := conn.OpenRequestStream(context.Background())

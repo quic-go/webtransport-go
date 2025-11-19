@@ -1,7 +1,6 @@
 package webtransport
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -18,7 +17,6 @@ type quicSendStream interface {
 	io.WriteCloser
 	StreamID() quic.StreamID
 	CancelWrite(quic.StreamErrorCode)
-	Context() context.Context
 	SetWriteDeadline(time.Time) error
 }
 
@@ -26,6 +24,15 @@ var (
 	_ quicSendStream = &quic.SendStream{}
 	_ quicSendStream = &quic.Stream{}
 )
+
+// quicSendStreamWithReliableBoundary extends quicSendStream with SetReliableBoundary.
+// Only quic.SendStream implements this, not quic.Stream (bidirectional).
+type quicSendStreamWithReliableBoundary interface {
+	quicSendStream
+	SetReliableBoundary()
+}
+
+var _ quicSendStreamWithReliableBoundary = &quic.SendStream{}
 
 type quicReceiveStream interface {
 	io.Reader
@@ -67,7 +74,7 @@ func (s *SendStream) maybeSendStreamHeader() (err error) {
 		}
 		s.streamHdr = nil
 	})
-	return
+	return err
 }
 
 func (s *SendStream) Write(b []byte) (int, error) {
@@ -81,7 +88,18 @@ func (s *SendStream) Write(b []byte) (int, error) {
 	return n, maybeConvertStreamError(err)
 }
 
+// CancelWrite cancels writing to the stream with the given error code.
+// It uses SetReliableBoundary to ensure that any data written before this call
+// (including the WebTransport stream header with session ID) is delivered reliably
+// before the RESET_STREAM_AT frame is sent (RFC Section 4.4).
 func (s *SendStream) CancelWrite(e StreamErrorCode) {
+	// Mark the current write position as reliable to ensure the session ID header
+	// is delivered before the stream is reset. SetReliableBoundary is only available
+	// on quic.SendStream (unidirectional), not on quic.Stream (bidirectional).
+	// For bidirectional streams, the header is sent on first Write() before any data.
+	if str, ok := s.str.(quicSendStreamWithReliableBoundary); ok {
+		str.SetReliableBoundary()
+	}
 	s.str.CancelWrite(webtransportCodeToHTTPCode(e))
 	s.onClose()
 }
@@ -96,10 +114,6 @@ func (s *SendStream) Close() error {
 	}
 	s.onClose()
 	return maybeConvertStreamError(s.str.Close())
-}
-
-func (s *SendStream) Context() context.Context {
-	return s.str.Context()
 }
 
 func (s *SendStream) SetWriteDeadline(t time.Time) error {
@@ -205,10 +219,6 @@ func (s *Stream) registerClose(isSendSide bool) {
 func (s *Stream) closeWithSession() {
 	s.sendStr.closeWithSession()
 	s.recvStr.closeWithSession()
-}
-
-func (s *Stream) Context() context.Context {
-	return s.sendStr.Context()
 }
 
 func (s *Stream) SetWriteDeadline(t time.Time) error {

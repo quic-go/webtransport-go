@@ -23,8 +23,8 @@ const (
 	settingExtendedConnect = 0x8
 	// HTTP Datagrams, RFC 9297
 	settingDatagram = 0x33
-	// WebTransport
-	settingsEnableWebtransport = 0x2b603742
+	// WebTransport draft-14
+	settingsWTMaxSessions = 0x14e9cd29
 )
 
 // appendSettingsFrame serializes an HTTP/3 SETTINGS frame
@@ -54,9 +54,9 @@ func TestClientInvalidResponseHandling(t *testing.T) {
 		settingsStr, err := conn.OpenUniStream()
 		require.NoError(t, err)
 		_, err = settingsStr.Write(appendSettingsFrame([]byte{0} /* stream type */, map[uint64]uint64{
-			settingDatagram:            1,
-			settingExtendedConnect:     1,
-			settingsEnableWebtransport: 1,
+			settingDatagram:        1,
+			settingExtendedConnect: 1,
+			settingsWTMaxSessions:  100,
 		}))
 		require.NoError(t, err)
 
@@ -100,27 +100,27 @@ func TestClientInvalidSettingsHandling(t *testing.T) {
 		{
 			name: "Extended CONNECT disabled",
 			settings: map[uint64]uint64{
-				settingDatagram:            1,
-				settingExtendedConnect:     0,
-				settingsEnableWebtransport: 1,
+				settingDatagram:        1,
+				settingExtendedConnect: 0,
+				settingsWTMaxSessions:  100,
 			},
 			errorStr: "server didn't enable Extended CONNECT",
 		},
 		{
 			name: "HTTP/3 DATAGRAMs disabled",
 			settings: map[uint64]uint64{
-				settingDatagram:            0,
-				settingExtendedConnect:     1,
-				settingsEnableWebtransport: 1,
+				settingDatagram:        0,
+				settingExtendedConnect: 1,
+				settingsWTMaxSessions:  100,
 			},
 			errorStr: "server didn't enable HTTP/3 datagram support",
 		},
 		{
 			name: "WebTransport disabled",
 			settings: map[uint64]uint64{
-				settingDatagram:            1,
-				settingExtendedConnect:     1,
-				settingsEnableWebtransport: 0,
+				settingDatagram:        1,
+				settingExtendedConnect: 1,
+				settingsWTMaxSessions:  0,
 			},
 			errorStr: "server didn't enable WebTransport",
 		},

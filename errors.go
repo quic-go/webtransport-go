@@ -16,6 +16,11 @@ type SessionErrorCode uint32
 const (
 	firstErrorCode = 0x52e4a40fa8db
 	lastErrorCode  = 0x52e5ac983162
+
+	// WTFlowControlError is the error code for flow control violations in WebTransport.
+	// This error is sent when a peer violates flow control limits, such as sending
+	// decreasing limit values in flow control capsules (RFC draft-14 Section 5.6.2).
+	WTFlowControlError SessionErrorCode = 0x045d4487
 )
 
 func webtransportCodeToHTTPCode(n StreamErrorCode) quic.StreamErrorCode {

@@ -86,7 +86,7 @@ func newConnPair(t *testing.T) (client, server *quic.Conn) {
 	return cl, conn
 }
 
-func setupSession(t *testing.T, clientConn, serverConn *quic.Conn, sessionID sessionID) *Session {
+func setupSession(t *testing.T, clientConn, serverConn *quic.Conn) *Session {
 	var sess *Session
 	tr := &http3.Transport{
 		UniStreamHijacker: func(_ http3.StreamType, _ quic.ConnectionTracingID, str *quic.ReceiveStream, _ error) (hijacked bool) {
@@ -101,7 +101,7 @@ func setupSession(t *testing.T, clientConn, serverConn *quic.Conn, sessionID ses
 
 	serverAddr := startSimpleWebTransportServer(t, serverConn, &http3.Server{})
 	reqStr, conn := setupRequestStr(t, tr, clientConn, serverAddr)
-	sess = newSession(sessionID, conn.Conn(), reqStr, "")
+	sess = newSession(42, conn.Conn(), reqStr, 100)
 	return sess
 }
 
@@ -141,13 +141,12 @@ func setupRequestStr(t *testing.T, tr *http3.Transport, clientConn *quic.Conn, s
 }
 
 func TestAddStreamAfterSessionClose(t *testing.T) {
-	const sessionID = 42
 	clientConn, serverConn := newConnPair(t)
-	sess := setupSession(t, clientConn, serverConn, sessionID)
+	sess := setupSession(t, clientConn, serverConn)
 
 	str1, err := serverConn.OpenStream()
 	require.NoError(t, err)
-	_, err = str1.Write(streamHeaderBidirectional(sessionID))
+	_, err = str1.Write(streamHeaderBidirectional(42))
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -162,7 +161,7 @@ func TestAddStreamAfterSessionClose(t *testing.T) {
 	// we expect further streams to be reset
 	str2, err := serverConn.OpenStream()
 	require.NoError(t, err)
-	_, err = str2.Write(streamHeaderBidirectional(sessionID))
+	_, err = str2.Write(streamHeaderBidirectional(42))
 	require.NoError(t, err)
 	select {
 	case <-str2.Context().Done():
@@ -176,7 +175,7 @@ func TestAddStreamAfterSessionClose(t *testing.T) {
 
 	ustr, err := serverConn.OpenUniStream()
 	require.NoError(t, err)
-	_, err = ustr.Write(streamHeaderUnidirectional(sessionID))
+	_, err = ustr.Write(streamHeaderUnidirectional(42))
 	require.NoError(t, err)
 	select {
 	case <-ustr.Context().Done():
@@ -207,9 +206,8 @@ func TestOpenStreamSyncSessionClose(t *testing.T) {
 }
 
 func testOpenStreamSyncSessionClose(t *testing.T, openStream func(*Session) error, openStreamSync func(*Session) error) {
-	const sessionID = 42
 	clientConn, serverConn := newConnPair(t)
-	sess := setupSession(t, clientConn, serverConn, sessionID)
+	sess := setupSession(t, clientConn, serverConn)
 
 	for {
 		if err := openStream(sess); err != nil {
@@ -322,7 +320,7 @@ func testOpenStreamSyncAfterSessionClose(t *testing.T, bidirectional bool) {
 		hijackMagicNumber:   magicNumber,
 		blockOpenStreamSync: unblockOpenStreamSync,
 	}
-	sess := newSession(magicNumber, mockConn, reqStr, "")
+	sess := newSession(magicNumber, mockConn, reqStr, 100)
 
 	errChan := make(chan error, 1)
 	switch bidirectional {

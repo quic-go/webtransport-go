@@ -7,7 +7,6 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"slices"
 	"sync"
 	"time"
 	"unicode/utf8"
@@ -15,13 +14,12 @@ import (
 	"github.com/quic-go/quic-go"
 	"github.com/quic-go/quic-go/http3"
 	"github.com/quic-go/quic-go/quicvarint"
-
-	"github.com/dunglas/httpsfv"
 )
 
 const (
-	wtAvailableProtocolsHeader = "WT-Available-Protocols"
-	wtProtocolHeader           = "WT-Protocol"
+	webTransportDraftOfferHeaderKey = "Sec-Webtransport-Http3-Draft02"
+	webTransportDraftHeaderKey      = "Sec-Webtransport-Http3-Draft"
+	webTransportDraftHeaderValue    = "draft02"
 )
 
 const (
@@ -31,10 +29,6 @@ const (
 
 type Server struct {
 	H3 http3.Server
-
-	// ApplicationProtocols is a list of application protocols that can be negotiated,
-	// see section 3.3 of https://www.ietf.org/archive/id/draft-ietf-webtrans-http3-14 for details.
-	ApplicationProtocols []string
 
 	// ReorderingTimeout is the maximum time an incoming WebTransport stream that cannot be associated
 	// with a session is buffered. It is also the maximum time a WebTransport connection request is
@@ -49,6 +43,14 @@ type Server struct {
 	// If unset, a safe default is used: If the Origin header is set, it is checked that it
 	// matches the request's Host header.
 	CheckOrigin func(r *http.Request) bool
+
+	// SelectProtocol is called during protocol negotiation to select an application protocol
+	// from the client's WT-Available-Protocols list. If set, the server will call this function
+	// and send the selected protocol in the WT-Protocol response header.
+	// The function receives the list of protocols offered by the client (in preference order).
+	// It should return the selected protocol, or an empty string to reject the request.
+	// RFC Section 3.3, lines 509-516.
+	SelectProtocol func(availableProtocols []string) string
 
 	ctx       context.Context // is closed when Close is called
 	ctxCancel context.CancelFunc
@@ -87,8 +89,15 @@ func (s *Server) init() error {
 	if s.H3.AdditionalSettings == nil {
 		s.H3.AdditionalSettings = make(map[uint64]uint64, 1)
 	}
-	s.H3.AdditionalSettings[settingsEnableWebtransport] = 1
+	// Send SETTINGS_WT_MAX_SESSIONS for draft-14 compliance (RFC Section 3.1).
+	// Default value of 100 allows for session pooling.
+	s.H3.AdditionalSettings[SettingsWTMaxSessions] = 100
 	s.H3.EnableDatagrams = true
+	// Enable RESET_STREAM_AT support for draft-14 reliable stream association (RFC Section 4.4)
+	if s.H3.QUICConfig == nil {
+		s.H3.QUICConfig = &quic.Config{}
+	}
+	s.H3.QUICConfig.EnableStreamResetPartialDelivery = true
 	if s.H3.StreamHijacker != nil {
 		return errors.New("StreamHijacker already set")
 	}
@@ -174,12 +183,14 @@ func (s *Server) Upgrade(w http.ResponseWriter, r *http.Request) (*Session, erro
 	if r.Proto != protocolHeader {
 		return nil, fmt.Errorf("unexpected protocol: %s", r.Proto)
 	}
+	if v, ok := r.Header[webTransportDraftOfferHeaderKey]; !ok || len(v) != 1 || v[0] != "1" {
+		return nil, fmt.Errorf("missing or invalid %s header", webTransportDraftOfferHeaderKey)
+	}
 	if !s.CheckOrigin(r) {
 		return nil, errors.New("webtransport: request origin not allowed")
 	}
-	selectedProtocol := s.selectProtocol(r.Header[http.CanonicalHeaderKey(wtAvailableProtocolsHeader)])
 
-	// Wait for SETTINGS
+	// Wait for SETTINGS (RFC Section 3.1: server MUST NOT process CONNECT until client SETTINGS received)
 	conn := w.(http3.Hijacker).Connection()
 	timer := time.NewTimer(s.timeout())
 	defer timer.Stop()
@@ -192,47 +203,53 @@ func (s *Server) Upgrade(w http.ResponseWriter, r *http.Request) (*Session, erro
 	if !settings.EnableDatagrams {
 		return nil, errors.New("webtransport: missing datagram support")
 	}
-
-	if selectedProtocol != "" {
-		v, err := httpsfv.Marshal(httpsfv.NewItem(selectedProtocol))
-		if err != nil {
-			return nil, fmt.Errorf("failed to marshal selected protocol: %w", err)
-		}
-		w.Header().Add(wtProtocolHeader, v)
+	// Verify client sent SETTINGS_WT_MAX_SESSIONS (draft-14 requirement)
+	if settings.Other == nil {
+		return nil, errors.New("webtransport: client didn't send SETTINGS_WT_MAX_SESSIONS")
 	}
+	maxSessions, ok := settings.Other[SettingsWTMaxSessions]
+	if !ok || maxSessions < 1 {
+		return nil, errors.New("webtransport: client didn't send valid SETTINGS_WT_MAX_SESSIONS")
+	}
+
+	// Handle protocol negotiation (RFC Section 3.3)
+	var negotiatedProtocol string
+	if protocolsHeader := r.Header.Get(HeaderWTAvailableProtocols); protocolsHeader != "" && s.SelectProtocol != nil {
+		// Parse client's available protocols
+		availableProtocols, err := ParseAvailableProtocols(protocolsHeader)
+		if err != nil {
+			return nil, fmt.Errorf("webtransport: failed to parse WT-Available-Protocols header: %w", err)
+		}
+
+		// Let the application select a protocol
+		negotiatedProtocol = s.SelectProtocol(availableProtocols)
+		if negotiatedProtocol == "" {
+			// Server rejected - no acceptable protocol
+			return nil, errors.New("webtransport: no acceptable protocol")
+		}
+
+		// Validate that selected protocol is in the available list (RFC Section 3.3, lines 513-514)
+		if err := ValidateSelectedProtocol(negotiatedProtocol, availableProtocols); err != nil {
+			return nil, fmt.Errorf("webtransport: SelectProtocol returned invalid protocol: %w", err)
+		}
+
+		// Marshal and set WT-Protocol response header
+		protocolHeader, err := MarshalProtocol(negotiatedProtocol)
+		if err != nil {
+			return nil, fmt.Errorf("webtransport: failed to marshal WT-Protocol header: %w", err)
+		}
+		w.Header().Add(HeaderWTProtocol, protocolHeader)
+	}
+
+	w.Header().Add(webTransportDraftHeaderKey, webTransportDraftHeaderValue)
 	w.WriteHeader(http.StatusOK)
 	w.(http.Flusher).Flush()
 
 	str := w.(http3.HTTPStreamer).HTTPStream()
 	sessID := sessionID(str.StreamID())
-	return s.conns.AddSession(conn, sessID, str, selectedProtocol), nil
-}
-
-func (s *Server) selectProtocol(theirs []string) string {
-	list, err := httpsfv.UnmarshalList(theirs)
-	if err != nil {
-		return ""
-	}
-	offered := make([]string, 0, len(list))
-	for _, item := range list {
-		i, ok := item.(httpsfv.Item)
-		if !ok {
-			return ""
-		}
-		protocol, ok := i.Value.(string)
-		if !ok {
-			return ""
-		}
-		offered = append(offered, protocol)
-	}
-	var selectedProtocol string
-	for _, p := range offered {
-		if slices.Contains(s.ApplicationProtocols, p) {
-			selectedProtocol = p
-			break
-		}
-	}
-	return selectedProtocol
+	sess := s.conns.AddSession(conn, sessID, str, maxSessions)
+	sess.setNegotiatedProtocol(negotiatedProtocol)
+	return sess, nil
 }
 
 // copied from https://github.com/gorilla/websocket

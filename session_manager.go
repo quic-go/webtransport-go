@@ -24,8 +24,9 @@ type sessionManager struct {
 
 	timeout time.Duration
 
-	mx    sync.Mutex
-	conns map[quic.ConnectionTracingID]map[sessionID]*session
+	mx             sync.Mutex
+	conns          map[quic.ConnectionTracingID]map[sessionID]*session
+	goawayReceived bool // Set to true when HTTP/3 GOAWAY is received
 }
 
 func newSessionManager(timeout time.Duration) *sessionManager {
@@ -164,12 +165,19 @@ func (m *sessionManager) handleUniStream(str *quic.ReceiveStream, sess *session)
 }
 
 // AddSession adds a new WebTransport session.
-func (m *sessionManager) AddSession(qconn *http3.Conn, id sessionID, str http3Stream, applicationProtocol string) *Session {
-	conn := newSession(id, qconn, str, applicationProtocol)
-	connTracingID := qconn.Context().Value(quic.ConnectionTracingKey).(quic.ConnectionTracingID)
-
+// maxSessions is the peer's advertised SETTINGS_WT_MAX_SESSIONS value.
+// Returns nil if GOAWAY has been received (server is shutting down).
+func (m *sessionManager) AddSession(qconn *http3.Conn, id sessionID, str http3Stream, maxSessions uint64) *Session {
 	m.mx.Lock()
 	defer m.mx.Unlock()
+
+	// Reject new sessions if GOAWAY received
+	if m.goawayReceived {
+		return nil
+	}
+
+	conn := newSession(id, qconn, str, maxSessions)
+	connTracingID := qconn.Context().Value(quic.ConnectionTracingKey).(quic.ConnectionTracingID)
 
 	sessions, ok := m.conns[connTracingID]
 	if !ok {
@@ -193,4 +201,32 @@ func (m *sessionManager) AddSession(qconn *http3.Conn, id sessionID, str http3St
 func (m *sessionManager) Close() {
 	m.ctxCancel()
 	m.refCount.Wait()
+}
+
+// OnGOAWAY handles HTTP/3 GOAWAY frames by initiating graceful shutdown of all active sessions.
+// This method is called when the underlying HTTP/3 connection receives a GOAWAY frame,
+// indicating that the server is shutting down and will not accept new requests.
+//
+// For each active WebTransport session, this method calls Drain() to send a WT_DRAIN_SESSION
+// capsule, allowing clients to gracefully wind down operations. After calling OnGOAWAY,
+// AddSession will reject new session establishments.
+//
+// RFC Section 4.7: "When an HTTP/3 endpoint sends a GOAWAY frame, the endpoint SHOULD send
+// a DRAIN_WEBTRANSPORT_SESSION capsule on every existing WebTransport session."
+func (m *sessionManager) OnGOAWAY() {
+	m.mx.Lock()
+	defer m.mx.Unlock()
+
+	m.goawayReceived = true
+
+	// Iterate all active sessions and initiate graceful shutdown
+	for _, sessions := range m.conns {
+		for _, sess := range sessions {
+			if sess.conn != nil {
+				// Call Drain() on each active session
+				// Ignore errors - session might already be closing
+				_ = sess.conn.Drain()
+			}
+		}
+	}
 }
