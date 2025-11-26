@@ -187,10 +187,32 @@ func (m *sessionManager) AddSession(qconn *http3.Conn, id sessionID, str http3St
 	c := make(chan struct{})
 	close(c)
 	sessions[id] = &session{created: c, conn: conn}
+
+	// Delete the webtransport session from the session manager once its context is cancalled.
+	go func() {
+		select {
+		case <-conn.Context().Done():
+			m.mx.Lock()
+			defer m.mx.Unlock()
+			delete(sessions, id)
+			delete(m.conns, connTracingID)
+			return
+		}
+	}()
 	return conn
 }
 
 func (m *sessionManager) Close() {
 	m.ctxCancel()
 	m.refCount.Wait()
+}
+
+func (m *sessionManager) NumberActiveWebtransportSessions() int {
+	m.mx.Lock()
+	defer m.mx.Unlock()
+	if m.conns != nil {
+		return len(m.conns)
+	} else {
+		return 0
+	}
 }
