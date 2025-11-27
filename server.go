@@ -270,3 +270,11 @@ func equalASCIIFold(s, t string) bool {
 	}
 	return s == t
 }
+
+func (s *Server) NumberActiveWebtransportSessions() int {
+	if s.conns != nil {
+		return s.conns.NumberActiveWebtransportSessions()
+	} else {
+		return 0
+	}
+}
