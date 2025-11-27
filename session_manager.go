@@ -190,14 +190,12 @@ func (m *sessionManager) AddSession(qconn *http3.Conn, id sessionID, str http3St
 
 	// Delete the webtransport session from the session manager once its context is cancalled.
 	go func() {
-		select {
-		case <-conn.Context().Done():
-			m.mx.Lock()
-			defer m.mx.Unlock()
-			delete(sessions, id)
-			delete(m.conns, connTracingID)
-			return
-		}
+		<-conn.Context().Done()
+		m.mx.Lock()
+		defer m.mx.Unlock()
+		delete(sessions, id)
+		delete(m.conns, connTracingID)
+		return
 	}()
 	return conn
 }
