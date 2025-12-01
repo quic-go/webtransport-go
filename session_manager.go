@@ -204,13 +204,3 @@ func (m *sessionManager) Close() {
 	m.ctxCancel()
 	m.refCount.Wait()
 }
-
-func (m *sessionManager) NumberActiveWebtransportSessions() int {
-	m.mx.Lock()
-	defer m.mx.Unlock()
-	if m.conns != nil {
-		return len(m.conns)
-	} else {
-		return 0
-	}
-}
