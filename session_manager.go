@@ -194,7 +194,6 @@ func (m *sessionManager) AddSession(qconn *http3.Conn, id sessionID, str http3St
 		m.mx.Lock()
 		defer m.mx.Unlock()
 		delete(sessions, id)
-		delete(m.conns, connTracingID)
 		return
 	}()
 	return conn
