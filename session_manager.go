@@ -193,7 +193,7 @@ func (m *sessionManager) AddSession(qconn *http3.Conn, id sessionID, str http3St
 		<-conn.Context().Done()
 		m.mx.Lock()
 		defer m.mx.Unlock()
-		delete(sessions, id)
+		m.maybeDelete(connTracingID, id)
 		return
 	}()
 	return conn
