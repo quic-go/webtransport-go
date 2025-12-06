@@ -700,3 +700,52 @@ func TestDatagrams(t *testing.T) {
 		t.Fatal("timeout")
 	}
 }
+
+func TestSessionContextValues(t *testing.T) {
+	const (
+		contextKey  = "foo"
+		clientValue = "bar"
+		serverValue = "baz"
+	)
+
+	s := &webtransport.Server{
+		H3: http3.Server{
+			TLSConfig:  webtransport.TLSConf,
+			QUICConfig: &quic.Config{Tracer: qlog.DefaultConnectionTracer, EnableDatagrams: true},
+		},
+	}
+	mux := http.NewServeMux()
+	serverSessChan := make(chan *webtransport.Session, 1)
+	mux.HandleFunc("/webtransport", func(w http.ResponseWriter, r *http.Request) {
+		ctx := context.WithValue(r.Context(), contextKey, serverValue)
+		r = r.WithContext(ctx)
+		conn, err := s.Upgrade(w, r)
+		if err != nil {
+			t.Logf("upgrading failed: %s", err)
+			w.WriteHeader(404)
+			return
+		}
+		serverSessChan <- conn
+		newEchoHandler(t)(conn)
+	})
+	s.H3.Handler = mux
+
+	addr, closeServer := runServer(t, s)
+	defer closeServer()
+
+	d := webtransport.Dialer{
+		TLSClientConfig: &tls.Config{RootCAs: webtransport.CertPool},
+		QUICConfig:      &quic.Config{Tracer: qlog.DefaultConnectionTracer, EnableDatagrams: true},
+	}
+	defer d.Close()
+	url := fmt.Sprintf("https://localhost:%d/webtransport", addr.Port)
+	ctx := context.WithValue(context.Background(), contextKey, clientValue)
+	rsp, sess, err := d.Dial(ctx, url, nil)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, rsp.StatusCode)
+	require.Equal(t, clientValue, sess.Context().Value(contextKey))
+	sendDataAndCheckEcho(t, sess)
+	serverSess := <-serverSessChan
+	require.Equal(t, serverValue, serverSess.Context().Value(contextKey))
+	sess.CloseWithError(0, "")
+}

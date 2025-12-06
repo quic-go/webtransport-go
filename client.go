@@ -185,7 +185,8 @@ func (d *Dialer) Dial(ctx context.Context, urlStr string, reqHdr http.Header) (*
 	if protocolHeader, ok := rsp.Header[http.CanonicalHeaderKey(wtProtocolHeader)]; ok {
 		protocol = d.negotiateProtocol(protocolHeader)
 	}
-	return rsp, d.conns.AddSession(conn.Conn(), sessionID(requestStr.StreamID()), requestStr, protocol), nil
+	sessID := sessionID(requestStr.StreamID())
+	return rsp, d.conns.AddSession(context.WithoutCancel(ctx), conn.Conn(), sessID, requestStr, protocol), nil
 }
 
 func (d *Dialer) negotiateProtocol(theirs []string) string {
