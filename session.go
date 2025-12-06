@@ -118,9 +118,9 @@ type Session struct {
 	streams streamsMap
 }
 
-func newSession(sessionID sessionID, conn http3Conn, str http3Stream, applicationProtocol string) *Session {
+func newSession(ctx context.Context, sessionID sessionID, conn http3Conn, str http3Stream, applicationProtocol string) *Session {
 	tracingID := conn.Context().Value(quic.ConnectionTracingKey).(quic.ConnectionTracingID)
-	ctx, ctxCancel := context.WithCancel(context.WithValue(context.Background(), quic.ConnectionTracingKey, tracingID))
+	ctx, ctxCancel := context.WithCancel(context.WithValue(ctx, quic.ConnectionTracingKey, tracingID))
 	c := &Session{
 		sessionID:           sessionID,
 		conn:                conn,

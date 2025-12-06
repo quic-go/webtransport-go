@@ -205,7 +205,7 @@ func (s *Server) Upgrade(w http.ResponseWriter, r *http.Request) (*Session, erro
 
 	str := w.(http3.HTTPStreamer).HTTPStream()
 	sessID := sessionID(str.StreamID())
-	return s.conns.AddSession(conn, sessID, str, selectedProtocol), nil
+	return s.conns.AddSession(context.WithoutCancel(r.Context()), conn, sessID, str, selectedProtocol), nil
 }
 
 func (s *Server) selectProtocol(theirs []string) string {
