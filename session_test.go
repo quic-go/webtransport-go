@@ -3,11 +3,13 @@ package webtransport
 import (
 	"context"
 	"crypto/tls"
+	"encoding/binary"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -371,4 +373,150 @@ func testOpenStreamSyncAfterSessionClose(t *testing.T, bidirectional bool) {
 	str.SetReadDeadline(time.Now().Add(time.Second))
 	_, err = str.Read([]byte{0})
 	require.ErrorIs(t, err, &quic.StreamError{Remote: true, StreamID: str.StreamID(), ErrorCode: sessionCloseErrorCode})
+}
+
+// TestCloseWithErrorTruncatesSendMessage tests that when CloseWithError is called
+// with a message longer than 1024 bytes, the capsule written to the wire contains
+// a truncated message.
+func TestCloseWithErrorTruncatesSendMessage(t *testing.T) {
+	clientConn, serverConn := newConnPair(t)
+
+	type capsuleData struct {
+		errCode uint32
+		msg     []byte
+	}
+	capsuleChan := make(chan capsuleData, 1)
+
+	server := &http3.Server{}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/webtransport", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.(http.Flusher).Flush()
+
+		reader := quicvarint.NewReader(r.Body)
+		typ, capsuleReader, err := http3.ParseCapsule(reader)
+		if err != nil {
+			return
+		}
+		if typ == closeSessionCapsuleType {
+			var b [4]byte
+			if _, err := io.ReadFull(capsuleReader, b[:]); err != nil {
+				t.Errorf("failed to read error code: %v", err)
+				return
+			}
+			errCode := binary.BigEndian.Uint32(b[:])
+			msg, err := io.ReadAll(capsuleReader)
+			if err != nil {
+				t.Errorf("failed to read error message: %v", err)
+				return
+			}
+			capsuleChan <- capsuleData{errCode: errCode, msg: msg}
+			return
+		}
+	})
+	server.Handler = mux
+	t.Cleanup(func() { server.Close() })
+	go server.ServeQUICConn(serverConn)
+
+	serverAddr := fmt.Sprintf("https://localhost:%d/webtransport", serverConn.LocalAddr().(*net.UDPAddr).Port)
+
+	tr := &http3.Transport{}
+	conn := tr.NewClientConn(clientConn)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	reqStr, err := conn.OpenRequestStream(ctx)
+	require.NoError(t, err)
+	require.NoError(t, reqStr.SendRequestHeader(NewWebTransportRequest(t, serverAddr)))
+	rsp, err := reqStr.ReadResponse()
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, rsp.StatusCode)
+
+	sess := newSession(context.Background(), 42, conn.Conn(), reqStr, "")
+	require.NoError(t, sess.CloseWithError(42, strings.Repeat("a", maxCloseCapsuleErrorMsgLen+500)))
+
+	select {
+	case data := <-capsuleChan:
+		require.Equal(t, uint32(42), data.errCode)
+		// the message should be truncated to maxCloseCapsuleErrorMsgLen
+		require.Len(t, data.msg, maxCloseCapsuleErrorMsgLen)
+		require.Equal(t, strings.Repeat("a", maxCloseCapsuleErrorMsgLen), string(data.msg))
+	case <-time.After(time.Second):
+		t.Fatal("timeout waiting for capsule")
+	}
+}
+
+// TestCloseWithErrorTruncatesReceiveMessage tests that when receiving a close capsule
+// with a message longer than 1024 bytes, the session truncates the message.
+func TestCloseWithErrorTruncatesReceiveMessage(t *testing.T) {
+	clientConn, serverConn := newConnPair(t)
+
+	longMsg := strings.Repeat("b", maxCloseCapsuleErrorMsgLen+500)
+
+	server := &http3.Server{}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/webtransport", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.(http.Flusher).Flush()
+
+		payload := make([]byte, 4+len(longMsg))
+		binary.BigEndian.PutUint32(payload[:4], uint32(1337))
+		copy(payload[4:], longMsg)
+
+		if err := http3.WriteCapsule(quicvarint.NewWriter(w), closeSessionCapsuleType, payload); err != nil {
+			t.Errorf("failed to write capsule: %v", err)
+		}
+		w.(http.Flusher).Flush()
+	})
+	server.Handler = mux
+	t.Cleanup(func() { server.Close() })
+	go server.ServeQUICConn(serverConn)
+
+	serverAddr := fmt.Sprintf("https://localhost:%d/webtransport", serverConn.LocalAddr().(*net.UDPAddr).Port)
+
+	tr := &http3.Transport{}
+	conn := tr.NewClientConn(clientConn)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	reqStr, err := conn.OpenRequestStream(ctx)
+	require.NoError(t, err)
+	require.NoError(t, reqStr.SendRequestHeader(NewWebTransportRequest(t, serverAddr)))
+	rsp, err := reqStr.ReadResponse()
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, rsp.StatusCode)
+
+	sess := newSession(context.Background(), 42, conn.Conn(), reqStr, "")
+
+	select {
+	case <-sess.Context().Done():
+	case <-time.After(time.Second):
+		t.Fatal("timeout waiting for session to close")
+	}
+
+	ctx2, cancel2 := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel2()
+	_, err = sess.AcceptStream(ctx2)
+	require.Error(t, err)
+
+	var sessErr *SessionError
+	require.ErrorAs(t, err, &sessErr)
+	require.True(t, sessErr.Remote)
+	require.Equal(t, SessionErrorCode(1337), sessErr.ErrorCode)
+	// the message should be truncated to maxCloseCapsuleErrorMsgLen
+	require.Len(t, sessErr.Message, maxCloseCapsuleErrorMsgLen)
+	require.Equal(t, strings.Repeat("b", maxCloseCapsuleErrorMsgLen), sessErr.Message)
+}
+
+func TestTruncateUTF8(t *testing.T) {
+	input := "Go 🚀"
+	require.Len(t, input, 7)
+
+	require.Equal(t, "Go 🚀", truncateUTF8(input, 100))
+	require.Equal(t, "Go 🚀", truncateUTF8(input, 7))
+	require.Equal(t, "Go ", truncateUTF8(input, 6))
+	require.Equal(t, "Go ", truncateUTF8(input, 5))
+	require.Equal(t, "Go ", truncateUTF8(input, 4))
+	require.Equal(t, "Go ", truncateUTF8(input, 3))
+	require.Equal(t, "Go", truncateUTF8(input, 2))
+	require.Equal(t, "G", truncateUTF8(input, 1))
+	require.Equal(t, "", truncateUTF8(input, 0))
 }

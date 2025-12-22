@@ -7,6 +7,7 @@ import (
 	"math/rand/v2"
 	"net"
 	"sync"
+	"unicode/utf8"
 
 	"github.com/quic-go/quic-go"
 	"github.com/quic-go/quic-go/http3"
@@ -16,7 +17,9 @@ import (
 // sessionID is the WebTransport Session ID
 type sessionID uint64
 
-const closeWebtransportSessionCapsuleType http3.CapsuleType = 0x2843
+const closeSessionCapsuleType http3.CapsuleType = 0x2843
+
+const maxCloseCapsuleErrorMsgLen = 1024
 
 type acceptQueue[T any] struct {
 	mx sync.Mutex
@@ -154,22 +157,22 @@ func (s *Session) handleConn() {
 }
 
 // parseNextCapsule parses the next Capsule sent on the request stream.
-// It returns a SessionError, if the capsule received is a CLOSE_WEBTRANSPORT_SESSION Capsule.
+// It returns a SessionError, if the capsule received is a WT_CLOSE_SESSION Capsule.
 func (s *Session) parseNextCapsule() error {
 	for {
-		// TODO: enforce max size
 		typ, r, err := http3.ParseCapsule(quicvarint.NewReader(s.str))
 		if err != nil {
 			return err
 		}
 		switch typ {
-		case closeWebtransportSessionCapsuleType:
-			b := make([]byte, 4)
-			if _, err := io.ReadFull(r, b); err != nil {
+		case closeSessionCapsuleType:
+			var b [4]byte
+			if _, err := io.ReadFull(r, b[:]); err != nil {
 				return err
 			}
-			appErrCode := binary.BigEndian.Uint32(b)
-			appErrMsg, err := io.ReadAll(r)
+			appErrCode := binary.BigEndian.Uint32(b[:])
+			// the length of the error message is limited to 1024 bytes
+			appErrMsg, err := io.ReadAll(io.LimitReader(r, maxCloseCapsuleErrorMsgLen))
 			if err != nil {
 				return err
 			}
@@ -409,12 +412,17 @@ func (s *Session) CloseWithError(code SessionErrorCode, msg string) error {
 		return err
 	}
 
+	// truncate the message if it's too long
+	if len(msg) > maxCloseCapsuleErrorMsgLen {
+		msg = truncateUTF8(msg, maxCloseCapsuleErrorMsgLen)
+	}
+
 	b := make([]byte, 4, 4+len(msg))
 	binary.BigEndian.PutUint32(b, uint32(code))
 	b = append(b, []byte(msg)...)
 	if err := http3.WriteCapsule(
 		quicvarint.NewWriter(s.str),
-		closeWebtransportSessionCapsuleType,
+		closeSessionCapsuleType,
 		b,
 	); err != nil {
 		return err
@@ -457,4 +465,16 @@ func (s *Session) SessionState() SessionState {
 		ConnectionState:     s.conn.ConnectionState(),
 		ApplicationProtocol: s.applicationProtocol,
 	}
+}
+
+// truncateUTF8 cuts a string to max n bytes without breaking UTF-8 characters.
+func truncateUTF8(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
+	}
+	return s[:n]
 }
