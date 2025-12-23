@@ -170,7 +170,7 @@ func TestAddStreamAfterSessionClose(t *testing.T) {
 	case <-str2.Context().Done():
 		require.ErrorIs(t,
 			context.Cause(str2.Context()),
-			&quic.StreamError{Remote: true, StreamID: str2.StreamID(), ErrorCode: sessionCloseErrorCode},
+			&quic.StreamError{Remote: true, StreamID: str2.StreamID(), ErrorCode: WTSessionGoneErrorCode},
 		)
 	case <-time.After(time.Second):
 		t.Fatal("timeout")
@@ -184,7 +184,7 @@ func TestAddStreamAfterSessionClose(t *testing.T) {
 	case <-ustr.Context().Done():
 		require.ErrorIs(t,
 			context.Cause(ustr.Context()),
-			&quic.StreamError{Remote: true, StreamID: ustr.StreamID(), ErrorCode: sessionCloseErrorCode},
+			&quic.StreamError{Remote: true, StreamID: ustr.StreamID(), ErrorCode: WTSessionGoneErrorCode},
 		)
 	case <-time.After(time.Second):
 		t.Fatal("timeout")
@@ -372,7 +372,7 @@ func testOpenStreamSyncAfterSessionClose(t *testing.T, bidirectional bool) {
 
 	str.SetReadDeadline(time.Now().Add(time.Second))
 	_, err = str.Read([]byte{0})
-	require.ErrorIs(t, err, &quic.StreamError{Remote: true, StreamID: str.StreamID(), ErrorCode: sessionCloseErrorCode})
+	require.ErrorIs(t, err, &quic.StreamError{Remote: true, StreamID: str.StreamID(), ErrorCode: WTSessionGoneErrorCode})
 }
 
 // TestCloseWithErrorTruncatesSendMessage tests that when CloseWithError is called

@@ -41,16 +41,21 @@ func isWebTransportError(e error) bool {
 	if !errors.As(e, &strErr) {
 		return false
 	}
-	if strErr.ErrorCode == sessionCloseErrorCode {
+	if strErr.ErrorCode == WTSessionGoneErrorCode {
 		return true
 	}
 	_, err := httpCodeToWebtransportCode(strErr.ErrorCode)
 	return err == nil
 }
 
-// WTBufferedStreamRejectedErrorCode is the error code of the
-// WT_BUFFERED_STREAM_REJECTED error.
-const WTBufferedStreamRejectedErrorCode quic.StreamErrorCode = 0x3994bd84
+const (
+	// WTBufferedStreamRejectedErrorCode is the error code of the
+	// WT_BUFFERED_STREAM_REJECTED error.
+	WTBufferedStreamRejectedErrorCode quic.StreamErrorCode = 0x3994bd84
+
+	// WTSessionGoneErrorCode is the error code of the WT_SESSION_GONE error.
+	WTSessionGoneErrorCode quic.StreamErrorCode = 0x170d7b68
+)
 
 // StreamError is the error that is returned from stream operations (Read, Write) when the stream is canceled.
 type StreamError struct {

@@ -218,8 +218,8 @@ func (s *Session) addIncomingStream(qstr *quic.Stream) {
 	closeErr := s.closeErr
 	if closeErr != nil {
 		s.closeMx.Unlock()
-		qstr.CancelRead(sessionCloseErrorCode)
-		qstr.CancelWrite(sessionCloseErrorCode)
+		qstr.CancelRead(WTSessionGoneErrorCode)
+		qstr.CancelWrite(WTSessionGoneErrorCode)
 		return
 	}
 	str := s.addStream(qstr, false)
@@ -234,7 +234,7 @@ func (s *Session) addIncomingUniStream(qstr *quic.ReceiveStream) {
 	closeErr := s.closeErr
 	if closeErr != nil {
 		s.closeMx.Unlock()
-		qstr.CancelRead(sessionCloseErrorCode)
+		qstr.CancelRead(WTSessionGoneErrorCode)
 		return
 	}
 	str := s.addReceiveStream(qstr)
@@ -340,8 +340,8 @@ func (s *Session) OpenStreamSync(ctx context.Context) (*Stream, error) {
 
 	// the session might have been closed concurrently with OpenStreamSync returning
 	if qstr != nil && s.closeErr != nil {
-		qstr.CancelRead(sessionCloseErrorCode)
-		qstr.CancelWrite(sessionCloseErrorCode)
+		qstr.CancelRead(WTSessionGoneErrorCode)
+		qstr.CancelWrite(WTSessionGoneErrorCode)
 		return nil, s.closeErr
 	}
 	if err != nil {
@@ -386,7 +386,7 @@ func (s *Session) OpenUniStreamSync(ctx context.Context) (str *SendStream, err e
 
 	// the session might have been closed concurrently with OpenStreamSync returning
 	if qstr != nil && s.closeErr != nil {
-		qstr.CancelWrite(sessionCloseErrorCode)
+		qstr.CancelWrite(WTSessionGoneErrorCode)
 		return nil, s.closeErr
 	}
 	if err != nil {
@@ -428,7 +428,7 @@ func (s *Session) CloseWithError(code SessionErrorCode, msg string) error {
 		return err
 	}
 
-	s.str.CancelRead(1337)
+	s.str.CancelRead(WTSessionGoneErrorCode)
 	err = s.str.Close()
 	<-s.ctx.Done()
 	return err
