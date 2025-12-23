@@ -1,7 +1,6 @@
 package webtransport
 
 import (
-	"errors"
 	"math"
 	"math/rand/v2"
 	"testing"
@@ -55,9 +54,21 @@ func TestErrorCodeConversionErrors(t *testing.T) {
 }
 
 func TestStreamError(t *testing.T) {
-	require.True(t, errors.Is(&StreamError{ErrorCode: 2, Remote: true}, &StreamError{ErrorCode: 2, Remote: true}))
-	require.False(t, errors.Is(&StreamError{ErrorCode: 2, Remote: true}, &StreamError{ErrorCode: 2, Remote: false}))
-	require.False(t, errors.Is(&StreamError{ErrorCode: 1}, &StreamError{ErrorCode: 2}))
+	require.ErrorIs(t, &StreamError{ErrorCode: 2, Remote: true}, &StreamError{ErrorCode: 2, Remote: true})
+	require.NotErrorIs(t, &StreamError{ErrorCode: 2, Remote: true}, &StreamError{ErrorCode: 2, Remote: false})
+	require.NotErrorIs(t, &StreamError{ErrorCode: 1}, &StreamError{ErrorCode: 2})
 	require.Equal(t, "stream canceled with error code 2", (&StreamError{ErrorCode: 2, Remote: true}).Error())
 	require.Equal(t, "stream canceled with error code 1337", (&StreamError{ErrorCode: 1337, Remote: false}).Error())
+}
+
+func TestSessionError(t *testing.T) {
+	require.ErrorIs(t, &SessionError{ErrorCode: 2, Remote: true}, &SessionError{ErrorCode: 2, Remote: true})
+	require.ErrorIs(t,
+		&SessionError{ErrorCode: 2, Remote: true, Message: "foo"},
+		&SessionError{ErrorCode: 2, Remote: true, Message: "bar"},
+	)
+	require.NotErrorIs(t, &SessionError{ErrorCode: 2, Remote: true}, &SessionError{ErrorCode: 2, Remote: false})
+	require.NotErrorIs(t, &SessionError{ErrorCode: 1}, &SessionError{ErrorCode: 2})
+	require.Equal(t, "foo", (&SessionError{ErrorCode: 2, Remote: true, Message: "foo"}).Error())
+	require.Equal(t, "bar", (&SessionError{ErrorCode: 1337, Remote: false, Message: "bar"}).Error())
 }

@@ -58,13 +58,15 @@ type StreamError struct {
 	Remote    bool
 }
 
-func (e *StreamError) Is(target error) bool {
-	t, ok := target.(*StreamError)
-	return ok && t.Remote == e.Remote && t.ErrorCode == e.ErrorCode
-}
+var _ error = &StreamError{}
 
 func (e *StreamError) Error() string {
 	return fmt.Sprintf("stream canceled with error code %d", e.ErrorCode)
+}
+
+func (e *StreamError) Is(target error) bool {
+	t, ok := target.(*StreamError)
+	return ok && t.Remote == e.Remote && t.ErrorCode == e.ErrorCode
 }
 
 // SessionError is a WebTransport connection error.
@@ -77,3 +79,8 @@ type SessionError struct {
 var _ error = &SessionError{}
 
 func (e *SessionError) Error() string { return e.Message }
+
+func (e *SessionError) Is(target error) bool {
+	t, ok := target.(*SessionError)
+	return ok && e.ErrorCode == t.ErrorCode && e.Remote == t.Remote
+}
