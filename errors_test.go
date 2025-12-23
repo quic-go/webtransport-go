@@ -54,20 +54,11 @@ func TestErrorCodeConversionErrors(t *testing.T) {
 	})
 }
 
-func TestErrorDetection(t *testing.T) {
-	is := []error{
-		&quic.StreamError{ErrorCode: webtransportCodeToHTTPCode(42)},
-		&quic.StreamError{ErrorCode: sessionCloseErrorCode},
-	}
-	for _, i := range is {
-		require.True(t, isWebTransportError(i))
-	}
-
-	isNot := []error{
-		errors.New("foo"),
-		&quic.StreamError{ErrorCode: sessionCloseErrorCode + 1},
-	}
-	for _, i := range isNot {
-		require.False(t, isWebTransportError(i))
-	}
+func TestStreamError(t *testing.T) {
+	require.True(t, errors.Is(&StreamError{ErrorCode: 2, Remote: true}, &StreamError{ErrorCode: 2, Remote: true}))
+	require.False(t, errors.Is(&StreamError{ErrorCode: 2, Remote: true}, &StreamError{ErrorCode: 2, Remote: false}))
+	require.False(t, errors.Is(&StreamError{ErrorCode: 1}, &StreamError{ErrorCode: 2}))
+	require.False(t, errors.Is(&StreamError{ErrorCode: 1}, &StreamError{ErrorCode: 2}))
+	require.Equal(t, "stream canceled with error code 2", (&StreamError{ErrorCode: 2, Remote: true}).Error())
+	require.Equal(t, "stream canceled with error code 1337", (&StreamError{ErrorCode: 1337, Remote: false}).Error())
 }
