@@ -59,8 +59,8 @@ type StreamError struct {
 }
 
 func (e *StreamError) Is(target error) bool {
-	_, ok := target.(*StreamError)
-	return ok
+	t, ok := target.(*StreamError)
+	return ok && t.Remote == e.Remote && t.ErrorCode == e.ErrorCode
 }
 
 func (e *StreamError) Error() string {
