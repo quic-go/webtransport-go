@@ -12,8 +12,6 @@ import (
 	"github.com/quic-go/quic-go"
 )
 
-const sessionCloseErrorCode quic.StreamErrorCode = 0x170d7b68
-
 type quicSendStream interface {
 	io.WriteCloser
 	StreamID() quic.StreamID
@@ -87,7 +85,7 @@ func (s *SendStream) CancelWrite(e StreamErrorCode) {
 }
 
 func (s *SendStream) closeWithSession() {
-	s.str.CancelWrite(sessionCloseErrorCode)
+	s.str.CancelWrite(WTSessionGoneErrorCode)
 }
 
 func (s *SendStream) Close() error {
@@ -136,7 +134,7 @@ func (s *ReceiveStream) CancelRead(e StreamErrorCode) {
 }
 
 func (s *ReceiveStream) closeWithSession() {
-	s.str.CancelRead(sessionCloseErrorCode)
+	s.str.CancelRead(WTSessionGoneErrorCode)
 }
 
 func (s *ReceiveStream) SetReadDeadline(t time.Time) error {
