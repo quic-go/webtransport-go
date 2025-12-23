@@ -142,8 +142,8 @@ func (m *sessionManager) handleStream(str *quic.Stream, sess *session) {
 	case <-sess.created:
 		sess.conn.addIncomingStream(str)
 	case <-t.C:
-		str.CancelRead(WebTransportBufferedStreamRejectedErrorCode)
-		str.CancelWrite(WebTransportBufferedStreamRejectedErrorCode)
+		str.CancelRead(WTBufferedStreamRejectedErrorCode)
+		str.CancelWrite(WTBufferedStreamRejectedErrorCode)
 	case <-m.ctx.Done():
 	}
 }
@@ -158,7 +158,7 @@ func (m *sessionManager) handleUniStream(str *quic.ReceiveStream, sess *session)
 	case <-sess.created:
 		sess.conn.addIncomingUniStream(str)
 	case <-t.C:
-		str.CancelRead(WebTransportBufferedStreamRejectedErrorCode)
+		str.CancelRead(WTBufferedStreamRejectedErrorCode)
 	case <-m.ctx.Done():
 	}
 }

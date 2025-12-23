@@ -157,7 +157,7 @@ func TestServerReorderedUpgradeRequestTimeout(t *testing.T) {
 	_, err = str.Read([]byte{0})
 	var streamErr *quic.StreamError
 	require.ErrorAs(t, err, &streamErr)
-	require.Equal(t, webtransport.WebTransportBufferedStreamRejectedErrorCode, streamErr.ErrorCode)
+	require.Equal(t, webtransport.WTBufferedStreamRejectedErrorCode, streamErr.ErrorCode)
 
 	// Now establish the session. Make sure we don't accept the stream.
 	requestStr, err := conn.OpenRequestStream(context.Background())
@@ -223,7 +223,7 @@ func TestServerReorderedMultipleStreams(t *testing.T) {
 	_, err = str1.Read([]byte{0})
 	var streamErr *quic.StreamError
 	require.ErrorAs(t, err, &streamErr)
-	require.Equal(t, webtransport.WebTransportBufferedStreamRejectedErrorCode, streamErr.ErrorCode)
+	require.Equal(t, webtransport.WTBufferedStreamRejectedErrorCode, streamErr.ErrorCode)
 	took := time.Since(start)
 	require.GreaterOrEqual(t, took, timeout)
 	require.Less(t, took, timeout*5/4)
