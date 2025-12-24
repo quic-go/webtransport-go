@@ -576,8 +576,12 @@ func TestCheckOrigin(t *testing.T) {
 }
 
 func TestCloseStreamsOnSessionClose(t *testing.T) {
+	const errorCode = 42
+
 	accepted := make(chan struct{})
+	errChan := make(chan error, 10)
 	sess, closeServer := establishSession(t, func(sess *webtransport.Session) {
+		defer close(errChan)
 		str, err := sess.OpenStream()
 		require.NoError(t, err)
 		_, err = str.Write([]byte("foobar"))
@@ -587,13 +591,14 @@ func TestCloseStreamsOnSessionClose(t *testing.T) {
 		_, err = ustr.Write([]byte("foobar"))
 		require.NoError(t, err)
 		<-accepted
-		sess.CloseWithError(0, "")
+		sess.CloseWithError(errorCode, "error message")
+
 		_, err = str.Read([]byte{0})
-		require.Error(t, err)
+		errChan <- err
 		_, err = ustr.Write([]byte{0})
-		require.Error(t, err)
+		errChan <- err
 		_, err = ustr.Write([]byte{0})
-		require.Error(t, err)
+		errChan <- err
 	})
 	defer closeServer()
 
@@ -602,12 +607,19 @@ func TestCloseStreamsOnSessionClose(t *testing.T) {
 	ustr, err := sess.AcceptUniStream(context.Background())
 	require.NoError(t, err)
 	close(accepted)
+
+	expectedErr := &webtransport.SessionError{Remote: true, ErrorCode: errorCode}
 	str.Read(make([]byte, 6)) // read the foobar
 	_, err = str.Read([]byte{0})
-	require.Error(t, err)
+	require.ErrorIs(t, err, expectedErr)
 	ustr.Read(make([]byte, 6)) // read the foobar
 	_, err = ustr.Read([]byte{0})
-	require.Error(t, err)
+	require.ErrorIs(t, err, expectedErr)
+
+	// check the errors returned on the server side
+	for err := range errChan {
+		require.ErrorIs(t, err, &webtransport.SessionError{Remote: false, ErrorCode: errorCode})
+	}
 }
 
 func TestWriteCloseRace(t *testing.T) {

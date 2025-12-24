@@ -454,7 +454,7 @@ func (s *Session) closeWithError(closeErr error) (bool /* first call to close se
 	for _, cancel := range s.streamCtxs {
 		cancel()
 	}
-	s.streams.CloseSession()
+	s.streams.CloseSession(closeErr)
 
 	return true, nil
 }

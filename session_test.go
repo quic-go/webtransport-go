@@ -20,6 +20,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+//nolint:unparam
 func scaleDuration(d time.Duration) time.Duration {
 	if os.Getenv("CI") != "" {
 		return 5 * d
