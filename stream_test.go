@@ -8,6 +8,7 @@ import (
 
 	"github.com/quic-go/quic-go"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -25,6 +26,8 @@ func newUniStreamPair(t *testing.T) (*quic.SendStream, *quic.ReceiveStream) {
 	clientStr.Write([]byte("foo"))
 
 	serverStr, err := server.AcceptUniStream(ctx)
+	require.NoError(t, err)
+	_, err = io.ReadFull(serverStr, make([]byte, 3))
 	require.NoError(t, err)
 
 	return clientStr, serverStr
@@ -71,6 +74,71 @@ func TestSendStreamClose(t *testing.T) {
 				require.ErrorContains(t, writeErr, tc.errMsgContains)
 			}
 		})
+	}
+}
+
+func TestSendStreamSessionGone(t *testing.T) {
+	sendStr, recvStr := newUniStreamPair(t)
+	str := newSendStream(sendStr, nil, func() {})
+
+	// simulate remote side sending WTSessionGoneErrorCode
+	recvStr.CancelRead(WTSessionGoneErrorCode)
+
+	errChan := make(chan error, 1)
+	go func() {
+		for {
+			if _, err := str.Write([]byte("foo")); err != nil {
+				errChan <- err
+				return
+			}
+			time.Sleep(time.Millisecond)
+		}
+	}()
+
+	select {
+	case <-errChan:
+		t.Fatal("Write should be blocking")
+	case <-time.After(scaleDuration(10 * time.Millisecond)):
+	}
+
+	str.closeWithSession(assert.AnError)
+
+	select {
+	case err := <-errChan:
+		require.ErrorIs(t, err, assert.AnError)
+	case <-time.After(scaleDuration(10 * time.Millisecond)):
+		t.Fatal("Write didn't unblock")
+	}
+}
+
+func TestReceiveStreamSessionGone(t *testing.T) {
+	sendStr, recvStr := newUniStreamPair(t)
+	str := newReceiveStream(recvStr, func() {})
+
+	// simulate remote side sending WTSessionGoneErrorCode
+	sendStr.CancelWrite(WTSessionGoneErrorCode)
+
+	errChan := make(chan error, 1)
+	go func() {
+		if _, err := str.Read(make([]byte, 100)); err != nil {
+			errChan <- err
+			return
+		}
+	}()
+
+	select {
+	case <-errChan:
+		t.Fatal("Read should be blocking")
+	case <-time.After(scaleDuration(10 * time.Millisecond)):
+	}
+
+	str.closeWithSession(assert.AnError)
+
+	select {
+	case err := <-errChan:
+		require.ErrorIs(t, err, assert.AnError)
+	case <-time.After(scaleDuration(10 * time.Millisecond)):
+		t.Fatal("Read didn't unblock")
 	}
 }
 

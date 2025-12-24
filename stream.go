@@ -42,23 +42,27 @@ type SendStream struct {
 	// WebTransport stream header.
 	// Set by the constructor, set to nil once sent out.
 	// Might be initialized to nil if this sendStream is part of an incoming bidirectional stream.
-	streamHdr []byte
+	streamHdr     []byte
+	streamHdrOnce sync.Once
 
-	onClose func()
+	onClose func() // to remove the stream from the streamsMap
 
-	once sync.Once
+	closeOnce sync.Once
+	closed    chan struct{}
+	closeErr  error
 }
 
 func newSendStream(str quicSendStream, hdr []byte, onClose func()) *SendStream {
 	return &SendStream{
 		str:       str,
+		closed:    make(chan struct{}),
 		streamHdr: hdr,
 		onClose:   onClose,
 	}
 }
 
 func (s *SendStream) maybeSendStreamHeader() (err error) {
-	s.once.Do(func() {
+	s.streamHdrOnce.Do(func() {
 		if _, e := s.str.Write(s.streamHdr); e != nil {
 			err = e
 			return
@@ -76,6 +80,16 @@ func (s *SendStream) Write(b []byte) (int, error) {
 	if err != nil && !isTimeoutError(err) {
 		s.onClose()
 	}
+	var strErr *quic.StreamError
+	if errors.As(err, &strErr) && strErr.ErrorCode == WTSessionGoneErrorCode {
+		// The stream is reset with a WTSessionGoneErrorCode when the session is closed.
+		// If the peer is initiating the session close, we might need to wait for the CONNECT stream to be closed.
+		// While a malicious peer might withhold the session close, this is not an interesting attack vector:
+		// 1. a WebTransport stream consumes very little memory, and
+		// 2. the number of concurrent WebTransport sessions is limited.
+		<-s.closed // TODO: respect stream deadline
+		return n, s.closeErr
+	}
 	return n, maybeConvertStreamError(err)
 }
 
@@ -84,8 +98,12 @@ func (s *SendStream) CancelWrite(e StreamErrorCode) {
 	s.onClose()
 }
 
-func (s *SendStream) closeWithSession() {
-	s.str.CancelWrite(WTSessionGoneErrorCode)
+func (s *SendStream) closeWithSession(err error) {
+	s.closeOnce.Do(func() {
+		s.closeErr = err
+		s.str.CancelWrite(WTSessionGoneErrorCode)
+		close(s.closed)
+	})
 }
 
 func (s *SendStream) Close() error {
@@ -109,13 +127,19 @@ func (s *SendStream) StreamID() quic.StreamID {
 }
 
 type ReceiveStream struct {
-	str     quicReceiveStream
-	onClose func()
+	str quicReceiveStream
+
+	onClose func() // to remove the stream from the streamsMap
+
+	closeOnce sync.Once
+	closed    chan struct{}
+	closeErr  error
 }
 
 func newReceiveStream(str quicReceiveStream, onClose func()) *ReceiveStream {
 	return &ReceiveStream{
 		str:     str,
+		closed:  make(chan struct{}),
 		onClose: onClose,
 	}
 }
@@ -125,6 +149,16 @@ func (s *ReceiveStream) Read(b []byte) (int, error) {
 	if err != nil && !isTimeoutError(err) {
 		s.onClose()
 	}
+	var strErr *quic.StreamError
+	if errors.As(err, &strErr) && strErr.ErrorCode == WTSessionGoneErrorCode {
+		// The stream is reset with a WTSessionGoneErrorCode when the session is closed.
+		// If the peer is initiating the session close, we might need to wait for the CONNECT stream to be closed.
+		// While a malicious peer might withhold the session close, this is not an interesting attack vector:
+		// 1. a WebTransport stream consumes very little memory, and
+		// 2. the number of concurrent WebTransport sessions is limited.
+		<-s.closed // TODO: respect stream deadline
+		return n, s.closeErr
+	}
 	return n, maybeConvertStreamError(err)
 }
 
@@ -133,8 +167,12 @@ func (s *ReceiveStream) CancelRead(e StreamErrorCode) {
 	s.onClose()
 }
 
-func (s *ReceiveStream) closeWithSession() {
-	s.str.CancelRead(WTSessionGoneErrorCode)
+func (s *ReceiveStream) closeWithSession(err error) {
+	s.closeOnce.Do(func() {
+		s.closeErr = err
+		s.str.CancelRead(WTSessionGoneErrorCode)
+		close(s.closed)
+	})
 }
 
 func (s *ReceiveStream) SetReadDeadline(t time.Time) error {
@@ -200,9 +238,9 @@ func (s *Stream) registerClose(isSendSide bool) {
 	}
 }
 
-func (s *Stream) closeWithSession() {
-	s.sendStr.closeWithSession()
-	s.recvStr.closeWithSession()
+func (s *Stream) closeWithSession(err error) {
+	s.sendStr.closeWithSession(err)
+	s.recvStr.closeWithSession(err)
 }
 
 func (s *Stream) Context() context.Context {
