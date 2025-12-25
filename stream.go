@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"os"
 	"sync"
 	"time"
 
@@ -50,6 +51,10 @@ type SendStream struct {
 	closeOnce sync.Once
 	closed    chan struct{}
 	closeErr  error
+
+	deadlineMu       sync.Mutex
+	writeDeadline    time.Time
+	deadlineNotifyCh chan struct{} // receives a value when deadline changes
 }
 
 func newSendStream(str quicSendStream, hdr []byte, onClose func()) *SendStream {
@@ -68,15 +73,44 @@ func (s *SendStream) Write(b []byte) (int, error) {
 	}
 	var strErr *quic.StreamError
 	if errors.As(err, &strErr) && strErr.ErrorCode == WTSessionGoneErrorCode {
-		// The stream is reset with a WTSessionGoneErrorCode when the session is closed.
-		// If the peer is initiating the session close, we might need to wait for the CONNECT stream to be closed.
-		// While a malicious peer might withhold the session close, this is not an interesting attack vector:
-		// 1. a WebTransport stream consumes very little memory, and
-		// 2. the number of concurrent WebTransport sessions is limited.
-		<-s.closed // TODO: respect stream deadline
-		return n, s.closeErr
+		return n, s.handleSessionGoneError()
 	}
 	return n, maybeConvertStreamError(err)
+}
+
+// handleSessionGoneError waits for the session to be closed after receiving a WTSessionGoneErrorCode.
+// If the peer is initiating the session close, we might need to wait for the CONNECT stream to be closed.
+// While a malicious peer might withhold the session close, this is not an interesting attack vector:
+// 1. a WebTransport stream consumes very little memory, and
+// 2. the number of concurrent WebTransport sessions is limited.
+func (s *SendStream) handleSessionGoneError() error {
+	s.deadlineMu.Lock()
+	if s.deadlineNotifyCh == nil {
+		s.deadlineNotifyCh = make(chan struct{}, 1)
+	}
+	s.deadlineMu.Unlock()
+
+	for {
+		s.deadlineMu.Lock()
+		deadline := s.writeDeadline
+		s.deadlineMu.Unlock()
+
+		var timerCh <-chan time.Time
+		if !deadline.IsZero() {
+			if d := time.Until(deadline); d > 0 {
+				timerCh = time.After(d)
+			} else {
+				return os.ErrDeadlineExceeded
+			}
+		}
+		select {
+		case <-s.closed:
+			return s.closeErr
+		case <-timerCh:
+			return os.ErrDeadlineExceeded
+		case <-s.deadlineNotifyCh:
+		}
+	}
 }
 
 func (s *SendStream) write(b []byte) (int, error) {
@@ -130,6 +164,16 @@ func (s *SendStream) Context() context.Context {
 }
 
 func (s *SendStream) SetWriteDeadline(t time.Time) error {
+	s.deadlineMu.Lock()
+	s.writeDeadline = t
+	if s.deadlineNotifyCh != nil {
+		select {
+		case s.deadlineNotifyCh <- struct{}{}:
+		default:
+		}
+	}
+	s.deadlineMu.Unlock()
+
 	return maybeConvertStreamError(s.str.SetWriteDeadline(t))
 }
 
@@ -145,6 +189,10 @@ type ReceiveStream struct {
 	closeOnce sync.Once
 	closed    chan struct{}
 	closeErr  error
+
+	deadlineMu       sync.Mutex
+	readDeadline     time.Time
+	deadlineNotifyCh chan struct{} // receives a value when deadline changes
 }
 
 func newReceiveStream(str quicReceiveStream, onClose func()) *ReceiveStream {
@@ -162,15 +210,44 @@ func (s *ReceiveStream) Read(b []byte) (int, error) {
 	}
 	var strErr *quic.StreamError
 	if errors.As(err, &strErr) && strErr.ErrorCode == WTSessionGoneErrorCode {
-		// The stream is reset with a WTSessionGoneErrorCode when the session is closed.
-		// If the peer is initiating the session close, we might need to wait for the CONNECT stream to be closed.
-		// While a malicious peer might withhold the session close, this is not an interesting attack vector:
-		// 1. a WebTransport stream consumes very little memory, and
-		// 2. the number of concurrent WebTransport sessions is limited.
-		<-s.closed // TODO: respect stream deadline
-		return n, s.closeErr
+		return n, s.handleSessionGoneError()
 	}
 	return n, maybeConvertStreamError(err)
+}
+
+// handleSessionGoneError waits for the session to be closed after receiving a WTSessionGoneErrorCode.
+// If the peer is initiating the session close, we might need to wait for the CONNECT stream to be closed.
+// While a malicious peer might withhold the session close, this is not an interesting attack vector:
+// 1. a WebTransport stream consumes very little memory, and
+// 2. the number of concurrent WebTransport sessions is limited.
+func (s *ReceiveStream) handleSessionGoneError() error {
+	s.deadlineMu.Lock()
+	if s.deadlineNotifyCh == nil {
+		s.deadlineNotifyCh = make(chan struct{}, 1)
+	}
+	s.deadlineMu.Unlock()
+
+	for {
+		s.deadlineMu.Lock()
+		deadline := s.readDeadline
+		s.deadlineMu.Unlock()
+
+		var timerCh <-chan time.Time
+		if !deadline.IsZero() {
+			if d := time.Until(deadline); d > 0 {
+				timerCh = time.After(d)
+			} else {
+				return os.ErrDeadlineExceeded
+			}
+		}
+		select {
+		case <-s.closed:
+			return s.closeErr
+		case <-timerCh:
+			return os.ErrDeadlineExceeded
+		case <-s.deadlineNotifyCh:
+		}
+	}
 }
 
 func (s *ReceiveStream) CancelRead(e StreamErrorCode) {
@@ -187,6 +264,16 @@ func (s *ReceiveStream) closeWithSession(err error) {
 }
 
 func (s *ReceiveStream) SetReadDeadline(t time.Time) error {
+	s.deadlineMu.Lock()
+	s.readDeadline = t
+	if s.deadlineNotifyCh != nil {
+		select {
+		case s.deadlineNotifyCh <- struct{}{}:
+		default:
+		}
+	}
+	s.deadlineMu.Unlock()
+
 	return maybeConvertStreamError(s.str.SetReadDeadline(t))
 }
 

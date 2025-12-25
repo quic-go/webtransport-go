@@ -111,6 +111,67 @@ func TestSendStreamSessionGone(t *testing.T) {
 	}
 }
 
+func TestSendStreamSessionGoneDeadline(t *testing.T) {
+	t.Run("deadline expires while waiting", func(t *testing.T) {
+		sendStr, recvStr := newUniStreamPair(t)
+		str := newSendStream(sendStr, nil, func() {})
+
+		require.NoError(t, str.SetWriteDeadline(time.Now().Add(scaleDuration(20*time.Millisecond))))
+		recvStr.CancelRead(WTSessionGoneErrorCode)
+
+		errChan := make(chan error, 1)
+		go func() {
+			for {
+				if _, err := str.Write([]byte("foo")); err != nil {
+					errChan <- err
+					return
+				}
+				time.Sleep(time.Millisecond)
+			}
+		}()
+
+		select {
+		case err := <-errChan:
+			require.True(t, isTimeoutError(err), "expected timeout error, got: %v", err)
+		case <-time.After(scaleDuration(100 * time.Millisecond)):
+			t.Fatal("Write didn't unblock after deadline")
+		}
+	})
+
+	t.Run("deadline changed while waiting", func(t *testing.T) {
+		sendStr, recvStr := newUniStreamPair(t)
+		str := newSendStream(sendStr, nil, func() {})
+
+		recvStr.CancelRead(WTSessionGoneErrorCode)
+
+		errChan := make(chan error, 1)
+		go func() {
+			for {
+				if _, err := str.Write([]byte("foo")); err != nil {
+					errChan <- err
+					return
+				}
+				time.Sleep(time.Millisecond)
+			}
+		}()
+
+		select {
+		case <-errChan:
+			t.Fatal("Write should be blocking")
+		case <-time.After(scaleDuration(10 * time.Millisecond)):
+		}
+
+		require.NoError(t, str.SetWriteDeadline(time.Now().Add(scaleDuration(10*time.Millisecond))))
+
+		select {
+		case err := <-errChan:
+			require.True(t, isTimeoutError(err), "expected timeout error, got: %v", err)
+		case <-time.After(scaleDuration(100 * time.Millisecond)):
+			t.Fatal("Write didn't unblock after deadline was set")
+		}
+	})
+}
+
 func TestReceiveStreamSessionGone(t *testing.T) {
 	sendStr, recvStr := newUniStreamPair(t)
 	str := newReceiveStream(recvStr, func() {})
@@ -140,6 +201,61 @@ func TestReceiveStreamSessionGone(t *testing.T) {
 	case <-time.After(scaleDuration(10 * time.Millisecond)):
 		t.Fatal("Read didn't unblock")
 	}
+}
+
+func TestReceiveStreamSessionGoneDeadline(t *testing.T) {
+	t.Run("deadline expires while waiting", func(t *testing.T) {
+		sendStr, recvStr := newUniStreamPair(t)
+		str := newReceiveStream(recvStr, func() {})
+
+		require.NoError(t, str.SetReadDeadline(time.Now().Add(scaleDuration(20*time.Millisecond))))
+		sendStr.CancelWrite(WTSessionGoneErrorCode)
+
+		errChan := make(chan error, 1)
+		go func() {
+			if _, err := str.Read(make([]byte, 100)); err != nil {
+				errChan <- err
+				return
+			}
+		}()
+
+		select {
+		case err := <-errChan:
+			require.True(t, isTimeoutError(err), "expected timeout error, got: %v", err)
+		case <-time.After(scaleDuration(100 * time.Millisecond)):
+			t.Fatal("Read didn't unblock after deadline")
+		}
+	})
+
+	t.Run("deadline changed while waiting", func(t *testing.T) {
+		sendStr, recvStr := newUniStreamPair(t)
+		str := newReceiveStream(recvStr, func() {})
+
+		sendStr.CancelWrite(WTSessionGoneErrorCode)
+
+		errChan := make(chan error, 1)
+		go func() {
+			if _, err := str.Read(make([]byte, 100)); err != nil {
+				errChan <- err
+				return
+			}
+		}()
+
+		select {
+		case <-errChan:
+			t.Fatal("Read should be blocking")
+		case <-time.After(scaleDuration(10 * time.Millisecond)):
+		}
+
+		require.NoError(t, str.SetReadDeadline(time.Now().Add(scaleDuration(10*time.Millisecond))))
+
+		select {
+		case err := <-errChan:
+			require.True(t, isTimeoutError(err), "expected timeout error, got: %v", err)
+		case <-time.After(scaleDuration(100 * time.Millisecond)):
+			t.Fatal("Read didn't unblock after deadline was set")
+		}
+	})
 }
 
 func TestSendStreamHeaderRetryAfterDeadlineError(t *testing.T) {
