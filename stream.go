@@ -93,7 +93,11 @@ func (s *SendStream) maybeSendStreamHeader() error {
 	if len(s.streamHdr) == 0 {
 		return nil
 	}
-	if _, err := s.str.Write(s.streamHdr); err != nil {
+	n, err := s.str.Write(s.streamHdr)
+	if n > 0 {
+		s.streamHdr = s.streamHdr[n:]
+	}
+	if err != nil {
 		return err
 	}
 	s.streamHdr = nil
