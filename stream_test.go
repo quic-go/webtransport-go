@@ -200,7 +200,7 @@ func (m *mockSendStreamWithReliableBoundary) WasReliableBoundaryCalled() bool {
 
 func TestSendStreamHeaderReliableBoundary(t *testing.T) {
 	t.Run("SetReliableBoundary is called after header is sent", func(t *testing.T) {
-		clientStr, _ := newUniStreamPair(t)
+		clientStr, _ := newUniStreamPair(t) // receive stream not needed for this send-only test
 		
 		// Wrap the real stream with our mock to track SetReliableBoundary calls
 		mockStr := &mockSendStreamWithReliableBoundary{
@@ -220,7 +220,7 @@ func TestSendStreamHeaderReliableBoundary(t *testing.T) {
 	})
 
 	t.Run("SetReliableBoundary is called only once even with multiple writes", func(t *testing.T) {
-		clientStr, _ := newUniStreamPair(t)
+		clientStr, _ := newUniStreamPair(t) // receive stream not needed for this send-only test
 		
 		mockStr := &mockSendStreamWithReliableBoundary{
 			quicSendStream: clientStr,
@@ -246,7 +246,7 @@ func TestSendStreamHeaderReliableBoundary(t *testing.T) {
 	})
 
 	t.Run("SetReliableBoundary is called when Close is called without Write", func(t *testing.T) {
-		clientStr, _ := newUniStreamPair(t)
+		clientStr, _ := newUniStreamPair(t) // receive stream not needed for this send-only test
 		
 		mockStr := &mockSendStreamWithReliableBoundary{
 			quicSendStream: clientStr,
