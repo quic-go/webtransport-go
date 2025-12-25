@@ -68,6 +68,12 @@ func (s *SendStream) maybeSendStreamHeader() (err error) {
 			return
 		}
 		s.streamHdr = nil
+		// Set reliable boundary to protect the stream header using RESET_STREAM_AT extension.
+		// This ensures the header is delivered reliably even if the stream is reset.
+		// Only works if the underlying stream supports it (quic.SendStream does, quic.Stream doesn't).
+		if setter, ok := s.str.(interface{ SetReliableBoundary() }); ok {
+			setter.SetReliableBoundary()
+		}
 	})
 	return
 }

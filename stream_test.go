@@ -3,6 +3,7 @@ package webtransport
 import (
 	"context"
 	"io"
+	"sync"
 	"testing"
 	"time"
 
@@ -176,4 +177,89 @@ func TestReceiveStreamClose(t *testing.T) {
 			}
 		})
 	}
+}
+
+// mockSendStreamWithReliableBoundary is a mock that implements quicSendStream with SetReliableBoundary
+type mockSendStreamWithReliableBoundary struct {
+	quicSendStream
+	reliableBoundaryCalled bool
+	mu                     sync.Mutex
+}
+
+func (m *mockSendStreamWithReliableBoundary) SetReliableBoundary() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.reliableBoundaryCalled = true
+}
+
+func (m *mockSendStreamWithReliableBoundary) WasReliableBoundaryCalled() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.reliableBoundaryCalled
+}
+
+func TestSendStreamHeaderReliableBoundary(t *testing.T) {
+	t.Run("SetReliableBoundary is called after header is sent", func(t *testing.T) {
+		clientStr, _ := newUniStreamPair(t)
+		
+		// Wrap the real stream with our mock to track SetReliableBoundary calls
+		mockStr := &mockSendStreamWithReliableBoundary{
+			quicSendStream: clientStr,
+		}
+		
+		// Create a SendStream with a header
+		header := []byte{0x41, 0x00} // Example header
+		str := newSendStream(mockStr, header, func() {})
+		
+		// Write some data, which should trigger header sending and SetReliableBoundary
+		_, err := str.Write([]byte("test data"))
+		require.NoError(t, err)
+		
+		// Verify SetReliableBoundary was called
+		require.True(t, mockStr.WasReliableBoundaryCalled(), "SetReliableBoundary should be called after sending header")
+	})
+
+	t.Run("SetReliableBoundary is called only once even with multiple writes", func(t *testing.T) {
+		clientStr, _ := newUniStreamPair(t)
+		
+		mockStr := &mockSendStreamWithReliableBoundary{
+			quicSendStream: clientStr,
+		}
+		
+		header := []byte{0x41, 0x00}
+		str := newSendStream(mockStr, header, func() {})
+		
+		// First write
+		_, err := str.Write([]byte("first"))
+		require.NoError(t, err)
+		require.True(t, mockStr.WasReliableBoundaryCalled())
+		
+		// Reset the flag to check it's not called again
+		mockStr.mu.Lock()
+		mockStr.reliableBoundaryCalled = false
+		mockStr.mu.Unlock()
+		
+		// Second write should not call SetReliableBoundary again
+		_, err = str.Write([]byte("second"))
+		require.NoError(t, err)
+		require.False(t, mockStr.WasReliableBoundaryCalled(), "SetReliableBoundary should only be called once")
+	})
+
+	t.Run("SetReliableBoundary is called when Close is called without Write", func(t *testing.T) {
+		clientStr, _ := newUniStreamPair(t)
+		
+		mockStr := &mockSendStreamWithReliableBoundary{
+			quicSendStream: clientStr,
+		}
+		
+		header := []byte{0x41, 0x00}
+		str := newSendStream(mockStr, header, func() {})
+		
+		// Close without writing
+		err := str.Close()
+		require.NoError(t, err)
+		
+		// Verify SetReliableBoundary was called
+		require.True(t, mockStr.WasReliableBoundaryCalled(), "SetReliableBoundary should be called on Close")
+	})
 }
