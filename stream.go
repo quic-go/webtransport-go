@@ -42,8 +42,8 @@ type SendStream struct {
 	// WebTransport stream header.
 	// Set by the constructor, set to nil once sent out.
 	// Might be initialized to nil if this sendStream is part of an incoming bidirectional stream.
-	streamHdr     []byte
-	streamHdrOnce sync.Once
+	streamHdr   []byte
+	streamHdrMu sync.Mutex
 
 	onClose func() // to remove the stream from the streamsMap
 
@@ -61,22 +61,8 @@ func newSendStream(str quicSendStream, hdr []byte, onClose func()) *SendStream {
 	}
 }
 
-func (s *SendStream) maybeSendStreamHeader() (err error) {
-	s.streamHdrOnce.Do(func() {
-		if _, e := s.str.Write(s.streamHdr); e != nil {
-			err = e
-			return
-		}
-		s.streamHdr = nil
-	})
-	return
-}
-
 func (s *SendStream) Write(b []byte) (int, error) {
-	if err := s.maybeSendStreamHeader(); err != nil {
-		return 0, err
-	}
-	n, err := s.str.Write(b)
+	n, err := s.write(b)
 	if err != nil && !isTimeoutError(err) {
 		s.onClose()
 	}
@@ -91,6 +77,31 @@ func (s *SendStream) Write(b []byte) (int, error) {
 		return n, s.closeErr
 	}
 	return n, maybeConvertStreamError(err)
+}
+
+func (s *SendStream) write(b []byte) (int, error) {
+	if err := s.maybeSendStreamHeader(); err != nil {
+		return 0, err
+	}
+	return s.str.Write(b)
+}
+
+func (s *SendStream) maybeSendStreamHeader() error {
+	s.streamHdrMu.Lock()
+	defer s.streamHdrMu.Unlock()
+
+	if len(s.streamHdr) == 0 {
+		return nil
+	}
+	n, err := s.str.Write(s.streamHdr)
+	if n > 0 {
+		s.streamHdr = s.streamHdr[n:]
+	}
+	if err != nil {
+		return err
+	}
+	s.streamHdr = nil
+	return nil
 }
 
 func (s *SendStream) CancelWrite(e StreamErrorCode) {

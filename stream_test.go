@@ -142,6 +142,40 @@ func TestReceiveStreamSessionGone(t *testing.T) {
 	}
 }
 
+func TestSendStreamHeaderRetryAfterDeadlineError(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	client, server := newConnPair(t)
+
+	clientStr, err := client.OpenUniStreamSync(ctx)
+	require.NoError(t, err)
+
+	hdr := []byte("test-header")
+	str := newSendStream(clientStr, hdr, func() {})
+
+	require.NoError(t, str.SetWriteDeadline(time.Now().Add(-time.Second)))
+
+	_, err = str.Write([]byte("data"))
+	require.Error(t, err)
+	require.True(t, isTimeoutError(err))
+
+	require.NoError(t, str.SetWriteDeadline(time.Time{}))
+
+	// second write should succeed and include the header
+	_, err = str.Write([]byte("data"))
+	require.NoError(t, err)
+	require.NoError(t, str.Close())
+
+	// verify that the header was written
+	serverStr, err := server.AcceptUniStream(ctx)
+	require.NoError(t, err)
+
+	data, err := io.ReadAll(serverStr)
+	require.NoError(t, err)
+	require.Equal(t, append(hdr, []byte("data")...), data)
+}
+
 func TestReceiveStreamClose(t *testing.T) {
 	testCases := []struct {
 		name           string
