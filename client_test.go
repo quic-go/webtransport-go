@@ -15,6 +15,7 @@ import (
 	"github.com/quic-go/quic-go/http3"
 	"github.com/quic-go/quic-go/quicvarint"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -89,6 +90,47 @@ func TestClientInvalidResponseHandling(t *testing.T) {
 	var appErr *quic.ApplicationError
 	require.True(t, errors.As(sErr, &appErr))
 	require.Equal(t, http3.ErrCodeFrameUnexpected, http3.ErrCode(appErr.ErrorCode))
+}
+
+func TestClientWaitForSettingsTimeout(t *testing.T) {
+	ln, err := quic.ListenAddr("localhost:0", webtransport.TLSConf, &quic.Config{EnableDatagrams: true})
+	require.NoError(t, err)
+	defer ln.Close()
+
+	connChan := make(chan *quic.Conn, 1)
+	go func() {
+		conn, err := ln.Accept(context.Background())
+		if err != nil {
+			return
+		}
+		connChan <- conn
+	}()
+
+	ctx, cancel := context.WithCancelCause(context.Background())
+	errChan := make(chan error)
+	go func() {
+		d := webtransport.Dialer{TLSClientConfig: &tls.Config{RootCAs: webtransport.CertPool}}
+		_, _, err := d.Dial(ctx, fmt.Sprintf("https://localhost:%d", ln.Addr().(*net.UDPAddr).Port), nil)
+		errChan <- err
+	}()
+
+	select {
+	case conn := <-connChan:
+		defer conn.CloseWithError(0, "")
+	case <-time.After(time.Second):
+		t.Fatal("timeout waiting for connection")
+	}
+
+	cancel(assert.AnError)
+
+	select {
+	case err := <-errChan:
+		require.Error(t, err)
+		require.ErrorContains(t, err, "error waiting for HTTP/3 settings")
+		require.ErrorIs(t, err, assert.AnError)
+	case <-time.After(time.Second):
+		t.Fatal("timeout waiting for dial to complete")
+	}
 }
 
 func TestClientInvalidSettingsHandling(t *testing.T) {
