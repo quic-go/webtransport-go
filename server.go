@@ -30,7 +30,7 @@ const (
 )
 
 type Server struct {
-	H3 http3.Server
+	H3 *http3.Server
 
 	// ApplicationProtocols is a list of application protocols that can be negotiated,
 	// see section 3.3 of https://www.ietf.org/archive/id/draft-ietf-webtrans-http3-14 for details.

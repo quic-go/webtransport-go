@@ -45,7 +45,7 @@ func runServer(t *testing.T, s *webtransport.Server) (addr *net.UDPAddr, close f
 
 func establishSession(t *testing.T, handler func(*webtransport.Session)) (sess *webtransport.Session, close func()) {
 	s := &webtransport.Server{
-		H3: http3.Server{
+		H3: &http3.Server{
 			TLSConfig:  webtransport.TLSConf,
 			QUICConfig: &quic.Config{Tracer: qlog.DefaultConnectionTracer, EnableDatagrams: true},
 		},
@@ -142,7 +142,7 @@ func TestApplicationProtocolNegotiation(t *testing.T) {
 func testApplicationProtocolNegotiation(t *testing.T, clientProtocols, serverProtocols []string, expected string) {
 	s := &webtransport.Server{
 		ApplicationProtocols: serverProtocols,
-		H3: http3.Server{
+		H3: &http3.Server{
 			TLSConfig:  webtransport.TLSConf,
 			QUICConfig: &quic.Config{Tracer: qlog.DefaultConnectionTracer, EnableDatagrams: true},
 		},
@@ -353,7 +353,7 @@ func TestUnidirectionalStreams(t *testing.T) {
 func TestMultipleClients(t *testing.T) {
 	const numClients = 5
 	s := &webtransport.Server{
-		H3: http3.Server{TLSConfig: webtransport.TLSConf},
+		H3: &http3.Server{TLSConfig: webtransport.TLSConf},
 	}
 	defer s.Close()
 	addHandler(t, s, newEchoHandler(t))
@@ -546,7 +546,7 @@ func TestCheckOrigin(t *testing.T) {
 	for _, tc := range tcs {
 		t.Run(tc.Name, func(t *testing.T) {
 			s := &webtransport.Server{
-				H3:          http3.Server{TLSConfig: webtransport.TLSConf},
+				H3:          &http3.Server{TLSConfig: webtransport.TLSConf},
 				CheckOrigin: tc.CheckOrigin,
 			}
 			defer s.Close()
@@ -721,7 +721,7 @@ func TestSessionContextValues(t *testing.T) {
 	)
 
 	s := &webtransport.Server{
-		H3: http3.Server{
+		H3: &http3.Server{
 			TLSConfig:  webtransport.TLSConf,
 			QUICConfig: &quic.Config{Tracer: qlog.DefaultConnectionTracer, EnableDatagrams: true},
 		},

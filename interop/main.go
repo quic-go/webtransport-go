@@ -46,7 +46,7 @@ func main() {
 
 	wmux := http.NewServeMux()
 	s := webtransport.Server{
-		H3: http3.Server{
+		H3: &http3.Server{
 			TLSConfig: tlsConf,
 			Addr:      "localhost:12345",
 			Handler:   wmux,
