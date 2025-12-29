@@ -148,6 +148,8 @@ func (d *Dialer) Dial(ctx context.Context, urlStr string, reqHdr http.Header) (*
 	conn := tr.NewClientConn(qconn)
 	select {
 	case <-conn.ReceivedSettings():
+	case <-ctx.Done():
+		return nil, nil, fmt.Errorf("error waiting for HTTP/3 settings: %w", context.Cause(ctx))
 	case <-d.ctx.Done():
 		return nil, nil, context.Cause(d.ctx)
 	}
