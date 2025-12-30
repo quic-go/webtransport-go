@@ -1,4 +1,4 @@
-package server
+package main
 
 import (
 	"context"
@@ -60,10 +60,13 @@ func handleSession(session *webtransport.Session) {
 	}
 }
 
+const maxMessageSize = 1024 // Maximum message size in bytes
+
 func handleStream(stream *webtransport.Stream) {
 	defer stream.Close()
 
-	data, err := io.ReadAll(stream)
+	// Limit read size to protect against DoS attacks
+	data, err := io.ReadAll(io.LimitReader(stream, maxMessageSize))
 	if err != nil {
 		log.Printf("Read error: %v", err)
 		return

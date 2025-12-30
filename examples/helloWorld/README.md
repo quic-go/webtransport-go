@@ -18,7 +18,7 @@
 
 1. **Server** listens for WebTransport connections
 2. **Client** connects and opens streams for each message
-3. Server responds with "world!" for "hello", otherwise echoes the message
+3. Server responds with "world!" for "hello", otherwise sends a default message
 
 
 ## Running the Example
@@ -39,7 +39,7 @@ Enter message: hello
 Server response: world!
 
 Enter message: test
-Server response: echo: test
+Server response: I only respond to 'hello' with 'world!'
 
 Enter message: quit
 ```
@@ -49,14 +49,14 @@ Enter message: quit
 
 ```mermaid
 flowchart TD
-    A[Start Server] --> B[Listen on :4433]
+    A[Start Server] --> B[Listen on :4430]
     B --> C[Wait for Client]
     C --> D[Client Connected!]
     D --> E[Wait for Stream]
     E --> F[Read Message]
     F --> G{hello?}
     G -->|Yes| H[Send: world!]
-    G -->|No| I[Send: echo message]
+    G -->|No| I[Send: default message]
     H --> E
     I --> E
 
@@ -80,7 +80,7 @@ flowchart TD
     B --> C[Connected!]
     C --> D[Get User Input]
     D --> E{quit?}
-    E -->|Yes| F[lose & Exit]
+    E -->|Yes| F[Close & Exit]
     E -->|No| G[Open New Stream]
     G --> H[Send Message]
     H --> I[Read Response]
