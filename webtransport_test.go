@@ -31,6 +31,7 @@ func runServer(t *testing.T, s *webtransport.Server) (addr *net.UDPAddr, close f
 	udpConn, err := net.ListenUDP("udp", laddr)
 	require.NoError(t, err)
 
+	webtransport.ConfigureHTTP3Server(s.H3)
 	servErr := make(chan error, 1)
 	go func() {
 		servErr <- s.Serve(udpConn)

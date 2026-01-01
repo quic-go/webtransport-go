@@ -73,6 +73,7 @@ func TestServerReorderedUpgradeRequest(t *testing.T) {
 	udpConn, err := net.ListenUDP("udp", nil)
 	require.NoError(t, err)
 	port := udpConn.LocalAddr().(*net.UDPAddr).Port
+	webtransport.ConfigureHTTP3Server(s.H3)
 	go s.Serve(udpConn)
 
 	cconn, err := quic.DialAddr(
@@ -135,6 +136,7 @@ func TestServerReorderedUpgradeRequestTimeout(t *testing.T) {
 	udpConn, err := net.ListenUDP("udp", nil)
 	require.NoError(t, err)
 	port := udpConn.LocalAddr().(*net.UDPAddr).Port
+	webtransport.ConfigureHTTP3Server(s.H3)
 	go s.Serve(udpConn)
 
 	cconn, err := quic.DialAddr(
@@ -201,6 +203,7 @@ func TestServerReorderedMultipleStreams(t *testing.T) {
 	udpConn, err := net.ListenUDP("udp", nil)
 	require.NoError(t, err)
 	port := udpConn.LocalAddr().(*net.UDPAddr).Port
+	webtransport.ConfigureHTTP3Server(s.H3)
 	go s.Serve(udpConn)
 
 	cconn, err := quic.DialAddr(
@@ -267,6 +270,7 @@ func TestServerSettingsCheck(t *testing.T) {
 	udpConn, err := net.ListenUDP("udp", nil)
 	require.NoError(t, err)
 	port := udpConn.LocalAddr().(*net.UDPAddr).Port
+	webtransport.ConfigureHTTP3Server(s.H3)
 	go s.Serve(udpConn)
 
 	cconn, err := quic.DialAddr(
