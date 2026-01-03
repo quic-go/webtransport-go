@@ -4,12 +4,14 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -88,69 +90,81 @@ func newConnPair(t *testing.T) (client, server *quic.Conn) {
 	return cl, conn
 }
 
-func setupSession(t *testing.T, clientConn, serverConn *quic.Conn, sessionID sessionID) *Session {
-	var sess *Session
-	tr := &http3.Transport{
-		UniStreamHijacker: func(_ http3.StreamType, _ quic.ConnectionTracingID, str *quic.ReceiveStream, _ error) (hijacked bool) {
-			sess.addIncomingUniStream(str)
-			return true
-		},
-		StreamHijacker: func(_ http3.FrameType, _ quic.ConnectionTracingID, str *quic.Stream, _ error) (hijacked bool, err error) {
-			sess.addIncomingStream(str)
-			return true, nil
-		},
-	}
+// mockHTTP3Stream is a minimal mock for http3Stream that blocks on Read.
+type mockHTTP3Stream struct {
+	readChan  chan struct{}
+	closeOnce sync.Once
+}
 
-	serverAddr := startSimpleWebTransportServer(t, serverConn, &http3.Server{})
-	reqStr, conn := setupRequestStr(t, tr, clientConn, serverAddr)
-	sess = newSession(context.Background(), sessionID, conn.Conn(), reqStr, "")
+func newMockHTTP3Stream() *mockHTTP3Stream {
+	return &mockHTTP3Stream{readChan: make(chan struct{})}
+}
+
+func (m *mockHTTP3Stream) Read(p []byte) (n int, err error) {
+	<-m.readChan // block forever
+	return 0, io.EOF
+}
+func (m *mockHTTP3Stream) Write(p []byte) (n int, err error) { return len(p), nil }
+func (m *mockHTTP3Stream) Close() error {
+	m.closeOnce.Do(func() { close(m.readChan) })
+	return nil
+}
+
+func (m *mockHTTP3Stream) ReceiveDatagram(context.Context) ([]byte, error) {
+	return nil, errors.New("not implemented")
+}
+func (m *mockHTTP3Stream) SendDatagram([]byte) error       { return nil }
+func (m *mockHTTP3Stream) CancelRead(quic.StreamErrorCode) {}
+
+func setupSession(t *testing.T, clientConn *quic.Conn, sessID sessionID) *Session {
+	mockStr := newMockHTTP3Stream()
+	t.Cleanup(func() { mockStr.Close() })
+	sess := newSession(context.Background(), sessID, clientConn, mockStr, "")
 	return sess
 }
 
-func startSimpleWebTransportServer(t *testing.T, serverConn *quic.Conn, server *http3.Server) (serverAddr string) {
-	// TODO: use t.Context once we switch to Go 1.24
-	testCtx, testCtxCancel := context.WithCancel(context.Background())
-
-	mux := http.NewServeMux()
-	mux.HandleFunc("/webtransport", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		w.(http.Flusher).Flush()
-		<-testCtx.Done() // block until the test is done
-	})
-	server.Handler = mux
-	t.Cleanup(func() {
-		testCtxCancel()
-		server.Close()
-	})
-	go server.ServeQUICConn(serverConn)
-	return fmt.Sprintf("https://localhost:%d/webtransport", serverConn.LocalAddr().(*net.UDPAddr).Port)
+// acceptAndRouteStream accepts a bidirectional stream from the connection and routes it to the session.
+func acceptAndRouteStream(t *testing.T, conn *quic.Conn, sess *Session) {
+	t.Helper()
+	str, err := conn.AcceptStream(context.Background())
+	require.NoError(t, err)
+	// read the frame type
+	typ, err := quicvarint.Read(quicvarint.NewReader(str))
+	require.NoError(t, err)
+	require.Equal(t, uint64(webTransportFrameType), typ)
+	// read and discard the session ID
+	_, err = quicvarint.Read(quicvarint.NewReader(str))
+	require.NoError(t, err)
+	sess.addIncomingStream(str)
 }
 
-func setupRequestStr(t *testing.T, tr *http3.Transport, clientConn *quic.Conn, serverAddr string) (*http3.RequestStream, *http3.ClientConn) {
+// acceptAndRouteUniStream accepts a unidirectional stream from the connection and routes it to the session.
+func acceptAndRouteUniStream(t *testing.T, conn *quic.Conn, sess *Session) {
 	t.Helper()
-
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	conn := tr.NewClientConn(clientConn)
-	reqStr, err := conn.OpenRequestStream(ctx)
+	str, err := conn.AcceptUniStream(context.Background())
 	require.NoError(t, err)
-	require.NoError(t, reqStr.SendRequestHeader(NewWebTransportRequest(t, serverAddr)))
-	rsp, err := reqStr.ReadResponse()
+	// read the stream type
+	typ, err := quicvarint.Read(quicvarint.NewReader(str))
 	require.NoError(t, err)
-	require.Equal(t, http.StatusOK, rsp.StatusCode)
-
-	return reqStr, conn
+	require.Equal(t, uint64(webTransportUniStreamType), typ)
+	// read and discard the session ID
+	_, err = quicvarint.Read(quicvarint.NewReader(str))
+	require.NoError(t, err)
+	sess.addIncomingUniStream(str)
 }
 
 func TestAddStreamAfterSessionClose(t *testing.T) {
 	const sessionID = 42
 	clientConn, serverConn := newConnPair(t)
-	sess := setupSession(t, clientConn, serverConn, sessionID)
+	sess := setupSession(t, clientConn, sessionID)
 
 	str1, err := serverConn.OpenStream()
 	require.NoError(t, err)
 	_, err = str1.Write(streamHeaderBidirectional(sessionID))
 	require.NoError(t, err)
+
+	// Route the stream to the session
+	go acceptAndRouteStream(t, clientConn, sess)
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
@@ -166,6 +180,8 @@ func TestAddStreamAfterSessionClose(t *testing.T) {
 	require.NoError(t, err)
 	_, err = str2.Write(streamHeaderBidirectional(sessionID))
 	require.NoError(t, err)
+	// Route the stream - the session is closed, so it should be rejected
+	go acceptAndRouteStream(t, clientConn, sess)
 	select {
 	case <-str2.Context().Done():
 		require.ErrorIs(t,
@@ -180,6 +196,8 @@ func TestAddStreamAfterSessionClose(t *testing.T) {
 	require.NoError(t, err)
 	_, err = ustr.Write(streamHeaderUnidirectional(sessionID))
 	require.NoError(t, err)
+	// Route the stream - the session is closed, so it should be rejected
+	go acceptAndRouteUniStream(t, clientConn, sess)
 	select {
 	case <-ustr.Context().Done():
 		require.ErrorIs(t,
@@ -210,8 +228,8 @@ func TestOpenStreamSyncSessionClose(t *testing.T) {
 
 func testOpenStreamSyncSessionClose(t *testing.T, openStream func(*Session) error, openStreamSync func(*Session) error) {
 	const sessionID = 42
-	clientConn, serverConn := newConnPair(t)
-	sess := setupSession(t, clientConn, serverConn, sessionID)
+	clientConn, _ := newConnPair(t)
+	sess := setupSession(t, clientConn, sessionID)
 
 	for {
 		if err := openStream(sess); err != nil {
@@ -241,138 +259,6 @@ func testOpenStreamSyncSessionClose(t *testing.T, openStream func(*Session) erro
 	case <-time.After(time.Second):
 		t.Fatal("timeout")
 	}
-}
-
-type mockConn struct {
-	http3Conn
-	hijackMagicNumber   uint64
-	blockOpenStreamSync chan struct{}
-}
-
-var _ http3Conn = &mockConn{}
-
-func (c *mockConn) OpenStreamSync(ctx context.Context) (*quic.Stream, error) {
-	str, err := c.http3Conn.OpenStreamSync(ctx)
-	if err != nil {
-		return nil, err
-	}
-	b := quicvarint.Append(nil, c.hijackMagicNumber)
-	if _, err := str.Write(b); err != nil {
-		panic(err)
-	}
-	<-c.blockOpenStreamSync
-	return str, nil
-}
-
-func (c *mockConn) OpenUniStreamSync(ctx context.Context) (*quic.SendStream, error) {
-	str, err := c.http3Conn.OpenUniStreamSync(ctx)
-	if err != nil {
-		return nil, err
-	}
-	b := quicvarint.Append(nil, c.hijackMagicNumber)
-	if _, err := str.Write(b); err != nil {
-		panic(err)
-	}
-	<-c.blockOpenStreamSync
-	return str, nil
-}
-
-func TestOpenStreamSyncAfterSessionClose(t *testing.T) {
-	t.Run("bidirectional", func(t *testing.T) {
-		testOpenStreamSyncAfterSessionClose(t, true)
-	})
-	t.Run("unidirectional", func(t *testing.T) {
-		testOpenStreamSyncAfterSessionClose(t, false)
-	})
-}
-
-func testOpenStreamSyncAfterSessionClose(t *testing.T, bidirectional bool) {
-	type testStream interface {
-		StreamID() quic.StreamID
-		io.Reader
-		SetReadDeadline(time.Time) error
-	}
-
-	const magicNumber = 42
-	clientConn, serverConn := newConnPair(t)
-	serverStrChan := make(chan testStream, 1)
-	server := &http3.Server{}
-	switch bidirectional {
-	case true:
-		server.StreamHijacker = func(ft http3.FrameType, connTracingID quic.ConnectionTracingID, str *quic.Stream, err error) (bool /* hijacked */, error) {
-			if ft == magicNumber {
-				serverStrChan <- str
-				return true, nil
-			}
-			return false, nil
-		}
-	case false:
-		server.UniStreamHijacker = func(ft http3.StreamType, connTracingID quic.ConnectionTracingID, str *quic.ReceiveStream, err error) bool /* hijacked */ {
-			if ft == magicNumber {
-				serverStrChan <- str
-				return true
-			}
-			return false
-		}
-	}
-
-	serverAddr := startSimpleWebTransportServer(t, serverConn, server)
-	reqStr, conn := setupRequestStr(t, &http3.Transport{}, clientConn, serverAddr)
-	unblockOpenStreamSync := make(chan struct{})
-	mockConn := &mockConn{
-		http3Conn:           conn.Conn(),
-		hijackMagicNumber:   magicNumber,
-		blockOpenStreamSync: unblockOpenStreamSync,
-	}
-	sess := newSession(context.Background(), magicNumber, mockConn, reqStr, "")
-
-	errChan := make(chan error, 1)
-	switch bidirectional {
-	case true:
-		go func() {
-			_, err := sess.OpenStreamSync(context.Background())
-			errChan <- err
-		}()
-	case false:
-		go func() {
-			_, err := sess.OpenUniStreamSync(context.Background())
-			errChan <- err
-		}()
-	}
-
-	var str testStream
-	select {
-	case str = <-serverStrChan:
-	case <-time.After(time.Second):
-		t.Fatal("timeout")
-	}
-
-	// test that the stream was not yet reset
-	str.SetReadDeadline(time.Now().Add(scaleDuration(10 * time.Millisecond)))
-	_, err := str.Read([]byte{0})
-	require.ErrorIs(t, err, os.ErrDeadlineExceeded)
-
-	select {
-	case <-errChan:
-		t.Fatal("should not have opened stream on the client side")
-	case <-time.After(scaleDuration(10 * time.Millisecond)):
-	}
-	require.NoError(t, sess.CloseWithError(1337, "closing"))
-	close(unblockOpenStreamSync)
-
-	select {
-	case err := <-errChan:
-		var serr *SessionError
-		require.ErrorAs(t, err, &serr)
-		require.False(t, serr.Remote)
-		require.Equal(t, SessionErrorCode(1337), serr.ErrorCode)
-	case <-time.After(time.Second):
-		t.Fatal("timeout")
-	}
-
-	str.SetReadDeadline(time.Now().Add(time.Second))
-	_, err = str.Read([]byte{0})
-	require.ErrorIs(t, err, &quic.StreamError{Remote: true, StreamID: str.StreamID(), ErrorCode: WTSessionGoneErrorCode})
 }
 
 // TestCloseWithErrorTruncatesSendMessage tests that when CloseWithError is called
@@ -431,7 +317,7 @@ func TestCloseWithErrorTruncatesSendMessage(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, http.StatusOK, rsp.StatusCode)
 
-	sess := newSession(context.Background(), 42, conn.Conn(), reqStr, "")
+	sess := newSession(context.Background(), 42, clientConn, reqStr, "")
 	require.NoError(t, sess.CloseWithError(42, strings.Repeat("a", maxCloseCapsuleErrorMsgLen+500)))
 
 	select {
@@ -484,7 +370,7 @@ func TestCloseWithErrorTruncatesReceiveMessage(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, http.StatusOK, rsp.StatusCode)
 
-	sess := newSession(context.Background(), 42, conn.Conn(), reqStr, "")
+	sess := newSession(context.Background(), 42, clientConn, reqStr, "")
 
 	select {
 	case <-sess.Context().Done():

@@ -2,8 +2,10 @@ package webtransport
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
+	"log"
 	"net"
 	"net/http"
 	"net/url"
@@ -28,6 +30,26 @@ const (
 	webTransportFrameType     = 0x41
 	webTransportUniStreamType = 0x54
 )
+
+type quicConnKeyType struct{}
+
+var quicConnKey = quicConnKeyType{}
+
+func ConfigureHTTP3Server(s *http3.Server) {
+	if s.AdditionalSettings == nil {
+		s.AdditionalSettings = make(map[uint64]uint64, 1)
+	}
+	s.AdditionalSettings[settingsEnableWebtransport] = 1
+	s.EnableDatagrams = true
+	origConnContext := s.ConnContext
+	s.ConnContext = func(ctx context.Context, conn *quic.Conn) context.Context {
+		if origConnContext != nil {
+			ctx = origConnContext(ctx, conn)
+		}
+		ctx = context.WithValue(ctx, quicConnKey, conn)
+		return ctx
+	}
+}
 
 type Server struct {
 	H3 *http3.Server
@@ -82,42 +104,6 @@ func (s *Server) init() error {
 	if s.CheckOrigin == nil {
 		s.CheckOrigin = checkSameOrigin
 	}
-
-	// configure the http3.Server
-	if s.H3.AdditionalSettings == nil {
-		s.H3.AdditionalSettings = make(map[uint64]uint64, 1)
-	}
-	s.H3.AdditionalSettings[settingsEnableWebtransport] = 1
-	s.H3.EnableDatagrams = true
-	if s.H3.StreamHijacker != nil {
-		return errors.New("StreamHijacker already set")
-	}
-	s.H3.StreamHijacker = func(ft http3.FrameType, connTracingID quic.ConnectionTracingID, str *quic.Stream, err error) (bool /* hijacked */, error) {
-		if isWebTransportError(err) {
-			return true, nil
-		}
-		if ft != webTransportFrameType {
-			return false, nil
-		}
-		// Reading the varint might block if the peer sends really small frames, but this is fine.
-		// This function is called from the HTTP/3 request handler, which runs in its own Go routine.
-		id, err := quicvarint.Read(quicvarint.NewReader(str))
-		if err != nil {
-			if isWebTransportError(err) {
-				return true, nil
-			}
-			return false, err
-		}
-		s.conns.AddStream(connTracingID, str, sessionID(id))
-		return true, nil
-	}
-	s.H3.UniStreamHijacker = func(st http3.StreamType, connTracingID quic.ConnectionTracingID, str *quic.ReceiveStream, err error) (hijacked bool) {
-		if st != webTransportUniStreamType && !isWebTransportError(err) {
-			return false
-		}
-		s.conns.AddUniStream(connTracingID, str)
-		return true
-	}
 	return nil
 }
 
@@ -125,7 +111,32 @@ func (s *Server) Serve(conn net.PacketConn) error {
 	if err := s.initialize(); err != nil {
 		return err
 	}
-	return s.H3.Serve(conn)
+	quicConf := s.H3.QUICConfig
+	if quicConf == nil {
+		quicConf = &quic.Config{}
+	}
+	quicConf = quicConf.Clone()
+	quicConf.EnableDatagrams = true
+	ln, err := quic.ListenEarly(conn, s.H3.TLSConfig, quicConf)
+	if err != nil {
+		return err
+	}
+	defer ln.Close()
+
+	for {
+		qconn, err := ln.Accept(s.ctx)
+		if err != nil {
+			return err
+		}
+		s.refCount.Add(1)
+		go func() {
+			defer s.refCount.Done()
+
+			if err := s.ServeQUICConn(qconn); err != nil {
+				log.Printf("http3: error serving QUIC connection: %v", err)
+			}
+		}()
+	}
 }
 
 // ServeQUICConn serves a single QUIC connection.
@@ -133,21 +144,119 @@ func (s *Server) ServeQUICConn(conn *quic.Conn) error {
 	if err := s.initialize(); err != nil {
 		return err
 	}
-	return s.H3.ServeQUICConn(conn)
+
+	http3Conn, err := s.H3.NewRawServerConn(conn)
+	if err != nil {
+		return err
+	}
+
+	// slose the connection when the server context is cancelled.
+	go func() {
+		select {
+		case <-s.ctx.Done():
+			conn.CloseWithError(0, "")
+		case <-conn.Context().Done():
+			// connection already closed
+		}
+	}()
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+
+		for {
+			str, err := conn.AcceptStream(s.ctx)
+			if err != nil {
+				return
+			}
+
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+
+				typ, err := quicvarint.Peek(str)
+				if err != nil {
+					return
+				}
+				if typ != webTransportFrameType {
+					http3Conn.HandleRequestStream(str)
+					return
+				}
+				// read the frame type (already peeked)
+				if _, err := quicvarint.Read(quicvarint.NewReader(str)); err != nil {
+					return
+				}
+				// read the session ID
+				id, err := quicvarint.Read(quicvarint.NewReader(str))
+				if err != nil {
+					return
+				}
+				s.conns.AddStream(conn, str, sessionID(id))
+			}()
+		}
+	}()
+
+	go func() {
+		defer wg.Done()
+
+		for {
+			str, err := conn.AcceptUniStream(s.ctx)
+			if err != nil {
+				return
+			}
+
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+
+				typ, err := quicvarint.Peek(str)
+				if err != nil {
+					return
+				}
+				if typ != webTransportUniStreamType {
+					http3Conn.HandleUnidirectionalStream(str)
+					return
+				}
+				// read the stream type (already peeked) before passing to AddUniStream
+				if _, err := quicvarint.Read(quicvarint.NewReader(str)); err != nil {
+					return
+				}
+				s.conns.AddUniStream(conn, str)
+			}()
+		}
+	}()
+
+	wg.Wait()
+	return nil
 }
 
 func (s *Server) ListenAndServe() error {
-	if err := s.initialize(); err != nil {
+	addr := s.H3.Addr
+	if addr == "" {
+		addr = ":https"
+	}
+	udpAddr, err := net.ResolveUDPAddr("udp", addr)
+	if err != nil {
 		return err
 	}
-	return s.H3.ListenAndServe()
+	conn, err := net.ListenUDP("udp", udpAddr)
+	if err != nil {
+		return err
+	}
+	return s.Serve(conn)
 }
 
 func (s *Server) ListenAndServeTLS(certFile, keyFile string) error {
-	if err := s.initialize(); err != nil {
+	cert, err := tls.LoadX509KeyPair(certFile, keyFile)
+	if err != nil {
 		return err
 	}
-	return s.H3.ListenAndServeTLS(certFile, keyFile)
+	if s.H3.TLSConfig == nil {
+		s.H3.TLSConfig = &tls.Config{}
+	}
+	s.H3.TLSConfig.Certificates = []tls.Certificate{cert}
+	return s.ListenAndServe()
 }
 
 func (s *Server) Close() error {
@@ -168,6 +277,9 @@ func (s *Server) Close() error {
 }
 
 func (s *Server) Upgrade(w http.ResponseWriter, r *http.Request) (*Session, error) {
+	if err := s.initialize(); err != nil {
+		return nil, err
+	}
 	if r.Method != http.MethodConnect {
 		return nil, fmt.Errorf("expected CONNECT request, got %s", r.Method)
 	}
@@ -177,18 +289,25 @@ func (s *Server) Upgrade(w http.ResponseWriter, r *http.Request) (*Session, erro
 	if !s.CheckOrigin(r) {
 		return nil, errors.New("webtransport: request origin not allowed")
 	}
+
+	id := r.Context().Value(quicConnKey)
+	if id == nil {
+		return nil, errors.New("webtransport: missing QUIC connection")
+	}
+	conn := id.(*quic.Conn)
+
 	selectedProtocol := s.selectProtocol(r.Header[http.CanonicalHeaderKey(wtAvailableProtocolsHeader)])
 
 	// Wait for SETTINGS
-	conn := w.(http3.Hijacker).Connection()
+	settingser := w.(http3.Settingser)
 	timer := time.NewTimer(s.timeout())
 	defer timer.Stop()
 	select {
-	case <-conn.ReceivedSettings():
+	case <-settingser.ReceivedSettings():
 	case <-timer.C:
 		return nil, errors.New("webtransport: didn't receive the client's SETTINGS on time")
 	}
-	settings := conn.Settings()
+	settings := settingser.Settings()
 	if !settings.EnableDatagrams {
 		return nil, errors.New("webtransport: missing datagram support")
 	}

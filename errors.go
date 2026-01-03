@@ -33,21 +33,6 @@ func httpCodeToWebtransportCode(h quic.StreamErrorCode) (StreamErrorCode, error)
 	return StreamErrorCode(shifted - shifted/0x1f), nil
 }
 
-func isWebTransportError(e error) bool {
-	if e == nil {
-		return false
-	}
-	var strErr *quic.StreamError
-	if !errors.As(e, &strErr) {
-		return false
-	}
-	if strErr.ErrorCode == WTSessionGoneErrorCode {
-		return true
-	}
-	_, err := httpCodeToWebtransportCode(strErr.ErrorCode)
-	return err == nil
-}
-
 const (
 	// WTBufferedStreamRejectedErrorCode is the error code of the
 	// WT_BUFFERED_STREAM_REJECTED error.

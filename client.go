@@ -63,8 +63,6 @@ func (d *Dialer) init() {
 func (d *Dialer) Dial(ctx context.Context, urlStr string, reqHdr http.Header) (*http.Response, *Session, error) {
 	d.initOnce.Do(func() { d.init() })
 
-	// Technically, this is not true. DATAGRAMs could be sent using the Capsule protocol.
-	// However, quic-go currently enforces QUIC datagram support if HTTP/3 datagrams are enabled.
 	quicConf := d.QUICConfig
 	if quicConf == nil {
 		quicConf = &quic.Config{EnableDatagrams: true}
@@ -117,35 +115,65 @@ func (d *Dialer) Dial(ctx context.Context, urlStr string, reqHdr http.Header) (*
 	if err != nil {
 		return nil, nil, err
 	}
-	tr := &http3.Transport{
-		EnableDatagrams: true,
-		StreamHijacker: func(ft http3.FrameType, connTracingID quic.ConnectionTracingID, str *quic.Stream, e error) (hijacked bool, err error) {
-			if isWebTransportError(e) {
-				return true, nil
-			}
-			if ft != webTransportFrameType {
-				return false, nil
-			}
-			id, err := quicvarint.Read(quicvarint.NewReader(str))
-			if err != nil {
-				if isWebTransportError(err) {
-					return true, nil
-				}
-				return false, err
-			}
-			d.conns.AddStream(connTracingID, str, sessionID(id))
-			return true, nil
-		},
-		UniStreamHijacker: func(st http3.StreamType, connTracingID quic.ConnectionTracingID, str *quic.ReceiveStream, err error) (hijacked bool) {
-			if st != webTransportUniStreamType && !isWebTransportError(err) {
-				return false
-			}
-			d.conns.AddUniStream(connTracingID, str)
-			return true
-		},
-	}
+	tr := &http3.Transport{EnableDatagrams: true}
 
-	conn := tr.NewClientConn(qconn)
+	conn := tr.NewRawClientConn(qconn)
+
+	go func() {
+		for {
+			str, err := qconn.AcceptStream(context.Background())
+			if err != nil {
+				return
+			}
+
+			go func() {
+				typ, err := quicvarint.Peek(str)
+				if err != nil {
+					return
+				}
+				if typ != webTransportFrameType {
+					conn.HandleBidirectionalStream(str)
+					return
+				}
+				// read the frame type (already peeked above)
+				if _, err := quicvarint.Read(quicvarint.NewReader(str)); err != nil {
+					return
+				}
+				// read the session ID
+				id, err := quicvarint.Read(quicvarint.NewReader(str))
+				if err != nil {
+					return
+				}
+				d.conns.AddStream(qconn, str, sessionID(id))
+			}()
+		}
+	}()
+
+	go func() {
+		for {
+			str, err := qconn.AcceptUniStream(context.Background())
+			if err != nil {
+				return
+			}
+
+			go func() {
+				typ, err := quicvarint.Peek(str)
+				if err != nil {
+					return
+				}
+				if typ != webTransportUniStreamType {
+					conn.HandleUnidirectionalStream(str)
+					return
+				}
+				// read the stream type (already peeked above)
+				if _, err := quicvarint.Read(quicvarint.NewReader(str)); err != nil {
+					return
+				}
+				d.conns.AddUniStream(qconn, str)
+			}()
+		}
+	}()
+
 	select {
 	case <-conn.ReceivedSettings():
 	case <-ctx.Done():
@@ -168,7 +196,7 @@ func (d *Dialer) Dial(ctx context.Context, urlStr string, reqHdr http.Header) (*
 		return nil, nil, errNoWebTransport
 	}
 
-	requestStr, err := conn.OpenRequestStream(ctx) // TODO: put this on the Connection (maybe introduce a ClientConnection?)
+	requestStr, err := conn.OpenRequestStream(ctx)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -188,7 +216,7 @@ func (d *Dialer) Dial(ctx context.Context, urlStr string, reqHdr http.Header) (*
 		protocol = d.negotiateProtocol(protocolHeader)
 	}
 	sessID := sessionID(requestStr.StreamID())
-	return rsp, d.conns.AddSession(context.WithoutCancel(ctx), conn.Conn(), sessID, requestStr, protocol), nil
+	return rsp, d.conns.AddSession(context.WithoutCancel(ctx), qconn, sessID, requestStr, protocol), nil
 }
 
 func (d *Dialer) negotiateProtocol(theirs []string) string {

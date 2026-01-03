@@ -74,21 +74,6 @@ var (
 	_ http3Stream = &http3.RequestStream{}
 )
 
-type http3Conn interface {
-	OpenStream() (*quic.Stream, error)
-	OpenUniStream() (*quic.SendStream, error)
-	OpenStreamSync(context.Context) (*quic.Stream, error)
-	OpenUniStreamSync(context.Context) (*quic.SendStream, error)
-	LocalAddr() net.Addr
-	RemoteAddr() net.Addr
-	ConnectionState() quic.ConnectionState
-	Context() context.Context
-}
-
-var _ http3Conn = &http3.Conn{}
-
-var _ http3Conn = &http3.Conn{}
-
 // SessionState contains the state of a WebTransport session
 type SessionState struct {
 	// ConnectionState contains the QUIC connection state, including TLS handshake information
@@ -100,7 +85,7 @@ type SessionState struct {
 
 type Session struct {
 	sessionID           sessionID
-	conn                http3Conn
+	conn                *quic.Conn
 	str                 http3Stream
 	applicationProtocol string
 
@@ -121,9 +106,8 @@ type Session struct {
 	streams streamsMap
 }
 
-func newSession(ctx context.Context, sessionID sessionID, conn http3Conn, str http3Stream, applicationProtocol string) *Session {
-	tracingID := conn.Context().Value(quic.ConnectionTracingKey).(quic.ConnectionTracingID)
-	ctx, ctxCancel := context.WithCancel(context.WithValue(ctx, quic.ConnectionTracingKey, tracingID))
+func newSession(ctx context.Context, sessionID sessionID, conn *quic.Conn, str http3Stream, applicationProtocol string) *Session {
+	ctx, ctxCancel := context.WithCancel(ctx)
 	c := &Session{
 		sessionID:           sessionID,
 		conn:                conn,

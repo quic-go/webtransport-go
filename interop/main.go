@@ -53,6 +53,7 @@ func main() {
 		},
 		CheckOrigin: func(r *http.Request) bool { return true },
 	}
+	webtransport.ConfigureHTTP3Server(s.H3)
 	defer s.Close()
 
 	wmux.HandleFunc("/unidirectional", func(w http.ResponseWriter, r *http.Request) {
@@ -111,13 +112,13 @@ func getTLSConf(start, end time.Time) (*tls.Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &tls.Config{
+	return http3.ConfigureTLSConfig(&tls.Config{
 		Certificates: []tls.Certificate{{
 			Certificate: [][]byte{cert.Raw},
 			PrivateKey:  priv,
 			Leaf:        cert,
 		}},
-	}, nil
+	}), nil
 }
 
 func generateCert(start, end time.Time) (*x509.Certificate, *ecdsa.PrivateKey, error) {
