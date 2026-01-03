@@ -69,8 +69,14 @@ func (d *Dialer) Dial(ctx context.Context, urlStr string, reqHdr http.Header) (*
 			EnableDatagrams:                  true,
 			EnableStreamResetPartialDelivery: true,
 		}
-	} else if !d.QUICConfig.EnableDatagrams {
-		return nil, nil, errors.New("webtransport: DATAGRAM support required, enable it via QUICConfig.EnableDatagrams")
+	} else {
+		if !d.QUICConfig.EnableDatagrams {
+			return nil, nil, errors.New("webtransport: DATAGRAM support required, enable it via QUICConfig.EnableDatagrams")
+		}
+		// Clone the config to avoid modifying the user's config
+		quicConf = d.QUICConfig.Clone()
+		// Enable RESET_STREAM_AT extension if not already enabled
+		quicConf.EnableStreamResetPartialDelivery = true
 	}
 
 	tlsConf := d.TLSClientConfig
