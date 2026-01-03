@@ -19,6 +19,7 @@ type quicSendStream interface {
 	CancelWrite(quic.StreamErrorCode)
 	Context() context.Context
 	SetWriteDeadline(time.Time) error
+	SetReliableBoundary()
 }
 
 var (
@@ -135,6 +136,9 @@ func (s *SendStream) maybeSendStreamHeader() error {
 		return err
 	}
 	s.streamHdr = nil
+	// Protect the stream header using RESET_STREAM_AT.
+	// This ensures that if the stream is reset, the header will still be delivered.
+	s.str.SetReliableBoundary()
 	return nil
 }
 
