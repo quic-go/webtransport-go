@@ -117,6 +117,7 @@ func (s *Server) Serve(conn net.PacketConn) error {
 	}
 	quicConf = quicConf.Clone()
 	quicConf.EnableDatagrams = true
+	quicConf.EnableStreamResetPartialDelivery = true
 	ln, err := quic.ListenEarly(conn, s.H3.TLSConfig, quicConf)
 	if err != nil {
 		return err

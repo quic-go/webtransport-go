@@ -65,7 +65,10 @@ func (d *Dialer) Dial(ctx context.Context, urlStr string, reqHdr http.Header) (*
 
 	quicConf := d.QUICConfig
 	if quicConf == nil {
-		quicConf = &quic.Config{EnableDatagrams: true}
+		quicConf = &quic.Config{
+			EnableDatagrams:                  true,
+			EnableStreamResetPartialDelivery: true,
+		}
 	} else if !d.QUICConfig.EnableDatagrams {
 		return nil, nil, errors.New("webtransport: DATAGRAM support required, enable it via QUICConfig.EnableDatagrams")
 	}
