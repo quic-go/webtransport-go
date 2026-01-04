@@ -15,7 +15,6 @@ import (
 
 type quicSendStream interface {
 	io.WriteCloser
-	StreamID() quic.StreamID
 	CancelWrite(quic.StreamErrorCode)
 	Context() context.Context
 	SetWriteDeadline(time.Time) error
@@ -28,7 +27,6 @@ var (
 
 type quicReceiveStream interface {
 	io.Reader
-	StreamID() quic.StreamID
 	CancelRead(quic.StreamErrorCode)
 	SetReadDeadline(time.Time) error
 }
@@ -177,10 +175,6 @@ func (s *SendStream) SetWriteDeadline(t time.Time) error {
 	return maybeConvertStreamError(s.str.SetWriteDeadline(t))
 }
 
-func (s *SendStream) StreamID() quic.StreamID {
-	return s.str.StreamID()
-}
-
 type ReceiveStream struct {
 	str quicReceiveStream
 
@@ -277,10 +271,6 @@ func (s *ReceiveStream) SetReadDeadline(t time.Time) error {
 	return maybeConvertStreamError(s.str.SetReadDeadline(t))
 }
 
-func (s *ReceiveStream) StreamID() quic.StreamID {
-	return s.str.StreamID()
-}
-
 type Stream struct {
 	sendStr *SendStream
 	recvStr *ReceiveStream
@@ -295,10 +285,6 @@ func newStream(str *quic.Stream, hdr []byte, onClose func()) *Stream {
 	s.sendStr = newSendStream(str, hdr, func() { s.registerClose(true) })
 	s.recvStr = newReceiveStream(str, func() { s.registerClose(false) })
 	return s
-}
-
-func (s *Stream) StreamID() quic.StreamID {
-	return s.recvStr.StreamID()
 }
 
 func (s *Stream) Write(b []byte) (int, error) {
