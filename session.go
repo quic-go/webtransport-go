@@ -7,6 +7,7 @@ import (
 	"math/rand/v2"
 	"net"
 	"sync"
+	"time"
 	"unicode/utf8"
 
 	"github.com/quic-go/quic-go"
@@ -67,6 +68,8 @@ type http3Stream interface {
 	ReceiveDatagram(context.Context) ([]byte, error)
 	SendDatagram([]byte) error
 	CancelRead(quic.StreamErrorCode)
+	CancelWrite(quic.StreamErrorCode)
+	SetWriteDeadline(time.Time) error
 }
 
 var (
@@ -404,12 +407,13 @@ func (s *Session) CloseWithError(code SessionErrorCode, msg string) error {
 	b := make([]byte, 4, 4+len(msg))
 	binary.BigEndian.PutUint32(b, uint32(code))
 	b = append(b, []byte(msg)...)
-	if err := http3.WriteCapsule(
-		quicvarint.NewWriter(s.str),
-		closeSessionCapsuleType,
-		b,
-	); err != nil {
-		return err
+
+	// Optimistically send the WT_CLOSE_SESSION Capsule:
+	// If we're flow-control limited, we don't want to wait for the receiver to issue new flow control credits.
+	// There's no idiomatic way to do a non-blocking write in Go, so we set a short deadline.
+	s.str.SetWriteDeadline(time.Now().Add(10 * time.Millisecond))
+	if err := http3.WriteCapsule(quicvarint.NewWriter(s.str), closeSessionCapsuleType, b); err != nil {
+		s.str.CancelWrite(WTSessionGoneErrorCode)
 	}
 
 	s.str.CancelRead(WTSessionGoneErrorCode)
