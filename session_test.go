@@ -113,8 +113,10 @@ func (m *mockHTTP3Stream) Close() error {
 func (m *mockHTTP3Stream) ReceiveDatagram(context.Context) ([]byte, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockHTTP3Stream) SendDatagram([]byte) error       { return nil }
-func (m *mockHTTP3Stream) CancelRead(quic.StreamErrorCode) {}
+func (m *mockHTTP3Stream) SendDatagram([]byte) error        { return nil }
+func (m *mockHTTP3Stream) CancelRead(quic.StreamErrorCode)  {}
+func (m *mockHTTP3Stream) CancelWrite(quic.StreamErrorCode) {}
+func (m *mockHTTP3Stream) SetWriteDeadline(time.Time) error { return nil }
 
 func setupSession(t *testing.T, clientConn *quic.Conn, sessID sessionID) *Session {
 	mockStr := newMockHTTP3Stream()
