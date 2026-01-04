@@ -11,11 +11,11 @@ Detailed documentation can be found on [quic-go.net](https://quic-go.net/docs/).
 
 ## Projects using webtransport-go
 
-| Project                                                                                           | Description                                                                                                                                                                | Stars                                                                                                  |
-|---------------------------------------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------|--------------------------------------------------------------------------------------------------------|
-| [Centrifugo](https://github.com/centrifugal/centrifugo)                                           | Scalable real-time messaging server in a language-agnostic way. Self-hosted alternative to Pubnub, Pusher, Ably, socket.io, Phoenix.PubSub, SignalR.                        | ![GitHub Repo stars](https://img.shields.io/github/stars/centrifugal/centrifugo?style=flat-square)    |
-| [go-libp2p](https://github.com/libp2p/go-libp2p)                                                  | libp2p implementation in Go, powering [Kubo](https://github.com/ipfs/kubo) (IPFS) and [Lotus](https://github.com/filecoin-project/lotus) (Filecoin), among others           | ![GitHub Repo stars](https://img.shields.io/github/stars/libp2p/go-libp2p?style=flat-square)          |
-| [signalr](https://github.com/philippseith/signalr)                                                | SignalR server and client in Go                                                                                                      | ![GitHub Repo stars](https://img.shields.io/github/stars/philippseith/signalr?style=flat-square)      |
+| Project | Description | Stars |
+| --- | --- | --- |
+| [Centrifugo](https://github.com/centrifugal/centrifugo) | Scalable real-time messaging server in a language-agnostic way. Self-hosted alternative to Pubnub, Pusher, Ably, socket.io, Phoenix.PubSub, SignalR. | ![GitHub Repo stars](https://img.shields.io/github/stars/centrifugal/centrifugo?style=flat-square) |
+| [go-libp2p](https://github.com/libp2p/go-libp2p) | libp2p implementation in Go, powering [Kubo](https://github.com/ipfs/kubo) (IPFS) and [Lotus](https://github.com/filecoin-project/lotus) (Filecoin), among others | ![GitHub Repo stars](https://img.shields.io/github/stars/libp2p/go-libp2p?style=flat-square) |
+| [signalr](https://github.com/philippseith/signalr) | SignalR server and client in Go | ![GitHub Repo stars](https://img.shields.io/github/stars/philippseith/signalr?style=flat-square) |
 
 If you'd like to see your project added to this list, please send us a PR.
 
