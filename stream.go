@@ -36,6 +36,7 @@ var (
 	_ quicReceiveStream = &quic.Stream{}
 )
 
+// A SendStream is a unidirectional WebTransport send stream.
 type SendStream struct {
 	str quicSendStream
 	// WebTransport stream header.
@@ -64,6 +65,9 @@ func newSendStream(str quicSendStream, hdr []byte, onClose func()) *SendStream {
 	}
 }
 
+// Write writes data to the stream.
+// Write can be made to time out using [SendStream.SetWriteDeadline].
+// If the stream was canceled, the error is a [StreamError].
 func (s *SendStream) Write(b []byte) (int, error) {
 	n, err := s.write(b)
 	if err != nil && !isTimeoutError(err) {
@@ -136,6 +140,10 @@ func (s *SendStream) maybeSendStreamHeader() error {
 	return nil
 }
 
+// CancelWrite aborts sending on this stream.
+// Data already written, but not yet delivered to the peer is not guaranteed to be delivered reliably.
+// Write will unblock immediately, and future calls to Write will fail.
+// When called multiple times it is a no-op.
 func (s *SendStream) CancelWrite(e StreamErrorCode) {
 	s.str.CancelWrite(webtransportCodeToHTTPCode(e))
 	s.onClose()
@@ -149,6 +157,8 @@ func (s *SendStream) closeWithSession(err error) {
 	})
 }
 
+// Close closes the write-direction of the stream.
+// Future calls to Write are not permitted after calling Close.
 func (s *SendStream) Close() error {
 	if err := s.maybeSendStreamHeader(); err != nil {
 		return err
@@ -157,10 +167,20 @@ func (s *SendStream) Close() error {
 	return maybeConvertStreamError(s.str.Close())
 }
 
+// The Context is canceled as soon as the write-side of the stream is closed.
+// This happens when Close() or CancelWrite() is called, or when the peer
+// cancels the read-side of their stream.
+// The cancellation cause is set to the error that caused the stream to
+// close, or `context.Canceled` in case the stream is closed without error.
 func (s *SendStream) Context() context.Context {
 	return s.str.Context()
 }
 
+// SetWriteDeadline sets the deadline for future Write calls
+// and any currently-blocked Write call.
+// Even if write times out, it may return n > 0, indicating that
+// some data was successfully written.
+// A zero value for t means Write will not time out.
 func (s *SendStream) SetWriteDeadline(t time.Time) error {
 	s.deadlineMu.Lock()
 	s.writeDeadline = t
@@ -175,6 +195,7 @@ func (s *SendStream) SetWriteDeadline(t time.Time) error {
 	return maybeConvertStreamError(s.str.SetWriteDeadline(t))
 }
 
+// A ReceiveStream is a unidirectional WebTransport receive stream.
 type ReceiveStream struct {
 	str quicReceiveStream
 
@@ -197,6 +218,9 @@ func newReceiveStream(str quicReceiveStream, onClose func()) *ReceiveStream {
 	}
 }
 
+// Read reads data from the stream.
+// Read can be made to time out using [ReceiveStream.SetReadDeadline].
+// If the stream was canceled, the error is a [StreamError].
 func (s *ReceiveStream) Read(b []byte) (int, error) {
 	n, err := s.str.Read(b)
 	if err != nil && !isTimeoutError(err) {
@@ -244,6 +268,10 @@ func (s *ReceiveStream) handleSessionGoneError() error {
 	}
 }
 
+// CancelRead aborts receiving on this stream.
+// It instructs the peer to stop transmitting stream data.
+// Read will unblock immediately, and future Read calls will fail.
+// When called multiple times it is a no-op.
 func (s *ReceiveStream) CancelRead(e StreamErrorCode) {
 	s.str.CancelRead(webtransportCodeToHTTPCode(e))
 	s.onClose()
@@ -257,6 +285,9 @@ func (s *ReceiveStream) closeWithSession(err error) {
 	})
 }
 
+// SetReadDeadline sets the deadline for future Read calls and
+// any currently-blocked Read call.
+// A zero value for t means Read will not time out.
 func (s *ReceiveStream) SetReadDeadline(t time.Time) error {
 	s.deadlineMu.Lock()
 	s.readDeadline = t
@@ -271,6 +302,7 @@ func (s *ReceiveStream) SetReadDeadline(t time.Time) error {
 	return maybeConvertStreamError(s.str.SetReadDeadline(t))
 }
 
+// Stream is a bidirectional WebTransport stream.
 type Stream struct {
 	sendStr *SendStream
 	recvStr *ReceiveStream
@@ -287,22 +319,34 @@ func newStream(str *quic.Stream, hdr []byte, onClose func()) *Stream {
 	return s
 }
 
+// Write writes data to the stream.
+// Write can be made to time out using [Stream.SetWriteDeadline] or [Stream.SetDeadline].
+// If the stream was canceled, the error is a [StreamError].
 func (s *Stream) Write(b []byte) (int, error) {
 	return s.sendStr.Write(b)
 }
 
+// Read reads data from the stream.
+// Read can be made to time out using [Stream.SetReadDeadline] and [Stream.SetDeadline].
+// If the stream was canceled, the error is a [StreamError].
 func (s *Stream) Read(b []byte) (int, error) {
 	return s.recvStr.Read(b)
 }
 
+// CancelWrite aborts sending on this stream.
+// See [SendStream.CancelWrite] for more details.
 func (s *Stream) CancelWrite(e StreamErrorCode) {
 	s.sendStr.CancelWrite(e)
 }
 
+// CancelRead aborts receiving on this stream.
+// See [ReceiveStream.CancelRead] for more details.
 func (s *Stream) CancelRead(e StreamErrorCode) {
 	s.recvStr.CancelRead(e)
 }
 
+// Close closes the send-direction of the stream.
+// It does not close the receive-direction of the stream.
 func (s *Stream) Close() error {
 	return s.sendStr.Close()
 }
@@ -327,18 +371,26 @@ func (s *Stream) closeWithSession(err error) {
 	s.recvStr.closeWithSession(err)
 }
 
+// The Context is canceled as soon as the write-side of the stream is closed.
+// See [SendStream.Context] for more details.
 func (s *Stream) Context() context.Context {
 	return s.sendStr.Context()
 }
 
+// SetWriteDeadline sets the deadline for future Write calls.
+// See [SendStream.SetWriteDeadline] for more details.
 func (s *Stream) SetWriteDeadline(t time.Time) error {
 	return s.sendStr.SetWriteDeadline(t)
 }
 
+// SetReadDeadline sets the deadline for future Read calls.
+// See [ReceiveStream.SetReadDeadline] for more details.
 func (s *Stream) SetReadDeadline(t time.Time) error {
 	return s.recvStr.SetReadDeadline(t)
 }
 
+// SetDeadline sets the read and write deadlines associated with the stream.
+// It is equivalent to calling both SetReadDeadline and SetWriteDeadline.
 func (s *Stream) SetDeadline(t time.Time) error {
 	err1 := s.SetWriteDeadline(t)
 	err2 := s.SetReadDeadline(t)
