@@ -2,6 +2,7 @@ package webtransport
 
 import (
 	"context"
+	"slices"
 	"sync"
 	"time"
 
@@ -21,11 +22,14 @@ type sessionEntry struct {
 	Session       *Session
 }
 
+const maxRecentlyClosedSessions = 16
+
 type sessionManager struct {
 	timeout time.Duration
 
-	mx       sync.Mutex
-	sessions map[sessionID]sessionEntry
+	mx                     sync.Mutex
+	sessions               map[sessionID]sessionEntry
+	recentlyClosedSessions []sessionID
 }
 
 func newSessionManager(timeout time.Duration) *sessionManager {
@@ -45,6 +49,13 @@ func (m *sessionManager) AddStream(str *quic.Stream, id sessionID) {
 
 	entry, ok := m.sessions[id]
 	if !ok {
+		// Receiving a stream for an unknown session is expected to be rare,
+		// so the performance impact of searching through the slice is negligible.
+		if slices.Contains(m.recentlyClosedSessions, id) {
+			str.CancelRead(WTBufferedStreamRejectedErrorCode)
+			str.CancelWrite(WTBufferedStreamRejectedErrorCode)
+			return
+		}
 		entry = sessionEntry{Unestablished: &unestablishedSession{}}
 		m.sessions[id] = entry
 	}
@@ -67,6 +78,12 @@ func (m *sessionManager) AddUniStream(str *quic.ReceiveStream, id sessionID) {
 
 	entry, ok := m.sessions[id]
 	if !ok {
+		// Receiving a stream for an unknown session is expected to be rare,
+		// so the performance impact of searching through the slice is negligible.
+		if slices.Contains(m.recentlyClosedSessions, id) {
+			str.CancelRead(WTBufferedStreamRejectedErrorCode)
+			return
+		}
 		entry = sessionEntry{Unestablished: &unestablishedSession{}}
 		m.sessions[id] = entry
 	}
@@ -134,10 +151,19 @@ func (m *sessionManager) AddSession(id sessionID, s *Session) {
 	m.sessions[id] = sessionEntry{Session: s}
 
 	context.AfterFunc(s.Context(), func() {
-		m.mx.Lock()
-		defer m.mx.Unlock()
-		delete(m.sessions, id)
+		m.deleteSession(id)
 	})
+}
+
+func (m *sessionManager) deleteSession(id sessionID) {
+	m.mx.Lock()
+	defer m.mx.Unlock()
+
+	delete(m.sessions, id)
+	m.recentlyClosedSessions = append(m.recentlyClosedSessions, id)
+	if len(m.recentlyClosedSessions) > maxRecentlyClosedSessions {
+		m.recentlyClosedSessions = m.recentlyClosedSessions[1:]
+	}
 }
 
 func (m *sessionManager) Close() {
