@@ -22,6 +22,12 @@ var (
 	CertPool *x509.CertPool
 )
 
+// use a very long validity period to cover the synthetic clock used in synctest
+var (
+	notBefore = time.Date(1990, 1, 1, 0, 0, 0, 0, time.UTC)
+	notAfter  = time.Date(2100, 1, 1, 0, 0, 0, 0, time.UTC)
+)
+
 func init() {
 	ca, caPrivateKey, err := generateCA()
 	if err != nil {
@@ -46,8 +52,8 @@ func generateCA() (*x509.Certificate, *rsa.PrivateKey, error) {
 	certTempl := &x509.Certificate{
 		SerialNumber:          big.NewInt(2019),
 		Subject:               pkix.Name{},
-		NotBefore:             time.Now(),
-		NotAfter:              time.Now().Add(24 * time.Hour),
+		NotBefore:             notBefore,
+		NotAfter:              notAfter,
 		IsCA:                  true,
 		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth},
 		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,
@@ -72,8 +78,8 @@ func generateLeafCert(ca *x509.Certificate, caPrivateKey *rsa.PrivateKey) (*x509
 	certTempl := &x509.Certificate{
 		SerialNumber: big.NewInt(1),
 		DNSNames:     []string{"localhost"},
-		NotBefore:    time.Now(),
-		NotAfter:     time.Now().Add(24 * time.Hour),
+		NotBefore:    notBefore,
+		NotAfter:     notAfter,
 		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth},
 		KeyUsage:     x509.KeyUsageDigitalSignature,
 	}

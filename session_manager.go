@@ -24,70 +24,75 @@ type sessionEntry struct {
 type sessionManager struct {
 	timeout time.Duration
 
-	mx    sync.Mutex
-	conns map[*quic.Conn]map[sessionID]sessionEntry
+	mx       sync.Mutex
+	sessions map[sessionID]sessionEntry
 }
 
 func newSessionManager(timeout time.Duration) *sessionManager {
 	return &sessionManager{
-		timeout: timeout,
-		conns:   make(map[*quic.Conn]map[sessionID]sessionEntry),
+		timeout:  timeout,
+		sessions: make(map[sessionID]sessionEntry),
 	}
 }
 
 // AddStream adds a new bidirectional stream to a WebTransport session.
 // If the WebTransport session has not yet been established,
-// it starts a new Goroutine and waits for establishment of the session.
+// the stream is buffered until the session is established.
 // If that takes longer than timeout, the stream is reset.
-func (m *sessionManager) AddStream(conn *quic.Conn, str *quic.Stream, id sessionID) {
+func (m *sessionManager) AddStream(str *quic.Stream, id sessionID) {
 	m.mx.Lock()
 	defer m.mx.Unlock()
 
-	entry := m.getOrCreateSession(conn, id)
+	entry, ok := m.sessions[id]
+	if !ok {
+		entry = sessionEntry{Unestablished: &unestablishedSession{}}
+		m.sessions[id] = entry
+	}
 	if entry.Session != nil {
 		entry.Session.addIncomingStream(str)
 		return
 	}
 
 	entry.Unestablished.Streams = append(entry.Unestablished.Streams, str)
-	m.resetTimer(entry, conn, id)
+	m.resetTimer(id)
 }
 
 // AddUniStream adds a new unidirectional stream to a WebTransport session.
 // If the WebTransport session has not yet been established,
-// it starts a new Goroutine and waits for establishment of the session.
+// the stream is buffered until the session is established.
 // If that takes longer than timeout, the stream is reset.
-func (m *sessionManager) AddUniStream(conn *quic.Conn, str *quic.ReceiveStream, id sessionID) {
+func (m *sessionManager) AddUniStream(str *quic.ReceiveStream, id sessionID) {
 	m.mx.Lock()
 	defer m.mx.Unlock()
 
-	entry := m.getOrCreateSession(conn, id)
+	entry, ok := m.sessions[id]
+	if !ok {
+		entry = sessionEntry{Unestablished: &unestablishedSession{}}
+		m.sessions[id] = entry
+	}
 	if entry.Session != nil {
 		entry.Session.addIncomingUniStream(str)
 		return
 	}
 
 	entry.Unestablished.UniStreams = append(entry.Unestablished.UniStreams, str)
-	m.resetTimer(entry, conn, id)
+	m.resetTimer(id)
 }
 
-func (m *sessionManager) resetTimer(entry *sessionEntry, conn *quic.Conn, id sessionID) {
+func (m *sessionManager) resetTimer(id sessionID) {
+	entry := m.sessions[id]
 	if entry.Unestablished.Timer != nil {
 		entry.Unestablished.Timer.Reset(m.timeout)
 		return
 	}
-	entry.Unestablished.Timer = time.AfterFunc(m.timeout, func() { m.onTimer(conn, id) })
+	entry.Unestablished.Timer = time.AfterFunc(m.timeout, func() { m.onTimer(id) })
 }
 
-func (m *sessionManager) onTimer(conn *quic.Conn, id sessionID) {
+func (m *sessionManager) onTimer(id sessionID) {
 	m.mx.Lock()
 	defer m.mx.Unlock()
 
-	entry, ok := m.conns[conn]
-	if !ok { // connection already closed
-		return
-	}
-	sessionEntry, ok := entry[id]
+	sessionEntry, ok := m.sessions[id]
 	if !ok { // session already closed
 		return
 	}
@@ -101,41 +106,16 @@ func (m *sessionManager) onTimer(conn *quic.Conn, id sessionID) {
 	for _, uniStr := range sessionEntry.Unestablished.UniStreams {
 		uniStr.CancelRead(WTBufferedStreamRejectedErrorCode)
 	}
-	delete(entry, id)
-	if len(entry) == 0 {
-		delete(m.conns, conn)
-	}
-}
-
-func (m *sessionManager) getOrCreateSession(conn *quic.Conn, id sessionID) *sessionEntry {
-	sessionMap, ok := m.conns[conn]
-	if !ok {
-		sessionMap = make(map[sessionID]sessionEntry)
-		m.conns[conn] = sessionMap
-	}
-
-	entry, ok := sessionMap[id]
-	if ok {
-		return &entry
-	}
-	entry = sessionEntry{Unestablished: &unestablishedSession{}}
-	sessionMap[id] = entry
-	return &entry
+	delete(m.sessions, id)
 }
 
 // AddSession adds a new WebTransport session.
-func (m *sessionManager) AddSession(ctx context.Context, conn *quic.Conn, id sessionID, str http3Stream, applicationProtocol string) *Session {
+func (m *sessionManager) AddSession(id sessionID, s *Session) {
 	m.mx.Lock()
 	defer m.mx.Unlock()
 
-	sessionMap, ok := m.conns[conn]
-	if !ok {
-		sessionMap = make(map[sessionID]sessionEntry)
-		m.conns[conn] = sessionMap
-	}
-	entry, ok := sessionMap[id]
+	entry, ok := m.sessions[id]
 
-	s := newSession(ctx, id, conn, str, applicationProtocol)
 	if ok && entry.Unestablished != nil {
 		// We might already have an entry of this session.
 		// This can happen when we receive streams for this WebTransport session before we complete
@@ -151,30 +131,23 @@ func (m *sessionManager) AddSession(ctx context.Context, conn *quic.Conn, id ses
 		}
 		entry.Unestablished = nil
 	}
-	sessionMap[id] = sessionEntry{Session: s}
+	m.sessions[id] = sessionEntry{Session: s}
 
 	context.AfterFunc(s.Context(), func() {
 		m.mx.Lock()
 		defer m.mx.Unlock()
-		delete(sessionMap, id)
-		if len(sessionMap) == 0 {
-			delete(m.conns, conn)
-		}
+		delete(m.sessions, id)
 	})
-
-	return s
 }
 
 func (m *sessionManager) Close() {
 	m.mx.Lock()
 	defer m.mx.Unlock()
 
-	for conn, sessionMap := range m.conns {
-		for _, entry := range sessionMap {
-			if entry.Unestablished != nil && entry.Unestablished.Timer != nil {
-				entry.Unestablished.Timer.Stop()
-			}
+	for _, entry := range m.sessions {
+		if entry.Unestablished != nil && entry.Unestablished.Timer != nil {
+			entry.Unestablished.Timer.Stop()
 		}
-		delete(m.conns, conn)
 	}
+	clear(m.sessions)
 }

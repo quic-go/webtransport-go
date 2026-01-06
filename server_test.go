@@ -46,8 +46,10 @@ func TestUpgradeFailures(t *testing.T) {
 	})
 }
 
+//nolint:unparam
 func createStreamAndWrite(t *testing.T, conn *quic.Conn, sessionID uint64, data []byte) *quic.Stream {
 	t.Helper()
+
 	str, err := conn.OpenStream()
 	require.NoError(t, err)
 	var buf []byte
@@ -186,88 +188,6 @@ func TestServerReorderedUpgradeRequestTimeout(t *testing.T) {
 	data, err := io.ReadAll(sstr)
 	require.NoError(t, err)
 	require.Equal(t, []byte("raboof"), data)
-}
-
-func TestServerReorderedMultipleStreams(t *testing.T) {
-	timeout := scaleDuration(150 * time.Millisecond)
-	s := webtransport.Server{
-		H3:                &http3.Server{TLSConfig: webtransport.TLSConf, EnableDatagrams: true},
-		ReorderingTimeout: timeout,
-	}
-	defer s.Close()
-	connChan := make(chan *webtransport.Session)
-	addHandler(t, &s, func(c *webtransport.Session) {
-		connChan <- c
-	})
-
-	udpConn, err := net.ListenUDP("udp", nil)
-	require.NoError(t, err)
-	port := udpConn.LocalAddr().(*net.UDPAddr).Port
-	webtransport.ConfigureHTTP3Server(s.H3)
-	go s.Serve(udpConn)
-
-	cconn, err := quic.DialAddr(
-		context.Background(),
-		fmt.Sprintf("localhost:%d", port),
-		&tls.Config{RootCAs: webtransport.CertPool, NextProtos: []string{http3.NextProtoH3}},
-		&quic.Config{EnableDatagrams: true},
-	)
-	require.NoError(t, err)
-	start := time.Now()
-	// Open a new stream for a WebTransport session we'll establish later.
-	str1 := createStreamAndWrite(t, cconn, 8, []byte("foobar"))
-
-	// After a while, open another stream for the same session.
-	// This resets the timer, so the timeout will be timeout after this point.
-	time.Sleep(timeout / 2)
-	str2 := createStreamAndWrite(t, cconn, 8, []byte("raboof"))
-
-	// Wait for timeout after the second stream was added.
-	// The timer was reset when str2 was added, so both streams should be reset
-	// timeout after str2 was added, which is timeout/2 + timeout = 1.5*timeout from start.
-	time.Sleep(timeout + timeout/4)
-
-	// Both streams should now have been reset by the server.
-	_, err = str1.Read([]byte{0})
-	var streamErr *quic.StreamError
-	require.ErrorAs(t, err, &streamErr)
-	require.Equal(t, webtransport.WTBufferedStreamRejectedErrorCode, streamErr.ErrorCode)
-
-	_, err = str2.Read([]byte{0})
-	require.ErrorAs(t, err, &streamErr)
-	require.Equal(t, webtransport.WTBufferedStreamRejectedErrorCode, streamErr.ErrorCode)
-
-	took := time.Since(start)
-	require.GreaterOrEqual(t, took, timeout*3/2)
-	require.Less(t, took, timeout*2)
-
-	tr := &http3.Transport{EnableDatagrams: true}
-	conn := tr.NewClientConn(cconn)
-	// Now establish the session. Make sure we don't accept the streams (they were reset).
-	requestStr, err := conn.OpenRequestStream(context.Background())
-	require.NoError(t, err)
-	require.NoError(t, requestStr.SendRequestHeader(
-		webtransport.NewWebTransportRequest(t, fmt.Sprintf("https://localhost:%d/webtransport", port)),
-	))
-	rsp, err := requestStr.ReadResponse()
-	require.NoError(t, err)
-	require.Equal(t, http.StatusOK, rsp.StatusCode)
-	sconn := <-connChan
-	defer sconn.CloseWithError(0, "")
-	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
-	defer cancel()
-	_, err = sconn.AcceptStream(ctx)
-	require.ErrorIs(t, err, context.DeadlineExceeded)
-
-	// Establish another stream and make sure it's accepted now.
-	createStreamAndWrite(t, cconn, 8, []byte("baz"))
-	ctx, cancel = context.WithTimeout(context.Background(), 200*time.Millisecond)
-	defer cancel()
-	sstr, err := sconn.AcceptStream(ctx)
-	require.NoError(t, err)
-	data, err := io.ReadAll(sstr)
-	require.NoError(t, err)
-	require.Equal(t, []byte("baz"), data)
 }
 
 func TestServerSettingsCheck(t *testing.T) {

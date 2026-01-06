@@ -79,7 +79,8 @@ type Server struct {
 	initOnce sync.Once
 	initErr  error
 
-	conns *sessionManager
+	connsMx sync.Mutex
+	conns   map[*quic.Conn]*sessionManager
 }
 
 func (s *Server) initialize() error {
@@ -100,7 +101,7 @@ func (s *Server) timeout() time.Duration {
 func (s *Server) init() error {
 	s.ctx, s.ctxCancel = context.WithCancel(context.Background())
 
-	s.conns = newSessionManager(s.timeout())
+	s.conns = make(map[*quic.Conn]*sessionManager)
 	if s.CheckOrigin == nil {
 		s.CheckOrigin = checkSameOrigin
 	}
@@ -144,6 +145,22 @@ func (s *Server) ServeQUICConn(conn *quic.Conn) error {
 	if err := s.initialize(); err != nil {
 		return err
 	}
+
+	s.connsMx.Lock()
+	sessMgr, ok := s.conns[conn]
+	if !ok {
+		sessMgr = newSessionManager(s.timeout())
+		s.conns[conn] = sessMgr
+	}
+	s.connsMx.Unlock()
+
+	// Clean up when connection closes
+	context.AfterFunc(conn.Context(), func() {
+		s.connsMx.Lock()
+		delete(s.conns, conn)
+		s.connsMx.Unlock()
+		sessMgr.Close()
+	})
 
 	http3Conn, err := s.H3.NewRawServerConn(conn)
 	if err != nil {
@@ -194,7 +211,7 @@ func (s *Server) ServeQUICConn(conn *quic.Conn) error {
 					str.CancelWrite(quic.StreamErrorCode(http3.ErrCodeGeneralProtocolError))
 					return
 				}
-				s.conns.AddStream(conn, str, sessionID(id))
+				sessMgr.AddStream(str, sessionID(id))
 			}()
 		}
 	}()
@@ -231,7 +248,7 @@ func (s *Server) ServeQUICConn(conn *quic.Conn) error {
 					str.CancelRead(quic.StreamErrorCode(http3.ErrCodeGeneralProtocolError))
 					return
 				}
-				s.conns.AddUniStream(conn, str, sessionID(id))
+				sessMgr.AddUniStream(str, sessionID(id))
 			}()
 		}
 	}()
@@ -277,9 +294,15 @@ func (s *Server) Close() error {
 	if s.ctxCancel != nil {
 		s.ctxCancel()
 	}
+	s.connsMx.Lock()
 	if s.conns != nil {
-		s.conns.Close()
+		for _, mgr := range s.conns {
+			mgr.Close()
+		}
+		s.conns = nil
 	}
+	s.connsMx.Unlock()
+
 	err := s.H3.Close()
 	s.refCount.Wait()
 	return err
@@ -333,7 +356,20 @@ func (s *Server) Upgrade(w http.ResponseWriter, r *http.Request) (*Session, erro
 
 	str := w.(http3.HTTPStreamer).HTTPStream()
 	sessID := sessionID(str.StreamID())
-	return s.conns.AddSession(context.WithoutCancel(r.Context()), conn, sessID, str, selectedProtocol), nil
+
+	// The session manager should already exist because ServeQUICConn creates it
+	// before any HTTP requests can be processed on this connection.
+	s.connsMx.Lock()
+	defer s.connsMx.Unlock()
+
+	sessMgr, ok := s.conns[conn]
+	if !ok {
+		return nil, errors.New("webtransport: connection session manager not found")
+	}
+
+	sess := newSession(context.WithoutCancel(r.Context()), sessID, conn, str, selectedProtocol)
+	sessMgr.AddSession(sessID, sess)
+	return sess, nil
 }
 
 func (s *Server) selectProtocol(theirs []string) string {

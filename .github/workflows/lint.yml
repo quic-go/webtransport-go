@@ -11,6 +11,8 @@ jobs:
         go: [ "1.24.x", "1.25.x" ]
     runs-on: ubuntu-latest
     name: Lint
+    env:
+      GOEXPERIMENT: ${{ matrix.go == '1.24.x' && 'synctest' || '' }}
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v6

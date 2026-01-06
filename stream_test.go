@@ -18,7 +18,7 @@ func newUniStreamPair(t *testing.T) (*quic.SendStream, *quic.ReceiveStream) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 
-	client, server := newConnPair(t)
+	client, server := newConnPair(t, newUDPConnLocalhost(t), newUDPConnLocalhost(t))
 	t.Cleanup(func() { client.CloseWithError(0, "") })
 
 	clientStr, err := client.OpenUniStreamSync(ctx)
@@ -262,7 +262,7 @@ func TestSendStreamHeaderRetryAfterDeadlineError(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 
-	client, server := newConnPair(t)
+	client, server := newConnPair(t, newUDPConnLocalhost(t), newUDPConnLocalhost(t))
 
 	clientStr, err := client.OpenUniStreamSync(ctx)
 	require.NoError(t, err)
