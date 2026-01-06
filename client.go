@@ -225,7 +225,9 @@ func (d *Dialer) Dial(ctx context.Context, urlStr string, reqHdr http.Header) (*
 	if protocolHeader, ok := rsp.Header[http.CanonicalHeaderKey(wtProtocolHeader)]; ok {
 		protocol = d.negotiateProtocol(protocolHeader)
 	}
-	sess := sessMgr.AddSession(context.WithoutCancel(ctx), qconn, sessionID(requestStr.StreamID()), requestStr, protocol)
+	sessID := sessionID(requestStr.StreamID())
+	sess := newSession(context.WithoutCancel(ctx), sessID, qconn, requestStr, protocol)
+	sessMgr.AddSession(sessID, sess)
 	return rsp, sess, nil
 }
 

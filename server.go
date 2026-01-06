@@ -360,13 +360,16 @@ func (s *Server) Upgrade(w http.ResponseWriter, r *http.Request) (*Session, erro
 	// The session manager should already exist because ServeQUICConn creates it
 	// before any HTTP requests can be processed on this connection.
 	s.connsMx.Lock()
+	defer s.connsMx.Unlock()
+
 	sessMgr, ok := s.conns[conn]
-	s.connsMx.Unlock()
 	if !ok {
 		return nil, errors.New("webtransport: connection session manager not found")
 	}
 
-	return sessMgr.AddSession(context.WithoutCancel(r.Context()), conn, sessID, str, selectedProtocol), nil
+	sess := newSession(context.WithoutCancel(r.Context()), sessID, conn, str, selectedProtocol)
+	sessMgr.AddSession(sessID, sess)
+	return sess, nil
 }
 
 func (s *Server) selectProtocol(theirs []string) string {

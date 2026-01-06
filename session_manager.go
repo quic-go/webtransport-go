@@ -110,13 +110,12 @@ func (m *sessionManager) onTimer(id sessionID) {
 }
 
 // AddSession adds a new WebTransport session.
-func (m *sessionManager) AddSession(ctx context.Context, conn *quic.Conn, id sessionID, str http3Stream, applicationProtocol string) *Session {
+func (m *sessionManager) AddSession(id sessionID, s *Session) {
 	m.mx.Lock()
 	defer m.mx.Unlock()
 
 	entry, ok := m.sessions[id]
 
-	s := newSession(ctx, id, conn, str, applicationProtocol)
 	if ok && entry.Unestablished != nil {
 		// We might already have an entry of this session.
 		// This can happen when we receive streams for this WebTransport session before we complete
@@ -139,8 +138,6 @@ func (m *sessionManager) AddSession(ctx context.Context, conn *quic.Conn, id ses
 		defer m.mx.Unlock()
 		delete(m.sessions, id)
 	})
-
-	return s
 }
 
 func (m *sessionManager) Close() {
