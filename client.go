@@ -47,16 +47,9 @@ type Dialer struct {
 	ctxCancel context.CancelFunc
 
 	initOnce sync.Once
-
-	conns sessionManager
 }
 
 func (d *Dialer) init() {
-	timeout := d.StreamReorderingTimeout
-	if timeout == 0 {
-		timeout = 5 * time.Second
-	}
-	d.conns = *newSessionManager(timeout)
 	d.ctx, d.ctxCancel = context.WithCancel(context.Background())
 }
 
@@ -115,6 +108,17 @@ func (d *Dialer) Dial(ctx context.Context, urlStr string, reqHdr http.Header) (*
 	if err != nil {
 		return nil, nil, err
 	}
+
+	timeout := d.StreamReorderingTimeout
+	if timeout == 0 {
+		timeout = 5 * time.Second
+	}
+	sessMgr := newSessionManager(timeout)
+
+	context.AfterFunc(qconn.Context(), func() {
+		sessMgr.Close()
+	})
+
 	tr := &http3.Transport{EnableDatagrams: true}
 
 	conn := tr.NewRawClientConn(qconn)
@@ -144,7 +148,7 @@ func (d *Dialer) Dial(ctx context.Context, urlStr string, reqHdr http.Header) (*
 				if err != nil {
 					return
 				}
-				d.conns.AddStream(qconn, str, sessionID(id))
+				sessMgr.AddStream(str, sessionID(id))
 			}()
 		}
 	}()
@@ -175,7 +179,7 @@ func (d *Dialer) Dial(ctx context.Context, urlStr string, reqHdr http.Header) (*
 					str.CancelRead(quic.StreamErrorCode(http3.ErrCodeGeneralProtocolError))
 					return
 				}
-				d.conns.AddUniStream(qconn, str, sessionID(id))
+				sessMgr.AddUniStream(str, sessionID(id))
 			}()
 		}
 	}()
@@ -221,7 +225,7 @@ func (d *Dialer) Dial(ctx context.Context, urlStr string, reqHdr http.Header) (*
 	if protocolHeader, ok := rsp.Header[http.CanonicalHeaderKey(wtProtocolHeader)]; ok {
 		protocol = d.negotiateProtocol(protocolHeader)
 	}
-	sess := d.conns.AddSession(context.WithoutCancel(ctx), qconn, sessionID(requestStr.StreamID()), requestStr, protocol)
+	sess := sessMgr.AddSession(context.WithoutCancel(ctx), qconn, sessionID(requestStr.StreamID()), requestStr, protocol)
 	return rsp, sess, nil
 }
 
