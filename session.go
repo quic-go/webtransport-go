@@ -105,7 +105,6 @@ type Session struct {
 	bidiAcceptQueue acceptQueue[*Stream]
 	uniAcceptQueue  acceptQueue[*ReceiveStream]
 
-	// TODO: garbage collect streams from when they are closed
 	streams streamsMap
 }
 
