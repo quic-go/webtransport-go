@@ -214,26 +214,36 @@ func TestServerReorderedMultipleStreams(t *testing.T) {
 	)
 	require.NoError(t, err)
 	start := time.Now()
-	// Open a new stream for a WebTransport session we'll establish later. Stream ID: 0.
+	// Open a new stream for a WebTransport session we'll establish later.
 	str1 := createStreamAndWrite(t, cconn, 8, []byte("foobar"))
 
-	// After a while, open another stream.
+	// After a while, open another stream for the same session.
+	// This resets the timer, so the timeout will be timeout after this point.
 	time.Sleep(timeout / 2)
-	// Open a new stream for a WebTransport session we'll establish later. Stream ID: 4.
-	createStreamAndWrite(t, cconn, 8, []byte("raboof"))
+	str2 := createStreamAndWrite(t, cconn, 8, []byte("raboof"))
 
-	// Reordering was too long. The stream should now have been reset by the server.
+	// Wait for timeout after the second stream was added.
+	// The timer was reset when str2 was added, so both streams should be reset
+	// timeout after str2 was added, which is timeout/2 + timeout = 1.5*timeout from start.
+	time.Sleep(timeout + timeout/4)
+
+	// Both streams should now have been reset by the server.
 	_, err = str1.Read([]byte{0})
 	var streamErr *quic.StreamError
 	require.ErrorAs(t, err, &streamErr)
 	require.Equal(t, webtransport.WTBufferedStreamRejectedErrorCode, streamErr.ErrorCode)
+
+	_, err = str2.Read([]byte{0})
+	require.ErrorAs(t, err, &streamErr)
+	require.Equal(t, webtransport.WTBufferedStreamRejectedErrorCode, streamErr.ErrorCode)
+
 	took := time.Since(start)
-	require.GreaterOrEqual(t, took, timeout)
-	require.Less(t, took, timeout*5/4)
+	require.GreaterOrEqual(t, took, timeout*3/2)
+	require.Less(t, took, timeout*2)
 
 	tr := &http3.Transport{EnableDatagrams: true}
 	conn := tr.NewClientConn(cconn)
-	// Now establish the session. Make sure we don't accept the stream.
+	// Now establish the session. Make sure we don't accept the streams (they were reset).
 	requestStr, err := conn.OpenRequestStream(context.Background())
 	require.NoError(t, err)
 	require.NoError(t, requestStr.SendRequestHeader(
@@ -246,11 +256,18 @@ func TestServerReorderedMultipleStreams(t *testing.T) {
 	defer sconn.CloseWithError(0, "")
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
+	_, err = sconn.AcceptStream(ctx)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+
+	// Establish another stream and make sure it's accepted now.
+	createStreamAndWrite(t, cconn, 8, []byte("baz"))
+	ctx, cancel = context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
 	sstr, err := sconn.AcceptStream(ctx)
 	require.NoError(t, err)
 	data, err := io.ReadAll(sstr)
 	require.NoError(t, err)
-	require.Equal(t, []byte("raboof"), data)
+	require.Equal(t, []byte("baz"), data)
 }
 
 func TestServerSettingsCheck(t *testing.T) {

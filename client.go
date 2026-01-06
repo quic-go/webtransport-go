@@ -169,7 +169,13 @@ func (d *Dialer) Dial(ctx context.Context, urlStr string, reqHdr http.Header) (*
 				if _, err := quicvarint.Read(quicvarint.NewReader(str)); err != nil {
 					return
 				}
-				d.conns.AddUniStream(qconn, str)
+				// read the session ID
+				id, err := quicvarint.Read(quicvarint.NewReader(str))
+				if err != nil {
+					str.CancelRead(quic.StreamErrorCode(http3.ErrCodeGeneralProtocolError))
+					return
+				}
+				d.conns.AddUniStream(qconn, str, sessionID(id))
 			}()
 		}
 	}()
@@ -215,8 +221,8 @@ func (d *Dialer) Dial(ctx context.Context, urlStr string, reqHdr http.Header) (*
 	if protocolHeader, ok := rsp.Header[http.CanonicalHeaderKey(wtProtocolHeader)]; ok {
 		protocol = d.negotiateProtocol(protocolHeader)
 	}
-	sessID := sessionID(requestStr.StreamID())
-	return rsp, d.conns.AddSession(context.WithoutCancel(ctx), qconn, sessID, requestStr, protocol), nil
+	sess := d.conns.AddSession(context.WithoutCancel(ctx), qconn, sessionID(requestStr.StreamID()), requestStr, protocol)
+	return rsp, sess, nil
 }
 
 func (d *Dialer) negotiateProtocol(theirs []string) string {
