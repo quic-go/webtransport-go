@@ -47,11 +47,11 @@ func newUDPConnLocalhost(t testing.TB) *net.UDPConn {
 	return conn
 }
 
-func newConnPair(t *testing.T) (client, server *quic.Conn) {
+func newConnPair(t *testing.T, clientConn, serverConn net.PacketConn) (client, server *quic.Conn) {
 	t.Helper()
 
 	ln, err := quic.ListenEarly(
-		newUDPConnLocalhost(t),
+		serverConn,
 		TLSConf,
 		&quic.Config{
 			InitialStreamReceiveWindow:     1 << 60,
@@ -65,7 +65,7 @@ func newConnPair(t *testing.T) (client, server *quic.Conn) {
 	defer cancel()
 	cl, err := quic.DialEarly(
 		ctx,
-		newUDPConnLocalhost(t),
+		clientConn,
 		ln.Addr(),
 		&tls.Config{
 			ServerName: "localhost",
@@ -157,7 +157,7 @@ func acceptAndRouteUniStream(t *testing.T, conn *quic.Conn, sess *Session) {
 
 func TestAddStreamAfterSessionClose(t *testing.T) {
 	const sessionID = 42
-	clientConn, serverConn := newConnPair(t)
+	clientConn, serverConn := newConnPair(t, newUDPConnLocalhost(t), newUDPConnLocalhost(t))
 	sess := setupSession(t, clientConn, sessionID)
 
 	str1, err := serverConn.OpenStream()
@@ -230,7 +230,7 @@ func TestOpenStreamSyncSessionClose(t *testing.T) {
 
 func testOpenStreamSyncSessionClose(t *testing.T, openStream func(*Session) error, openStreamSync func(*Session) error) {
 	const sessionID = 42
-	clientConn, _ := newConnPair(t)
+	clientConn, _ := newConnPair(t, newUDPConnLocalhost(t), newUDPConnLocalhost(t))
 	sess := setupSession(t, clientConn, sessionID)
 
 	for {
@@ -267,7 +267,7 @@ func testOpenStreamSyncSessionClose(t *testing.T, openStream func(*Session) erro
 // with a message longer than 1024 bytes, the capsule written to the wire contains
 // a truncated message.
 func TestCloseWithErrorTruncatesSendMessage(t *testing.T) {
-	clientConn, serverConn := newConnPair(t)
+	clientConn, serverConn := newConnPair(t, newUDPConnLocalhost(t), newUDPConnLocalhost(t))
 
 	type capsuleData struct {
 		errCode uint32
@@ -336,7 +336,7 @@ func TestCloseWithErrorTruncatesSendMessage(t *testing.T) {
 // TestCloseWithErrorTruncatesReceiveMessage tests that when receiving a close capsule
 // with a message longer than 1024 bytes, the session truncates the message.
 func TestCloseWithErrorTruncatesReceiveMessage(t *testing.T) {
-	clientConn, serverConn := newConnPair(t)
+	clientConn, serverConn := newConnPair(t, newUDPConnLocalhost(t), newUDPConnLocalhost(t))
 
 	longMsg := strings.Repeat("b", maxCloseCapsuleErrorMsgLen+500)
 
