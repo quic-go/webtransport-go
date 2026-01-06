@@ -190,6 +190,8 @@ func (s *Server) ServeQUICConn(conn *quic.Conn) error {
 				// read the session ID
 				id, err := quicvarint.Read(quicvarint.NewReader(str))
 				if err != nil {
+					str.CancelRead(quic.StreamErrorCode(http3.ErrCodeGeneralProtocolError))
+					str.CancelWrite(quic.StreamErrorCode(http3.ErrCodeGeneralProtocolError))
 					return
 				}
 				s.conns.AddStream(conn, str, sessionID(id))
@@ -219,10 +221,17 @@ func (s *Server) ServeQUICConn(conn *quic.Conn) error {
 					return
 				}
 				// read the stream type (already peeked) before passing to AddUniStream
-				if _, err := quicvarint.Read(quicvarint.NewReader(str)); err != nil {
+				r := quicvarint.NewReader(str)
+				if _, err := quicvarint.Read(r); err != nil {
 					return
 				}
-				s.conns.AddUniStream(conn, str)
+				// read the session ID
+				id, err := quicvarint.Read(r)
+				if err != nil {
+					str.CancelRead(quic.StreamErrorCode(http3.ErrCodeGeneralProtocolError))
+					return
+				}
+				s.conns.AddUniStream(conn, str, sessionID(id))
 			}()
 		}
 	}()
