@@ -45,24 +45,38 @@ func appendSettingsFrame(b []byte, values map[uint64]uint64) []byte {
 }
 
 func TestClientInvalidResponseHandling(t *testing.T) {
-	s, err := quic.ListenAddr("localhost:0", webtransport.TLSConf, &quic.Config{EnableDatagrams: true})
+	ln, err := quic.ListenAddr("localhost:0", webtransport.TLSConf, &quic.Config{EnableDatagrams: true})
 	require.NoError(t, err)
-	errChan := make(chan error)
+	defer ln.Close()
+
+	errChan := make(chan error, 1)
 	go func() {
-		conn, err := s.Accept(context.Background())
-		require.NoError(t, err)
+		conn, err := ln.Accept(context.Background())
+		if err != nil {
+			errChan <- err
+			return
+		}
 		// send the SETTINGS frame
 		settingsStr, err := conn.OpenUniStream()
-		require.NoError(t, err)
+		if err != nil {
+			errChan <- err
+			return
+		}
 		_, err = settingsStr.Write(appendSettingsFrame([]byte{0} /* stream type */, map[uint64]uint64{
 			settingDatagram:            1,
 			settingExtendedConnect:     1,
 			settingsEnableWebtransport: 1,
 		}))
-		require.NoError(t, err)
+		if err != nil {
+			errChan <- err
+			return
+		}
 
 		str, err := conn.AcceptStream(context.Background())
-		require.NoError(t, err)
+		if err != nil {
+			errChan <- err
+			return
+		}
 		// write an HTTP/3 data frame. This will cause an error, since a HEADERS frame is expected
 		var b []byte
 		b = quicvarint.Append(b, 0x0)
@@ -78,7 +92,7 @@ func TestClientInvalidResponseHandling(t *testing.T) {
 	}()
 
 	d := webtransport.Dialer{TLSClientConfig: &tls.Config{RootCAs: webtransport.CertPool}}
-	_, _, err = d.Dial(context.Background(), fmt.Sprintf("https://localhost:%d", s.Addr().(*net.UDPAddr).Port), nil)
+	_, _, err = d.Dial(context.Background(), fmt.Sprintf("https://localhost:%d", ln.Addr().(*net.UDPAddr).Port), nil)
 	require.Error(t, err)
 	var sErr error
 	select {
@@ -114,9 +128,9 @@ func TestClientWaitForSettingsTimeout(t *testing.T) {
 		errChan <- err
 	}()
 
+	var serverConn *quic.Conn
 	select {
-	case conn := <-connChan:
-		defer conn.CloseWithError(0, "")
+	case serverConn = <-connChan:
 	case <-time.After(time.Second):
 		t.Fatal("timeout waiting for connection")
 	}
@@ -130,6 +144,17 @@ func TestClientWaitForSettingsTimeout(t *testing.T) {
 		require.ErrorIs(t, err, assert.AnError)
 	case <-time.After(time.Second):
 		t.Fatal("timeout waiting for dial to complete")
+	}
+
+	// the client should close the underlying QUIC connection
+	select {
+	case <-serverConn.Context().Done():
+		require.ErrorIs(t,
+			context.Cause(serverConn.Context()),
+			&quic.ApplicationError{ErrorCode: quic.ApplicationErrorCode(http3.ErrCodeNoError), Remote: true},
+		)
+	case <-time.After(time.Second):
+		t.Fatal("timeout waiting for client to close connection")
 	}
 }
 
@@ -172,31 +197,47 @@ func TestClientInvalidSettingsHandling(t *testing.T) {
 			require.NoError(t, err)
 			defer ln.Close()
 
-			done := make(chan struct{})
-			ctx, cancel := context.WithCancel(context.Background())
+			connChan := make(chan *quic.Conn, 1)
 			go func() {
-				defer close(done)
 				conn, err := ln.Accept(context.Background())
-				require.NoError(t, err)
+				if err != nil {
+					t.Errorf("failed to accept connection: %v", err)
+					return
+				}
 				// send the SETTINGS frame
 				settingsStr, err := conn.OpenUniStream()
-				require.NoError(t, err)
-				_, err = settingsStr.Write(appendSettingsFrame([]byte{0} /* stream type */, tc.settings))
-				require.NoError(t, err)
-				if _, err := conn.AcceptStream(ctx); err == nil || !errors.Is(err, context.Canceled) {
-					require.Fail(t, "didn't expect any stream to be accepted")
+				if err != nil {
+					t.Errorf("failed to open uni stream: %v", err)
+					return
 				}
+				if _, err := settingsStr.Write(appendSettingsFrame([]byte{0} /* stream type */, tc.settings)); err != nil {
+					t.Errorf("failed to write settings frame: %v", err)
+					return
+				}
+				connChan <- conn
 			}()
 
 			d := webtransport.Dialer{TLSClientConfig: &tls.Config{RootCAs: webtransport.CertPool}}
 			_, _, err = d.Dial(context.Background(), fmt.Sprintf("https://localhost:%d", ln.Addr().(*net.UDPAddr).Port), nil)
 			require.Error(t, err)
 			require.ErrorContains(t, err, tc.errorStr)
-			cancel()
+
+			var serverConn *quic.Conn
 			select {
-			case <-done:
+			case serverConn = <-connChan:
 			case <-time.After(5 * time.Second):
 				t.Fatal("timeout")
+			}
+
+			// the client should close the underlying QUIC connection
+			select {
+			case <-serverConn.Context().Done():
+				require.ErrorIs(t,
+					context.Cause(serverConn.Context()),
+					&quic.ApplicationError{ErrorCode: quic.ApplicationErrorCode(http3.ErrCodeNoError), Remote: true},
+				)
+			case <-time.After(time.Second):
+				t.Fatal("timeout waiting for client to close connection")
 			}
 		})
 	}
