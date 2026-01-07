@@ -91,6 +91,7 @@ func (d *Dialer) Dial(ctx context.Context, urlStr string, reqHdr http.Header) (*
 		}
 		reqHdr.Set(wtAvailableProtocolsHeader, protocols)
 	}
+
 	req := &http.Request{
 		Method: http.MethodConnect,
 		Header: reqHdr,
@@ -109,17 +110,29 @@ func (d *Dialer) Dial(ctx context.Context, urlStr string, reqHdr http.Header) (*
 		return nil, nil, err
 	}
 
+	tr := &http3.Transport{EnableDatagrams: true}
+	rsp, sess, err := d.handleConn(ctx, tr, qconn, req)
+	if err != nil {
+		// TODO: use a more specific error code
+		// see https://github.com/ietf-wg-webtrans/draft-ietf-webtrans-http3/issues/245
+		qconn.CloseWithError(quic.ApplicationErrorCode(http3.ErrCodeNoError), "")
+		tr.Close()
+		return rsp, nil, err
+	}
+	context.AfterFunc(sess.Context(), func() {
+		qconn.CloseWithError(quic.ApplicationErrorCode(http3.ErrCodeNoError), "")
+		tr.Close()
+	})
+	return rsp, sess, nil
+}
+
+func (d *Dialer) handleConn(ctx context.Context, tr *http3.Transport, qconn *quic.Conn, req *http.Request) (*http.Response, *Session, error) {
 	timeout := d.StreamReorderingTimeout
 	if timeout == 0 {
 		timeout = 5 * time.Second
 	}
 	sessMgr := newSessionManager(timeout)
-
-	context.AfterFunc(qconn.Context(), func() {
-		sessMgr.Close()
-	})
-
-	tr := &http3.Transport{EnableDatagrams: true}
+	context.AfterFunc(qconn.Context(), sessMgr.Close)
 
 	conn := tr.NewRawClientConn(qconn)
 
