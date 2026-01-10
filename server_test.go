@@ -82,7 +82,7 @@ func TestServerReorderedUpgradeRequest(t *testing.T) {
 		context.Background(),
 		fmt.Sprintf("localhost:%d", port),
 		&tls.Config{RootCAs: webtransport.CertPool, NextProtos: []string{http3.NextProtoH3}},
-		&quic.Config{EnableDatagrams: true},
+		&quic.Config{EnableDatagrams: true, EnableStreamResetPartialDelivery: true},
 	)
 	require.NoError(t, err)
 	// Open a new stream for a WebTransport session we'll establish later. Stream ID: 0.
@@ -234,4 +234,66 @@ func TestServerSettingsCheck(t *testing.T) {
 func TestImmediateClose(t *testing.T) {
 	s := webtransport.Server{H3: &http3.Server{}}
 	require.NoError(t, s.Close())
+}
+
+func TestServerConnectionStateChecks(t *testing.T) {
+	tests := []struct {
+		name                     string
+		enableDatagrams          bool
+		enableStreamResetPartial bool
+		wantErr                  string
+	}{
+		{
+			name:                     "missing datagram support",
+			enableDatagrams:          false,
+			enableStreamResetPartial: true,
+			wantErr:                  "webtransport: QUIC DATAGRAM support required",
+		},
+		{
+			name:                     "missing stream reset partial delivery support",
+			enableDatagrams:          true,
+			enableStreamResetPartial: false,
+			wantErr:                  "webtransport: QUIC Stream Resets with Partial Delivery required",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := webtransport.Server{H3: &http3.Server{TLSConfig: webtransport.TLSConf}}
+			defer s.Close()
+
+			serverConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
+			require.NoError(t, err)
+			defer serverConn.Close()
+
+			clientConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
+			require.NoError(t, err)
+			defer clientConn.Close()
+
+			ln, err := quic.ListenEarly(serverConn, webtransport.TLSConf, &quic.Config{
+				EnableDatagrams:                  tt.enableDatagrams,
+				EnableStreamResetPartialDelivery: tt.enableStreamResetPartial,
+			})
+			require.NoError(t, err)
+			defer ln.Close()
+
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			_, err = quic.DialEarly(ctx, clientConn, ln.Addr(), &tls.Config{
+				ServerName: "localhost",
+				NextProtos: []string{http3.NextProtoH3},
+				RootCAs:    webtransport.CertPool,
+			}, &quic.Config{
+				EnableDatagrams:                  tt.enableDatagrams,
+				EnableStreamResetPartialDelivery: tt.enableStreamResetPartial,
+			})
+			require.NoError(t, err)
+
+			qconn, err := ln.Accept(ctx)
+			require.NoError(t, err)
+			defer qconn.CloseWithError(0, "")
+
+			require.ErrorContains(t, s.ServeQUICConn(qconn), tt.wantErr)
+		})
+	}
 }
