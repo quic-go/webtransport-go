@@ -48,9 +48,9 @@ type SendStream struct {
 
 	onClose func() // to remove the stream from the streamsMap
 
-	closeOnce sync.Once
-	closed    chan struct{}
-	closeErr  error
+	doneOnce sync.Once
+	closed   chan struct{}
+	closeErr error
 
 	deadlineMu       sync.Mutex
 	writeDeadline    time.Time
@@ -147,28 +147,30 @@ func (s *SendStream) maybeSendStreamHeader() error {
 // Write will unblock immediately, and future calls to Write will fail.
 // When called multiple times it is a no-op.
 func (s *SendStream) CancelWrite(e StreamErrorCode) {
-	s.streamHdrMu.Lock()
-	if len(s.streamHdr) > 0 {
-		// Sending the stream header might block if we are blocked by flow control.
-		// Send a stream header async so that CancelWrite can return immediately.
-		go func() {
-			defer s.streamHdrMu.Unlock()
+	s.doneOnce.Do(func() {
+		s.streamHdrMu.Lock()
+		if len(s.streamHdr) > 0 {
+			// Sending the stream header might block if we are blocked by flow control.
+			// Send a stream header async so that CancelWrite can return immediately.
+			go func() {
+				defer s.streamHdrMu.Unlock()
 
-			s.SetWriteDeadline(time.Time{})
-			_ = s.maybeSendStreamHeader()
-			s.str.CancelWrite(webtransportCodeToHTTPCode(e))
-			s.onClose()
-		}()
-		return
-	}
-	s.streamHdrMu.Unlock()
+				s.SetWriteDeadline(time.Time{})
+				_ = s.maybeSendStreamHeader()
+				s.str.CancelWrite(webtransportCodeToHTTPCode(e))
+				s.onClose()
+			}()
+			return
+		}
+		s.streamHdrMu.Unlock()
 
-	s.str.CancelWrite(webtransportCodeToHTTPCode(e))
-	s.onClose()
+		s.str.CancelWrite(webtransportCodeToHTTPCode(e))
+		s.onClose()
+	})
 }
 
 func (s *SendStream) closeWithSession(err error) {
-	s.closeOnce.Do(func() {
+	s.doneOnce.Do(func() {
 		s.closeErr = err
 		s.str.CancelWrite(WTSessionGoneErrorCode)
 		close(s.closed)
@@ -232,9 +234,9 @@ type ReceiveStream struct {
 
 	onClose func() // to remove the stream from the streamsMap
 
-	closeOnce sync.Once
-	closed    chan struct{}
-	closeErr  error
+	doneOnce sync.Once
+	closed   chan struct{}
+	closeErr error
 
 	deadlineMu       sync.Mutex
 	readDeadline     time.Time
@@ -309,7 +311,7 @@ func (s *ReceiveStream) CancelRead(e StreamErrorCode) {
 }
 
 func (s *ReceiveStream) closeWithSession(err error) {
-	s.closeOnce.Do(func() {
+	s.doneOnce.Do(func() {
 		s.closeErr = err
 		s.str.CancelRead(WTSessionGoneErrorCode)
 		close(s.closed)
