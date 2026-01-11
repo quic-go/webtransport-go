@@ -75,7 +75,7 @@ func newConnPair(t *testing.T, clientConn, serverConn net.PacketConn) (client, s
 		&quic.Config{EnableDatagrams: true},
 	)
 	require.NoError(t, err)
-	require.True(t, cl.ConnectionState().SupportsDatagrams)
+	require.True(t, cl.ConnectionState().SupportsDatagrams.Remote)
 	t.Cleanup(func() { cl.CloseWithError(0, "") })
 
 	conn, err := ln.Accept(ctx)
@@ -83,7 +83,7 @@ func newConnPair(t *testing.T, clientConn, serverConn net.PacketConn) (client, s
 	t.Cleanup(func() { conn.CloseWithError(0, "") })
 	select {
 	case <-conn.HandshakeComplete():
-		require.True(t, conn.ConnectionState().SupportsDatagrams)
+		require.True(t, conn.ConnectionState().SupportsDatagrams.Remote)
 	case <-ctx.Done():
 		t.Fatal("timeout")
 	}
