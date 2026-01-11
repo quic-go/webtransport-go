@@ -19,6 +19,7 @@ import (
 	"github.com/quic-go/quic-go/http3"
 	"github.com/quic-go/quic-go/quicvarint"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -54,9 +55,10 @@ func newConnPair(t *testing.T, clientConn, serverConn net.PacketConn) (client, s
 		serverConn,
 		TLSConf,
 		&quic.Config{
-			InitialStreamReceiveWindow:     1 << 60,
-			InitialConnectionReceiveWindow: 1 << 60,
-			EnableDatagrams:                true,
+			InitialStreamReceiveWindow:       1 << 60,
+			InitialConnectionReceiveWindow:   1 << 60,
+			EnableDatagrams:                  true,
+			EnableStreamResetPartialDelivery: true,
 		},
 	)
 	require.NoError(t, err)
@@ -72,10 +74,16 @@ func newConnPair(t *testing.T, clientConn, serverConn net.PacketConn) (client, s
 			NextProtos: []string{http3.NextProtoH3},
 			RootCAs:    CertPool,
 		},
-		&quic.Config{EnableDatagrams: true},
+		&quic.Config{
+			EnableDatagrams:                  true,
+			EnableStreamResetPartialDelivery: true,
+		},
 	)
 	require.NoError(t, err)
-	require.True(t, cl.ConnectionState().SupportsDatagrams.Remote)
+	assert.True(t, cl.ConnectionState().SupportsDatagrams.Local)
+	assert.True(t, cl.ConnectionState().SupportsDatagrams.Remote)
+	assert.True(t, cl.ConnectionState().SupportsStreamResetPartialDelivery.Local)
+	assert.True(t, cl.ConnectionState().SupportsStreamResetPartialDelivery.Remote)
 	t.Cleanup(func() { cl.CloseWithError(0, "") })
 
 	conn, err := ln.Accept(ctx)
@@ -83,7 +91,10 @@ func newConnPair(t *testing.T, clientConn, serverConn net.PacketConn) (client, s
 	t.Cleanup(func() { conn.CloseWithError(0, "") })
 	select {
 	case <-conn.HandshakeComplete():
-		require.True(t, conn.ConnectionState().SupportsDatagrams.Remote)
+		assert.True(t, conn.ConnectionState().SupportsDatagrams.Local)
+		assert.True(t, conn.ConnectionState().SupportsDatagrams.Remote)
+		assert.True(t, conn.ConnectionState().SupportsStreamResetPartialDelivery.Local)
+		assert.True(t, conn.ConnectionState().SupportsStreamResetPartialDelivery.Remote)
 	case <-ctx.Done():
 		t.Fatal("timeout")
 	}

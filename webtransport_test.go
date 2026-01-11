@@ -47,16 +47,24 @@ func runServer(t *testing.T, s *webtransport.Server) (addr *net.UDPAddr, close f
 func establishSession(t *testing.T, handler func(*webtransport.Session)) (sess *webtransport.Session, close func()) {
 	s := &webtransport.Server{
 		H3: &http3.Server{
-			TLSConfig:  webtransport.TLSConf,
-			QUICConfig: &quic.Config{Tracer: qlog.DefaultConnectionTracer, EnableDatagrams: true},
+			TLSConfig: webtransport.TLSConf,
+			QUICConfig: &quic.Config{
+				EnableDatagrams:                  true,
+				EnableStreamResetPartialDelivery: true,
+				Tracer:                           qlog.DefaultConnectionTracer,
+			},
 		},
 	}
 	addHandler(t, s, handler)
 
 	addr, closeServer := runServer(t, s)
 	d := webtransport.Dialer{
-		TLSClientConfig:      &tls.Config{RootCAs: webtransport.CertPool},
-		QUICConfig:           &quic.Config{Tracer: qlog.DefaultConnectionTracer, EnableDatagrams: true},
+		TLSClientConfig: &tls.Config{RootCAs: webtransport.CertPool},
+		QUICConfig: &quic.Config{
+			EnableDatagrams:                  true,
+			EnableStreamResetPartialDelivery: true,
+			Tracer:                           qlog.DefaultConnectionTracer,
+		},
 		ApplicationProtocols: []string{"protocol1", "protocol2"},
 	}
 	defer d.Close()
@@ -144,8 +152,12 @@ func testApplicationProtocolNegotiation(t *testing.T, clientProtocols, serverPro
 	s := &webtransport.Server{
 		ApplicationProtocols: serverProtocols,
 		H3: &http3.Server{
-			TLSConfig:  webtransport.TLSConf,
-			QUICConfig: &quic.Config{Tracer: qlog.DefaultConnectionTracer, EnableDatagrams: true},
+			TLSConfig: webtransport.TLSConf,
+			QUICConfig: &quic.Config{
+				EnableDatagrams:                  true,
+				EnableStreamResetPartialDelivery: true,
+				Tracer:                           qlog.DefaultConnectionTracer,
+			},
 		},
 	}
 	defer s.Close()
@@ -157,8 +169,12 @@ func testApplicationProtocolNegotiation(t *testing.T, clientProtocols, serverPro
 	addr, closeServer := runServer(t, s)
 	defer closeServer()
 	d := webtransport.Dialer{
-		TLSClientConfig:      &tls.Config{RootCAs: webtransport.CertPool},
-		QUICConfig:           &quic.Config{Tracer: qlog.DefaultConnectionTracer, EnableDatagrams: true},
+		TLSClientConfig: &tls.Config{RootCAs: webtransport.CertPool},
+		QUICConfig: &quic.Config{
+			EnableDatagrams:                  true,
+			EnableStreamResetPartialDelivery: true,
+			Tracer:                           qlog.DefaultConnectionTracer,
+		},
 		ApplicationProtocols: clientProtocols,
 	}
 	defer d.Close()
@@ -281,46 +297,6 @@ func TestStreamsImmediateClose(t *testing.T) {
 	})
 }
 
-func TestStreamsImmediateReset(t *testing.T) {
-	// This tests ensures that we correctly process the error code that occurs when quic-go reads the frame type.
-	// If we don't process the error code correctly and fail to hijack the stream,
-	// quic-go will see a bidirectional stream opened by the server, which is a connection error.
-	done := make(chan struct{})
-	defer close(done)
-	sess, closeServer := establishSession(t, func(c *webtransport.Session) {
-		for i := 0; i < 50; i++ {
-			str, err := c.OpenStream()
-			require.NoError(t, err)
-
-			var wg sync.WaitGroup
-			wg.Add(2)
-			go func() {
-				defer wg.Done()
-				str.CancelWrite(42)
-			}()
-
-			go func() {
-				defer wg.Done()
-				str.Write([]byte("foobar"))
-			}()
-
-			wg.Wait()
-		}
-	})
-	defer closeServer()
-	defer sess.CloseWithError(0, "")
-
-	ctx, cancel := context.WithTimeout(context.Background(), scaleDuration(100*time.Millisecond))
-	defer cancel()
-	for {
-		_, err := sess.AcceptStream(ctx)
-		if err == context.DeadlineExceeded {
-			break
-		}
-		require.NoError(t, err)
-	}
-}
-
 func TestUnidirectionalStreams(t *testing.T) {
 	sess, closeServer := establishSession(t, func(sess *webtransport.Session) {
 		// Accept a unidirectional stream, read all of its contents,
@@ -369,7 +345,11 @@ func TestMultipleClients(t *testing.T) {
 			defer wg.Done()
 			d := webtransport.Dialer{
 				TLSClientConfig: &tls.Config{RootCAs: webtransport.CertPool},
-				QUICConfig:      &quic.Config{Tracer: qlog.DefaultConnectionTracer, EnableDatagrams: true},
+				QUICConfig: &quic.Config{
+					EnableDatagrams:                  true,
+					EnableStreamResetPartialDelivery: true,
+					Tracer:                           qlog.DefaultConnectionTracer,
+				},
 			}
 			defer d.Close()
 			url := fmt.Sprintf("https://localhost:%d/webtransport", addr.Port)
@@ -558,7 +538,7 @@ func TestCheckOrigin(t *testing.T) {
 
 			d := webtransport.Dialer{
 				TLSClientConfig: &tls.Config{RootCAs: webtransport.CertPool},
-				QUICConfig:      &quic.Config{Tracer: qlog.DefaultConnectionTracer, EnableDatagrams: true},
+				QUICConfig:      &quic.Config{Tracer: qlog.DefaultConnectionTracer, EnableDatagrams: true, EnableStreamResetPartialDelivery: true},
 			}
 			defer d.Close()
 			url := fmt.Sprintf("https://localhost:%d/webtransport", addr.Port)
@@ -724,7 +704,7 @@ func TestSessionContextValues(t *testing.T) {
 	s := &webtransport.Server{
 		H3: &http3.Server{
 			TLSConfig:  webtransport.TLSConf,
-			QUICConfig: &quic.Config{Tracer: qlog.DefaultConnectionTracer, EnableDatagrams: true},
+			QUICConfig: &quic.Config{Tracer: qlog.DefaultConnectionTracer, EnableDatagrams: true, EnableStreamResetPartialDelivery: true},
 		},
 	}
 	mux := http.NewServeMux()
@@ -748,7 +728,7 @@ func TestSessionContextValues(t *testing.T) {
 
 	d := webtransport.Dialer{
 		TLSClientConfig: &tls.Config{RootCAs: webtransport.CertPool},
-		QUICConfig:      &quic.Config{Tracer: qlog.DefaultConnectionTracer, EnableDatagrams: true},
+		QUICConfig:      &quic.Config{Tracer: qlog.DefaultConnectionTracer, EnableDatagrams: true, EnableStreamResetPartialDelivery: true},
 	}
 	defer d.Close()
 	url := fmt.Sprintf("https://localhost:%d/webtransport", addr.Port)

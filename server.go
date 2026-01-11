@@ -112,12 +112,14 @@ func (s *Server) Serve(conn net.PacketConn) error {
 	if err := s.initialize(); err != nil {
 		return err
 	}
-	quicConf := s.H3.QUICConfig
-	if quicConf == nil {
+	var quicConf *quic.Config
+	if s.H3.QUICConfig != nil {
+		quicConf = s.H3.QUICConfig.Clone()
+	} else {
 		quicConf = &quic.Config{}
 	}
-	quicConf = quicConf.Clone()
 	quicConf.EnableDatagrams = true
+	quicConf.EnableStreamResetPartialDelivery = true
 	ln, err := quic.ListenEarly(conn, s.H3.TLSConfig, quicConf)
 	if err != nil {
 		return err
@@ -142,6 +144,13 @@ func (s *Server) Serve(conn net.PacketConn) error {
 
 // ServeQUICConn serves a single QUIC connection.
 func (s *Server) ServeQUICConn(conn *quic.Conn) error {
+	connState := conn.ConnectionState()
+	if !connState.SupportsDatagrams.Local {
+		return errors.New("webtransport: QUIC DATAGRAM support required, enable it via QUICConfig.EnableDatagrams")
+	}
+	if !connState.SupportsStreamResetPartialDelivery.Local {
+		return errors.New("webtransport: QUIC Stream Resets with Partial Delivery required, enable it via QUICConfig.EnableStreamResetPartialDelivery")
+	}
 	if err := s.initialize(); err != nil {
 		return err
 	}
