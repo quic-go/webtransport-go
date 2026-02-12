@@ -1,6 +1,6 @@
 module github.com/quic-go/webtransport-go
 
-go 1.24
+go 1.25
 
 require (
 	github.com/dunglas/httpsfv v1.1.0

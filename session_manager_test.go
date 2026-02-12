@@ -8,14 +8,11 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
-	"runtime"
 	"slices"
 	"strconv"
-	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
-
-	"github.com/quic-go/webtransport-go/internal/synctest"
 
 	"github.com/quic-go/quic-go"
 	"github.com/quic-go/quic-go/http3"
@@ -123,12 +120,6 @@ func TestSessionManagerAddingStreams(t *testing.T) {
 }
 
 func TestSessionManagerStreamReordering(t *testing.T) {
-	// synctest works slightly differently on Go 1.24,
-	// so we skip the test
-	if strings.HasPrefix(runtime.Version(), "go1.24") {
-		t.Skip("skipping on Go 1.24 due to synctest issues")
-	}
-
 	synctest.Test(t, func(t *testing.T) {
 		clientPacketConn, serverPacketConn, closeFn := newSimnetLink(t, 10*time.Millisecond)
 		defer closeFn(t)
@@ -264,12 +255,6 @@ func TestSessionManagerStreamReordering(t *testing.T) {
 }
 
 func TestSessionManagerSessionClose(t *testing.T) {
-	// synctest works slightly differently on Go 1.24,
-	// so we skip the test
-	if strings.HasPrefix(runtime.Version(), "go1.24") {
-		t.Skip("skipping on Go 1.24 due to synctest issues")
-	}
-
 	synctest.Test(t, func(t *testing.T) {
 		const rtt = 10 * time.Millisecond
 		clientPacketConn, serverPacketConn, closeFn := newSimnetLink(t, rtt)
