@@ -11,9 +11,8 @@ import (
 	"slices"
 	"strconv"
 	"testing"
+	"testing/synctest"
 	"time"
-
-	"github.com/quic-go/webtransport-go/internal/synctest"
 
 	"github.com/quic-go/quic-go"
 	"github.com/quic-go/quic-go/http3"
