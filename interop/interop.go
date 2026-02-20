@@ -76,7 +76,7 @@ func runTransfer(endpoint string, sess *webtransport.Session) {
 					return
 				}
 				defer rstr.Close()
-				if err := sendFile(filepath.Join(endpoint, filename), rstr); err != nil {
+				if err := pushFile(filepath.Join(endpoint, filename), rstr); err != nil {
 					log.Printf("failed to send file: %v", err)
 					return
 				}
@@ -111,7 +111,29 @@ func runTransferUniReceive(sess *webtransport.Session, endpoint string, requests
 			if err != nil {
 				return err
 			}
-			return storePush(str, endpoint, "/downloads")
+			return storePush(str, endpoint)
+		})
+	}
+	return eg.Wait()
+}
+
+func runTransferBidiReceive(sess *webtransport.Session, endpoint string, requests []string) error {
+	var eg errgroup.Group
+	for _, req := range requests {
+		log.Printf("requesting file: %s", req)
+		eg.Go(func() error {
+			str, err := sess.OpenStreamSync(context.Background())
+			if err != nil {
+				return err
+			}
+			if err := requestFile(str, req); err != nil {
+				return fmt.Errorf("failed to request file %s: %w", req, err)
+			}
+			data, err := io.ReadAll(str)
+			if err != nil {
+				return fmt.Errorf("failed to read response: %w", err)
+			}
+			return saveFile(filepath.Join(endpoint, filepath.Base(req)), data)
 		})
 	}
 	return eg.Wait()
@@ -126,9 +148,8 @@ func readFile(path string) ([]byte, error) {
 	return data, nil
 }
 
-func writeDownload(baseDir, rel string, data []byte) error {
-	rel = strings.TrimPrefix(rel, "/")
-	full := filepath.Join(baseDir, rel)
+func saveFile(name string, data []byte) error {
+	full := filepath.Join("/downloads", name)
 	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
 		return err
 	}
@@ -141,7 +162,7 @@ func requestFile(w io.WriteCloser, filename string) error {
 	return err
 }
 
-func storePush(r io.Reader, endpoint, downloadDir string) error {
+func storePush(r io.Reader, endpoint string) error {
 	data, err := io.ReadAll(r)
 	if err != nil {
 		return err
@@ -159,9 +180,8 @@ func storePush(r io.Reader, endpoint, downloadDir string) error {
 	}
 	filename := string(bytes.TrimSpace(name))
 	log.Printf("received PUSH for %s: %d bytes", filename, len(payload))
-	// Save under endpoint subdir so the test framework finds SERVER_DOWNLOADS/endpoint/
 	rel := filepath.Join(endpoint, filepath.Base(filename))
-	return writeDownload(downloadDir, rel, payload)
+	return saveFile(rel, payload)
 }
 
 func parseRequest(data []byte) (string, error) {
@@ -177,6 +197,17 @@ func parseRequest(data []byte) (string, error) {
 
 func sendFile(filename string, w io.Writer) error {
 	payload, err := readFile(filename)
+	if err != nil {
+		return fmt.Errorf("failed to read file for %s: %v", filename, err)
+	}
+	log.Printf("sending file: %s: %d bytes", filename, len(payload))
+	_, err = w.Write(payload)
+	return err
+}
+
+func pushFile(filename string, w io.Writer) error {
+	payload, err := readFile(filename)
+	log.Printf("sending file: %s: %d bytes", filename, len(payload))
 	if err != nil {
 		return fmt.Errorf("failed to read file for %s: %v", filename, err)
 	}

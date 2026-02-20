@@ -122,6 +122,8 @@ func RunInteropClient() error {
 		runTransfer(u[strings.Index(u, "/")+1:], sess)
 	case "transfer-unidirectional-receive":
 		return runTransferUniReceive(sess, endpoint, requests)
+	case "transfer-bidirectional-receive":
+		return runTransferBidiReceive(sess, endpoint, requests)
 	default:
 		os.Exit(127)
 	}

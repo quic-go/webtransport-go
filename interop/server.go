@@ -49,7 +49,7 @@ func parseServerRequests(s string) map[string][]string {
 
 func RunInteropServer() error {
 	switch os.Getenv("TESTCASE") {
-	case "handshake", "transfer", "transfer-unidirectional-send":
+	case "handshake", "transfer", "transfer-unidirectional-send", "transfer-bidirectional-send":
 	default:
 		os.Exit(127)
 	}
@@ -155,6 +155,8 @@ func RunInteropServer() error {
 		runTransfer(endpoint, sess)
 	case "transfer-unidirectional-send":
 		return runTransferUniReceive(sess, endpoint, requestMap[endpoint])
+	case "transfer-bidirectional-send":
+		return runTransferBidiReceive(sess, endpoint, requestMap[endpoint])
 	default:
 		os.Exit(127)
 	}
