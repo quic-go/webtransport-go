@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"golang.org/x/sync/errgroup"
 
@@ -85,7 +86,28 @@ func runTransfer(endpoint string, sess *webtransport.Session) {
 	})
 	// handle datagrams
 	wg.Go(func() {
-		// TODO: datagrams
+		for {
+			data, err := sess.ReceiveDatagram(context.Background())
+			if err != nil {
+				return
+			}
+			filename, err := parseRequest(data)
+			if err != nil {
+				log.Printf("failed to parse datagram request: %v", err)
+				continue
+			}
+			payload, err := readFile(filepath.Join(endpoint, filename))
+			if err != nil {
+				log.Printf("failed to read file for datagram response %s: %v", filename, err)
+				continue
+			}
+			pushPayload := append([]byte(pushPrefix+filepath.Base(filename)+"\n"), payload...)
+			log.Printf("sending datagram response: %s: %d bytes", filename, len(pushPayload))
+			if err := sess.SendDatagram(pushPayload); err != nil {
+				log.Printf("failed to send datagram response: %v", err)
+				return
+			}
+		}
 	})
 	wg.Wait()
 }
@@ -137,6 +159,53 @@ func runTransferBidiReceive(sess *webtransport.Session, endpoint string, request
 		})
 	}
 	return eg.Wait()
+}
+
+func runTransferDatagramReceive(sess *webtransport.Session, endpoint string, requests []string) error {
+	var eg errgroup.Group
+	eg.Go(func() error {
+		for _, req := range requests {
+			log.Printf("requesting file (datagram): %s", req)
+			if err := sess.SendDatagram([]byte(getPrefix + req)); err != nil {
+				return fmt.Errorf("failed to send GET datagram for %s: %w", req, err)
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+		return nil
+	})
+	eg.Go(func() error {
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+		for i := range len(requests) {
+			data, err := sess.ReceiveDatagram(ctx)
+			if err != nil {
+				return fmt.Errorf("receiving PUSH datagram %d/%d: %w", i+1, len(requests), err)
+			}
+			if err := storePushFromDatagram(data, endpoint); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	return eg.Wait()
+}
+
+func storePushFromDatagram(data []byte, endpoint string) error {
+	if !bytes.HasPrefix(data, []byte(pushPrefix)) {
+		return fmt.Errorf("unexpected datagram, missing PUSH prefix")
+	}
+	rest := bytes.TrimPrefix(data, []byte(pushPrefix))
+	name, payload, ok := bytes.Cut(rest, []byte("\n"))
+	if !ok {
+		return fmt.Errorf("missing newline in PUSH datagram")
+	}
+	if len(name) == 0 {
+		return fmt.Errorf("missing filename in PUSH datagram")
+	}
+	filename := string(bytes.TrimSpace(name))
+	log.Printf("received PUSH datagram for %s: %d bytes", filename, len(payload))
+	rel := filepath.Join(endpoint, filepath.Base(filename))
+	return saveFile(rel, payload)
 }
 
 func readFile(path string) ([]byte, error) {
