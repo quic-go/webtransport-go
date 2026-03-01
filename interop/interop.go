@@ -6,7 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -23,7 +23,7 @@ const (
 	pushPrefix = "PUSH "
 )
 
-func runTransfer(endpoint string, sess *webtransport.Session) {
+func runTransfer(endpoint string, sess *webtransport.Session, log *slog.Logger) {
 	var wg sync.WaitGroup
 	// handle bidirectional streams
 	wg.Go(func() {
@@ -36,18 +36,18 @@ func runTransfer(endpoint string, sess *webtransport.Session) {
 				data, err := io.ReadAll(str)
 				if err != nil {
 					str.CancelRead(1234)
-					log.Printf("failed to read request: %v", err)
+					log.Error("failed to read request", "err", err)
 					return
 				}
 				filename, err := parseRequest(data)
 				if err != nil {
 					str.CancelRead(1234)
-					log.Printf("failed to parse request: %v", err)
+					log.Error("failed to parse request", "err", err)
 					return
 				}
 				defer str.Close()
-				if err := sendFile(filepath.Join(endpoint, filename), str); err != nil {
-					log.Printf("failed to send file: %v", err)
+				if err := sendFile(filepath.Join(endpoint, filename), str, log); err != nil {
+					log.Error("failed to send file", "err", err)
 					return
 				}
 			})
@@ -63,22 +63,22 @@ func runTransfer(endpoint string, sess *webtransport.Session) {
 			wg.Go(func() {
 				data, err := io.ReadAll(str)
 				if err != nil {
-					log.Printf("failed to read request: %v", err)
+					log.Error("failed to read request", "err", err)
 					return
 				}
 				filename, err := parseRequest(data)
 				if err != nil {
-					log.Printf("failed to parse request: %v", err)
+					log.Error("failed to parse request", "err", err)
 					return
 				}
 				rstr, err := sess.OpenUniStreamSync(context.Background())
 				if err != nil {
-					log.Printf("failed to open unidirectional stream: %v", err)
+					log.Error("failed to open unidirectional stream", "err", err)
 					return
 				}
 				defer rstr.Close()
-				if err := pushFile(filepath.Join(endpoint, filename), rstr); err != nil {
-					log.Printf("failed to send file: %v", err)
+				if err := pushFile(filepath.Join(endpoint, filename), rstr, log); err != nil {
+					log.Error("failed to send file", "err", err)
 					return
 				}
 			})
@@ -93,18 +93,18 @@ func runTransfer(endpoint string, sess *webtransport.Session) {
 			}
 			filename, err := parseRequest(data)
 			if err != nil {
-				log.Printf("failed to parse datagram request: %v", err)
+				log.Error("failed to parse datagram request", "err", err)
 				continue
 			}
 			payload, err := readFile(filepath.Join(endpoint, filename))
 			if err != nil {
-				log.Printf("failed to read file for datagram response %s: %v", filename, err)
+				log.Error("failed to read file for datagram response", "filename", filename, "err", err)
 				continue
 			}
 			pushPayload := append([]byte(pushPrefix+filepath.Base(filename)+"\n"), payload...)
-			log.Printf("sending datagram response: %s: %d bytes", filename, len(pushPayload))
+			log.Info("sending datagram response", "filename", filename, "bytes", len(pushPayload))
 			if err := sess.SendDatagram(pushPayload); err != nil {
-				log.Printf("failed to send datagram response: %v", err)
+				log.Error("failed to send datagram response", "err", err)
 				return
 			}
 		}
@@ -112,10 +112,10 @@ func runTransfer(endpoint string, sess *webtransport.Session) {
 	wg.Wait()
 }
 
-func runTransferUniReceive(sess *webtransport.Session, endpoint string, requests []string) error {
+func runTransferUniReceive(sess *webtransport.Session, endpoint string, requests []string, log *slog.Logger) error {
 	var eg errgroup.Group
 	for _, req := range requests {
-		log.Printf("requesting file: %s", req)
+		log.Info("requesting file", "file", req)
 		eg.Go(func() error {
 			str, err := sess.OpenUniStreamSync(context.Background())
 			if err != nil {
@@ -133,16 +133,16 @@ func runTransferUniReceive(sess *webtransport.Session, endpoint string, requests
 			if err != nil {
 				return err
 			}
-			return storePush(str, endpoint)
+			return storePush(str, endpoint, log)
 		})
 	}
 	return eg.Wait()
 }
 
-func runTransferBidiReceive(sess *webtransport.Session, endpoint string, requests []string) error {
+func runTransferBidiReceive(sess *webtransport.Session, endpoint string, requests []string, log *slog.Logger) error {
 	var eg errgroup.Group
 	for _, req := range requests {
-		log.Printf("requesting file: %s", req)
+		log.Info("requesting file", "file", req)
 		eg.Go(func() error {
 			str, err := sess.OpenStreamSync(context.Background())
 			if err != nil {
@@ -161,11 +161,11 @@ func runTransferBidiReceive(sess *webtransport.Session, endpoint string, request
 	return eg.Wait()
 }
 
-func runTransferDatagramReceive(sess *webtransport.Session, endpoint string, requests []string) error {
+func runTransferDatagramReceive(sess *webtransport.Session, endpoint string, requests []string, log *slog.Logger) error {
 	var eg errgroup.Group
 	eg.Go(func() error {
 		for _, req := range requests {
-			log.Printf("requesting file (datagram): %s", req)
+			log.Info("requesting file (datagram)", "file", req)
 			if err := sess.SendDatagram([]byte(getPrefix + req)); err != nil {
 				return fmt.Errorf("failed to send GET datagram for %s: %w", req, err)
 			}
@@ -181,7 +181,7 @@ func runTransferDatagramReceive(sess *webtransport.Session, endpoint string, req
 			if err != nil {
 				return fmt.Errorf("receiving PUSH datagram %d/%d: %w", i+1, len(requests), err)
 			}
-			if err := storePushFromDatagram(data, endpoint); err != nil {
+			if err := storePushFromDatagram(data, endpoint, log); err != nil {
 				return err
 			}
 		}
@@ -190,7 +190,7 @@ func runTransferDatagramReceive(sess *webtransport.Session, endpoint string, req
 	return eg.Wait()
 }
 
-func storePushFromDatagram(data []byte, endpoint string) error {
+func storePushFromDatagram(data []byte, endpoint string, log *slog.Logger) error {
 	if !bytes.HasPrefix(data, []byte(pushPrefix)) {
 		return fmt.Errorf("unexpected datagram, missing PUSH prefix")
 	}
@@ -203,7 +203,7 @@ func storePushFromDatagram(data []byte, endpoint string) error {
 		return fmt.Errorf("missing filename in PUSH datagram")
 	}
 	filename := string(bytes.TrimSpace(name))
-	log.Printf("received PUSH datagram for %s: %d bytes", filename, len(payload))
+	log.Info("received PUSH datagram", "filename", filename, "bytes", len(payload))
 	rel := filepath.Join(endpoint, filepath.Base(filename))
 	return saveFile(rel, payload)
 }
@@ -231,7 +231,7 @@ func requestFile(w io.WriteCloser, filename string) error {
 	return err
 }
 
-func storePush(r io.Reader, endpoint string) error {
+func storePush(r io.Reader, endpoint string, log *slog.Logger) error {
 	data, err := io.ReadAll(r)
 	if err != nil {
 		return err
@@ -248,7 +248,7 @@ func storePush(r io.Reader, endpoint string) error {
 		return fmt.Errorf("missing filename in PUSH")
 	}
 	filename := string(bytes.TrimSpace(name))
-	log.Printf("received PUSH for %s: %d bytes", filename, len(payload))
+	log.Info("received PUSH", "filename", filename, "bytes", len(payload))
 	rel := filepath.Join(endpoint, filepath.Base(filename))
 	return saveFile(rel, payload)
 }
@@ -264,22 +264,22 @@ func parseRequest(data []byte) (string, error) {
 	return filename, nil
 }
 
-func sendFile(filename string, w io.Writer) error {
+func sendFile(filename string, w io.Writer, log *slog.Logger) error {
 	payload, err := readFile(filename)
 	if err != nil {
 		return fmt.Errorf("failed to read file for %s: %v", filename, err)
 	}
-	log.Printf("sending file: %s: %d bytes", filename, len(payload))
+	log.Info("sending file", "filename", filename, "bytes", len(payload))
 	_, err = w.Write(payload)
 	return err
 }
 
-func pushFile(filename string, w io.Writer) error {
+func pushFile(filename string, w io.Writer, log *slog.Logger) error {
 	payload, err := readFile(filename)
-	log.Printf("sending file: %s: %d bytes", filename, len(payload))
 	if err != nil {
 		return fmt.Errorf("failed to read file for %s: %v", filename, err)
 	}
+	log.Info("sending file", "filename", filename, "bytes", len(payload))
 	if _, err := w.Write([]byte(pushPrefix + filepath.Base(filename) + "\n")); err != nil {
 		return err
 	}

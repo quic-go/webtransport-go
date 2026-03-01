@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"log/slog"
 	"maps"
 	"net/http"
 	"net/url"
@@ -63,7 +64,8 @@ func RunInteropClient() error {
 		return fmt.Errorf("failed to create log file: %w", err)
 	}
 	defer logFile.Close()
-	log.SetOutput(io.MultiWriter(logFile, os.Stderr))
+	log.SetOutput(logFile) // quic-go uses default log → file only
+	logger := slog.New(slog.NewTextHandler(io.MultiWriter(logFile, os.Stderr), nil))
 
 	keyLog, err := utils.GetSSLKeyLog()
 	if err != nil {
@@ -119,13 +121,13 @@ func RunInteropClient() error {
 		}
 	case "transfer":
 		u := slices.Collect(maps.Keys(requestMap))[0]
-		runTransfer(u[strings.Index(u, "/")+1:], sess)
+		runTransfer(u[strings.Index(u, "/")+1:], sess, logger)
 	case "transfer-unidirectional-receive":
-		return runTransferUniReceive(sess, endpoint, requests)
+		return runTransferUniReceive(sess, endpoint, requests, logger)
 	case "transfer-bidirectional-receive":
-		return runTransferBidiReceive(sess, endpoint, requests)
+		return runTransferBidiReceive(sess, endpoint, requests, logger)
 	case "transfer-datagram-receive":
-		return runTransferDatagramReceive(sess, endpoint, requests)
+		return runTransferDatagramReceive(sess, endpoint, requests, logger)
 	default:
 		os.Exit(127)
 	}

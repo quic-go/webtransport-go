@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"strings"
@@ -64,7 +65,8 @@ func RunInteropServer() error {
 		return fmt.Errorf("failed to create log file: %w", err)
 	}
 	defer logFile.Close()
-	log.SetOutput(io.MultiWriter(logFile, os.Stderr))
+	log.SetOutput(logFile) // quic-go uses default log → file only
+	logger := slog.New(slog.NewTextHandler(io.MultiWriter(logFile, os.Stderr), nil))
 
 	keyLog, err := utils.GetSSLKeyLog()
 	if err != nil {
@@ -86,7 +88,7 @@ func RunInteropServer() error {
 		return fmt.Errorf("failed to load certificate: %w", err)
 	}
 	hash := sha256.Sum256(cert.Certificate[0])
-	log.Printf("Server Certificate Hash: %s", base64.RawStdEncoding.EncodeToString(hash[:]))
+	logger.Info("server certificate hash", "hash", base64.RawStdEncoding.EncodeToString(hash[:]))
 
 	// create a new webtransport.Server, listening on (UDP) port 443
 	h3Server := &http3.Server{
@@ -119,7 +121,7 @@ func RunInteropServer() error {
 		handler := func(w http.ResponseWriter, r *http.Request) {
 			c, err := s.Upgrade(w, r)
 			if err != nil {
-				log.Printf("upgrading failed on %s: %s", ep, err)
+				logger.Error("upgrading failed", "endpoint", ep, "err", err)
 				w.WriteHeader(500)
 				return
 			}
@@ -130,12 +132,12 @@ func RunInteropServer() error {
 		if !strings.HasSuffix(ep, "/") {
 			http.HandleFunc("/"+ep+"/", handler)
 		}
-		log.Printf("registered WebTransport endpoint %s", ep)
+		logger.Info("registered WebTransport endpoint", "endpoint", ep)
 	}
 
 	go func() {
 		if err := s.ListenAndServe(); err != nil && !errors.Is(err, context.Canceled) {
-			log.Printf("failed to listen and serve: %s", err.Error())
+			logger.Error("failed to listen and serve", "err", err)
 			os.Exit(1)
 		}
 	}()
@@ -152,13 +154,13 @@ func RunInteropServer() error {
 		}
 		<-sess.Context().Done()
 	case "transfer":
-		runTransfer(endpoint, sess)
+		runTransfer(endpoint, sess, logger)
 	case "transfer-datagram-send":
-		return runTransferDatagramReceive(sess, endpoint, requestMap[endpoint])
+		return runTransferDatagramReceive(sess, endpoint, requestMap[endpoint], logger)
 	case "transfer-unidirectional-send":
-		return runTransferUniReceive(sess, endpoint, requestMap[endpoint])
+		return runTransferUniReceive(sess, endpoint, requestMap[endpoint], logger)
 	case "transfer-bidirectional-send":
-		return runTransferBidiReceive(sess, endpoint, requestMap[endpoint])
+		return runTransferBidiReceive(sess, endpoint, requestMap[endpoint], logger)
 	default:
 		os.Exit(127)
 	}
