@@ -40,6 +40,10 @@ const (
 
 	// WTSessionGoneErrorCode is the error code of the WT_SESSION_GONE error.
 	WTSessionGoneErrorCode quic.StreamErrorCode = 0x170d7b68
+
+	// WTRequirementsNotMetErrorCode is the error code of the
+	// WT_REQUIREMENTS_NOT_MET error.
+	WTRequirementsNotMetErrorCode quic.ApplicationErrorCode = 0x212c0d48
 )
 
 // StreamError is the error that is returned from stream operations (Read, Write) when the stream is canceled.
@@ -74,3 +78,13 @@ func (e *SessionError) Is(target error) bool {
 	t, ok := target.(*SessionError)
 	return ok && e.ErrorCode == t.ErrorCode && e.Remote == t.Remote
 }
+
+// RequirementsNotMetError is returned when the peer doesn't advertise
+// the required HTTP/3 or WebTransport capabilities.
+type RequirementsNotMetError struct {
+	Message string
+}
+
+var _ error = &RequirementsNotMetError{}
+
+func (e *RequirementsNotMetError) Error() string { return e.Message }

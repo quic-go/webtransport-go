@@ -221,6 +221,8 @@ func TestClientInvalidSettingsHandling(t *testing.T) {
 			_, _, err = d.Dial(context.Background(), fmt.Sprintf("https://localhost:%d", ln.Addr().(*net.UDPAddr).Port), nil)
 			require.Error(t, err)
 			require.ErrorContains(t, err, tc.errorStr)
+			var reqErr *webtransport.RequirementsNotMetError
+			require.ErrorAs(t, err, &reqErr)
 
 			var serverConn *quic.Conn
 			select {
@@ -234,7 +236,7 @@ func TestClientInvalidSettingsHandling(t *testing.T) {
 			case <-serverConn.Context().Done():
 				require.ErrorIs(t,
 					context.Cause(serverConn.Context()),
-					&quic.ApplicationError{ErrorCode: quic.ApplicationErrorCode(http3.ErrCodeNoError), Remote: true},
+					&quic.ApplicationError{ErrorCode: webtransport.WTRequirementsNotMetErrorCode, Remote: true},
 				)
 			case <-time.After(time.Second):
 				t.Fatal("timeout waiting for client to close connection")

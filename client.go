@@ -18,8 +18,6 @@ import (
 	"github.com/dunglas/httpsfv"
 )
 
-var errNoWebTransport = errors.New("server didn't enable WebTransport")
-
 type Dialer struct {
 	// TLSClientConfig is the TLS client config used when dialing the QUIC connection.
 	// It must set the h3 ALPN.
@@ -121,9 +119,14 @@ func (d *Dialer) Dial(ctx context.Context, urlStr string, reqHdr http.Header) (*
 	tr := &http3.Transport{EnableDatagrams: true}
 	rsp, sess, err := d.handleConn(ctx, tr, qconn, req)
 	if err != nil {
-		// TODO: use a more specific error code
-		// see https://github.com/ietf-wg-webtrans/draft-ietf-webtrans-http3/issues/245
-		qconn.CloseWithError(quic.ApplicationErrorCode(http3.ErrCodeNoError), "")
+		var msg string
+		code := quic.ApplicationErrorCode(http3.ErrCodeNoError)
+		var reqErr *RequirementsNotMetError
+		if errors.As(err, &reqErr) {
+			code = WTRequirementsNotMetErrorCode
+			msg = reqErr.Message
+		}
+		qconn.CloseWithError(code, msg)
 		tr.Close()
 		return rsp, nil, err
 	}
@@ -214,17 +217,17 @@ func (d *Dialer) handleConn(ctx context.Context, tr *http3.Transport, qconn *qui
 	}
 	settings := conn.Settings()
 	if !settings.EnableExtendedConnect {
-		return nil, nil, errors.New("server didn't enable Extended CONNECT")
+		return nil, nil, &RequirementsNotMetError{Message: "server didn't enable Extended CONNECT"}
 	}
 	if !settings.EnableDatagrams {
-		return nil, nil, errors.New("server didn't enable HTTP/3 datagram support")
+		return nil, nil, &RequirementsNotMetError{Message: "server didn't enable HTTP/3 datagram support"}
 	}
 	if settings.Other == nil {
-		return nil, nil, errNoWebTransport
+		return nil, nil, &RequirementsNotMetError{Message: "server didn't enable WebTransport"}
 	}
 	s, ok := settings.Other[settingsEnableWebtransport]
 	if !ok || s != 1 {
-		return nil, nil, errNoWebTransport
+		return nil, nil, &RequirementsNotMetError{Message: "server didn't enable WebTransport"}
 	}
 
 	requestStr, err := conn.OpenRequestStream(ctx)
