@@ -25,7 +25,7 @@ const (
 	// HTTP Datagrams, RFC 9297
 	settingDatagram = 0x33
 	// WebTransport
-	settingsEnableWebtransport = 0x2b603742
+	settingsWebTransportEnabled = 0x2c7cf000
 )
 
 // appendSettingsFrame serializes an HTTP/3 SETTINGS frame
@@ -63,9 +63,9 @@ func TestClientInvalidResponseHandling(t *testing.T) {
 			return
 		}
 		_, err = settingsStr.Write(appendSettingsFrame([]byte{0} /* stream type */, map[uint64]uint64{
-			settingDatagram:            1,
-			settingExtendedConnect:     1,
-			settingsEnableWebtransport: 1,
+			settingDatagram:             1,
+			settingExtendedConnect:      1,
+			settingsWebTransportEnabled: 1,
 		}))
 		if err != nil {
 			errChan <- err
@@ -167,27 +167,27 @@ func TestClientInvalidSettingsHandling(t *testing.T) {
 		{
 			name: "Extended CONNECT disabled",
 			settings: map[uint64]uint64{
-				settingDatagram:            1,
-				settingExtendedConnect:     0,
-				settingsEnableWebtransport: 1,
+				settingDatagram:             1,
+				settingExtendedConnect:      0,
+				settingsWebTransportEnabled: 1,
 			},
 			errorStr: "server didn't enable Extended CONNECT",
 		},
 		{
 			name: "HTTP/3 DATAGRAMs disabled",
 			settings: map[uint64]uint64{
-				settingDatagram:            0,
-				settingExtendedConnect:     1,
-				settingsEnableWebtransport: 1,
+				settingDatagram:             0,
+				settingExtendedConnect:      1,
+				settingsWebTransportEnabled: 1,
 			},
 			errorStr: "server didn't enable HTTP/3 datagram support",
 		},
 		{
 			name: "WebTransport disabled",
 			settings: map[uint64]uint64{
-				settingDatagram:            1,
-				settingExtendedConnect:     1,
-				settingsEnableWebtransport: 0,
+				settingDatagram:             1,
+				settingExtendedConnect:      1,
+				settingsWebTransportEnabled: 0,
 			},
 			errorStr: "server didn't enable WebTransport",
 		},
@@ -243,4 +243,67 @@ func TestClientInvalidSettingsHandling(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestClientAcceptsPositiveWebTransportSetting(t *testing.T) {
+	ln, err := quic.ListenAddr("localhost:0", webtransport.TLSConf, &quic.Config{EnableDatagrams: true})
+	require.NoError(t, err)
+	defer ln.Close()
+
+	errChan := make(chan error, 1)
+	go func() {
+		conn, err := ln.Accept(context.Background())
+		if err != nil {
+			errChan <- err
+			return
+		}
+		settingsStr, err := conn.OpenUniStream()
+		if err != nil {
+			errChan <- err
+			return
+		}
+		_, err = settingsStr.Write(appendSettingsFrame([]byte{0} /* stream type */, map[uint64]uint64{
+			settingDatagram:             1,
+			settingExtendedConnect:      1,
+			settingsWebTransportEnabled: 2,
+		}))
+		if err != nil {
+			errChan <- err
+			return
+		}
+
+		str, err := conn.AcceptStream(context.Background())
+		if err != nil {
+			errChan <- err
+			return
+		}
+		// write an HTTP/3 data frame. This causes an error, since a HEADERS frame is expected.
+		var b []byte
+		b = quicvarint.Append(b, 0x0)
+		b = quicvarint.Append(b, 1337)
+		_, err = str.Write(b)
+		require.NoError(t, err)
+		for {
+			if _, err := str.Read(make([]byte, 64)); err != nil {
+				errChan <- err
+				return
+			}
+		}
+	}()
+
+	d := webtransport.Dialer{TLSClientConfig: &tls.Config{RootCAs: webtransport.CertPool}}
+	_, _, err = d.Dial(context.Background(), fmt.Sprintf("https://localhost:%d", ln.Addr().(*net.UDPAddr).Port), nil)
+	require.Error(t, err)
+	require.NotContains(t, err.Error(), "server didn't enable WebTransport")
+
+	var sErr error
+	select {
+	case sErr = <-errChan:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timeout")
+	}
+	require.Error(t, sErr)
+	var appErr *quic.ApplicationError
+	require.True(t, errors.As(sErr, &appErr))
+	require.Equal(t, http3.ErrCodeFrameUnexpected, http3.ErrCode(appErr.ErrorCode))
 }

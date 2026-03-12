@@ -225,8 +225,9 @@ func (d *Dialer) handleConn(ctx context.Context, tr *http3.Transport, qconn *qui
 	if settings.Other == nil {
 		return nil, nil, &RequirementsNotMetError{Message: "server didn't enable WebTransport"}
 	}
-	s, ok := settings.Other[settingsEnableWebtransport]
-	if !ok || s != 1 {
+	// any non-zero value for SETTINGS_WT_ENABLED means that WebTransport is enabled
+	s, ok := settings.Other[settingsWebTransportEnabled]
+	if !ok || s == 0 {
 		return nil, nil, &RequirementsNotMetError{Message: "server didn't enable WebTransport"}
 	}
 
