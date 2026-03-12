@@ -37,9 +37,11 @@ var quicConnKey = quicConnKeyType{}
 
 func ConfigureHTTP3Server(s *http3.Server) {
 	if s.AdditionalSettings == nil {
-		s.AdditionalSettings = make(map[uint64]uint64, 1)
+		s.AdditionalSettings = make(map[uint64]uint64, 2)
 	}
-	s.AdditionalSettings[settingsEnableWebtransport] = 1
+	// send the old setting for backwards compatibility with older clients
+	s.AdditionalSettings[settingsEnableWebtransportDraft06] = 1
+	s.AdditionalSettings[settingsWebTransportEnabled] = 1
 	s.EnableDatagrams = true
 	origConnContext := s.ConnContext
 	s.ConnContext = func(ctx context.Context, conn *quic.Conn) context.Context {
