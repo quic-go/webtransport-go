@@ -679,7 +679,7 @@ func TestDatagrams(t *testing.T) {
 			break
 		}
 	}
-	time.Sleep(scaleDuration(10 * time.Millisecond))
+	time.Sleep(scaleDuration(100 * time.Millisecond))
 	sess.CloseWithError(0, "")
 	select {
 	case err := <-serverErrChan:
