@@ -333,7 +333,7 @@ func (s *Server) Upgrade(w http.ResponseWriter, r *http.Request) (*Session, erro
 	if r.Method != http.MethodConnect {
 		return nil, fmt.Errorf("expected CONNECT request, got %s", r.Method)
 	}
-	if r.Proto != protocolHeader {
+	if !isWebTransportProtocol(r.Proto) {
 		return nil, fmt.Errorf("unexpected protocol: %s", r.Proto)
 	}
 	if !s.CheckOrigin(r) {

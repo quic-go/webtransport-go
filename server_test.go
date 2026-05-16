@@ -46,6 +46,34 @@ func TestUpgradeFailures(t *testing.T) {
 	})
 }
 
+func TestUpgradeProtocolAcceptance(t *testing.T) {
+	// The protocol check runs before the QUIC-connection lookup, so once the
+	// token is accepted Upgrade fails with "missing QUIC connection". That's
+	// the proof the token was accepted; we don't need real QUIC plumbing.
+	var s webtransport.Server
+
+	t.Run("accepts webtransport-h3", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodConnect, "/webtransport", nil)
+		req.Proto = "webtransport-h3"
+		_, err := s.Upgrade(httptest.NewRecorder(), req)
+		require.EqualError(t, err, "webtransport: missing QUIC connection")
+	})
+
+	t.Run("accepts legacy webtransport", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodConnect, "/webtransport", nil)
+		req.Proto = "webtransport"
+		_, err := s.Upgrade(httptest.NewRecorder(), req)
+		require.EqualError(t, err, "webtransport: missing QUIC connection")
+	})
+
+	t.Run("rejects unknown protocol", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodConnect, "/webtransport", nil)
+		req.Proto = "websocket"
+		_, err := s.Upgrade(httptest.NewRecorder(), req)
+		require.EqualError(t, err, "unexpected protocol: websocket")
+	})
+}
+
 //nolint:unparam
 func createStreamAndWrite(t *testing.T, conn *quic.Conn, sessionID uint64, data []byte) *quic.Stream {
 	t.Helper()
