@@ -25,7 +25,7 @@ jobs:
           TIMESCALE_FACTOR: 10
         run: go test -v -cover -coverprofile coverage.txt ./... 2>&1 | go-junit-report -set-exit-code -iocopy -out report.xml
       - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v6
+        uses: codecov/codecov-action@v7
         env:
           OS: ${{ matrix.os }}
           GO: ${{ matrix.go }}
@@ -35,7 +35,7 @@ jobs:
           token: ${{ secrets.CODECOV_TOKEN }}
       - name: Upload test report to Codecov
         if: ${{ !cancelled() }}
-        uses: codecov/codecov-action@v6
+        uses: codecov/codecov-action@v7
         env:
           OS: ${{ matrix.os }}
           GO: ${{ matrix.go }}
