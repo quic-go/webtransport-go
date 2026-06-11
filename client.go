@@ -119,10 +119,9 @@ func (d *Dialer) Dial(ctx context.Context, urlStr string, reqHdr http.Header) (*
 	// Per draft-ietf-webtrans-http3-15 sections 3.1 and 7.1, for draft versions of
 	// WebTransport the client MUST send SETTINGS_WT_ENABLED using the codepoint
 	// for its supported draft version, so the server can negotiate the version.
-	versionSettings := map[uint64]uint64{settingsWebTransportEnabled: 1}
 	tr := &http3.Transport{
 		EnableDatagrams:    true,
-		AdditionalSettings: versionSettings,
+		AdditionalSettings: map[uint64]uint64{settingsWebTransportEnabled: 1},
 	}
 	rsp, sess, err := d.handleConn(ctx, tr, qconn, req)
 	if err != nil {
