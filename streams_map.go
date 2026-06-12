@@ -1,6 +1,7 @@
 package webtransport
 
 import (
+	"iter"
 	"sync"
 
 	"github.com/quic-go/quic-go"
@@ -31,12 +32,15 @@ func (s *streamsMap) RemoveStream(id quic.StreamID) {
 	s.mx.Unlock()
 }
 
-func (s *streamsMap) CloseSession(err error) {
-	s.mx.Lock()
-	defer s.mx.Unlock()
+func (s *streamsMap) All() iter.Seq2[quic.StreamID, closeFunc] {
+	return func(yield func(quic.StreamID, closeFunc) bool) {
+		s.mx.Lock()
+		defer s.mx.Unlock()
 
-	for _, cl := range s.m {
-		cl(err)
+		for id, close := range s.m {
+			if !yield(id, close) {
+				return
+			}
+		}
 	}
-	s.m = nil
 }
