@@ -114,6 +114,14 @@ func (s *Server) Serve(conn net.PacketConn) error {
 	if err := s.initialize(); err != nil {
 		return err
 	}
+
+	s.refCount.Add(1)
+	defer s.refCount.Done()
+
+	return s.serve(conn)
+}
+
+func (s *Server) serve(conn net.PacketConn) error {
 	var quicConf *quic.Config
 	if s.H3.QUICConfig != nil {
 		quicConf = s.H3.QUICConfig.Clone()
@@ -269,6 +277,12 @@ func (s *Server) ServeQUICConn(conn *quic.Conn) error {
 }
 
 func (s *Server) ListenAndServe() error {
+	if err := s.initialize(); err != nil {
+		return err
+	}
+	s.refCount.Add(1)
+	defer s.refCount.Done()
+
 	addr := s.H3.Addr
 	if addr == "" {
 		addr = ":https"
@@ -281,7 +295,9 @@ func (s *Server) ListenAndServe() error {
 	if err != nil {
 		return err
 	}
-	return s.Serve(conn)
+	defer conn.Close()
+
+	return s.serve(conn)
 }
 
 func (s *Server) ListenAndServeTLS(certFile, keyFile string) error {
