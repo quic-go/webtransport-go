@@ -297,3 +297,49 @@ func TestServerConnectionStateChecks(t *testing.T) {
 		})
 	}
 }
+
+func TestListenAndServeCloseClosesUDPConn(t *testing.T) {
+	udpConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	require.NoError(t, err)
+	udpAddr := udpConn.LocalAddr().(*net.UDPAddr)
+	addr := udpAddr.String()
+	require.NoError(t, udpConn.Close())
+
+	s := webtransport.Server{H3: &http3.Server{Addr: addr, TLSConfig: webtransport.TLSConf}}
+	webtransport.ConfigureHTTP3Server(s.H3)
+
+	serveErr := make(chan error, 1)
+	go func() { serveErr <- s.ListenAndServe() }()
+
+	require.Eventually(t, func() bool {
+		ctx, cancel := context.WithTimeout(context.Background(), scaleDuration(100*time.Millisecond))
+		defer cancel()
+		conn, err := quic.DialAddr(
+			ctx,
+			addr,
+			&tls.Config{
+				RootCAs:    webtransport.CertPool,
+				ServerName: "localhost",
+				NextProtos: []string{http3.NextProtoH3},
+			},
+			&quic.Config{EnableDatagrams: true, EnableStreamResetPartialDelivery: true},
+		)
+		if err != nil {
+			return false
+		}
+		conn.CloseWithError(quic.ApplicationErrorCode(http3.ErrCodeNoError), "")
+		return true
+	}, scaleDuration(5*time.Second), scaleDuration(20*time.Millisecond))
+
+	require.NoError(t, s.Close())
+
+	again, err := net.ListenUDP("udp", udpAddr)
+	require.NoError(t, err)
+	require.NoError(t, again.Close())
+
+	select {
+	case <-serveErr:
+	case <-time.After(time.Second):
+		t.Fatal("ListenAndServe did not return after Close")
+	}
+}
