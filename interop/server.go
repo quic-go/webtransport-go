@@ -36,13 +36,13 @@ func parseServerRequests(s string) map[string][]string {
 		if pathStr == "" {
 			continue
 		}
-		idx := strings.Index(pathStr, "/")
-		if idx < 0 {
+		before, after, ok := strings.Cut(pathStr, "/")
+		if !ok {
 			requests[pathStr] = []string{}
 			continue
 		}
-		endpoint := pathStr[:idx]
-		rest := pathStr[idx+1:]
+		endpoint := before
+		rest := after
 		requests[endpoint] = append(requests[endpoint], rest)
 	}
 	return requests

@@ -11,7 +11,7 @@ import (
 )
 
 func TestErrorCodeRoundTrip(t *testing.T) {
-	for i := 0; i < 1e4; i++ {
+	for range int(1e4) {
 		n := StreamErrorCode(rand.Int64())
 		httpCode := webtransportCodeToHTTPCode(n)
 		errorCode, err := httpCodeToWebtransportCode(httpCode)
@@ -39,7 +39,7 @@ func TestErrorCodeConversionErrors(t *testing.T) {
 
 	t.Run("greased value", func(t *testing.T) {
 		var counter int
-		for i := 0; i < 1e4; i++ {
+		for range int(1e4) {
 			c := firstErrorCode + uint64(rand.Uint32())
 			if (c-0x21)%0x1f != 0 {
 				continue

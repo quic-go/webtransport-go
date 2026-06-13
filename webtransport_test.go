@@ -340,7 +340,7 @@ func TestMultipleClients(t *testing.T) {
 
 	var wg sync.WaitGroup
 	wg.Add(numClients)
-	for i := 0; i < numClients; i++ {
+	for range numClients {
 		go func() {
 			defer wg.Done()
 			d := webtransport.Dialer{
@@ -669,7 +669,7 @@ func TestDatagrams(t *testing.T) {
 
 	errChan := make(chan error, 1)
 
-	for i := 0; i < num; i++ {
+	for range num {
 		b := make([]byte, 800)
 		rand.Read(b)
 		mx.Lock()
