@@ -227,14 +227,13 @@ func TestReceiveStreamReadDuringSessionGoneAndCloseSession(t *testing.T) {
 	case <-time.After(scaleDuration(10 * time.Millisecond)):
 	}
 
-	// call CloseSession()
 	sessionErr := &SessionError{ErrorCode: 42, Message: "bye"}
 	sm.CloseSession(sessionErr)
 
 	select {
 	case err := <-errChan:
 		require.ErrorIs(t, err, sessionErr)
-	case <-time.After(scaleDuration(1 * time.Second)):
+	case <-time.After(scaleDuration(time.Second)):
 		t.Fatal("Read() should not hang after CloseSession()")
 	}
 }
@@ -357,14 +356,13 @@ func TestSendStreamWriteDuringSessionGoneAndCloseSession(t *testing.T) {
 	case <-time.After(scaleDuration(10 * time.Millisecond)):
 	}
 
-	// call CloseSession()
 	sessionErr := &SessionError{ErrorCode: 42, Message: "bye"}
 	sm.CloseSession(sessionErr)
 
 	select {
 	case err := <-errChan:
 		require.ErrorIs(t, err, sessionErr)
-	case <-time.After(scaleDuration(1 * time.Second)):
+	case <-time.After(scaleDuration(time.Second)):
 		t.Fatal("Write() should not hang after CloseSession()")
 	}
 }
