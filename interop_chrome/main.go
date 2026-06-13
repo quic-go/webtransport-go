@@ -83,7 +83,7 @@ func runHTTPServer(certHash [32]byte) {
 }
 
 func runUnidirectionalTest(sess *webtransport.Session) {
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 

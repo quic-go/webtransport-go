@@ -133,14 +133,11 @@ func (s *Server) Serve(conn net.PacketConn) error {
 		if err != nil {
 			return err
 		}
-		s.refCount.Add(1)
-		go func() {
-			defer s.refCount.Done()
-
+		s.refCount.Go(func() {
 			if err := s.ServeQUICConn(qconn); err != nil {
 				log.Printf("http3: error serving QUIC connection: %v", err)
 			}
-		}()
+		})
 	}
 }
 
@@ -199,10 +196,7 @@ func (s *Server) ServeQUICConn(conn *quic.Conn) error {
 				return
 			}
 
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-
+			wg.Go(func() {
 				typ, err := quicvarint.Peek(str)
 				if err != nil {
 					return
@@ -223,7 +217,7 @@ func (s *Server) ServeQUICConn(conn *quic.Conn) error {
 					return
 				}
 				sessMgr.AddStream(str, sessionID(id))
-			}()
+			})
 		}
 	}()
 
@@ -236,10 +230,7 @@ func (s *Server) ServeQUICConn(conn *quic.Conn) error {
 				return
 			}
 
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-
+			wg.Go(func() {
 				typ, err := quicvarint.Peek(str)
 				if err != nil {
 					return
@@ -260,7 +251,7 @@ func (s *Server) ServeQUICConn(conn *quic.Conn) error {
 					return
 				}
 				sessMgr.AddUniStream(str, sessionID(id))
-			}()
+			})
 		}
 	}()
 
