@@ -27,7 +27,7 @@ type Dialer struct {
 	QUICConfig *quic.Config
 
 	// ApplicationProtocols is a list of application protocols that can be negotiated,
-	// see section 3.3 of https://www.ietf.org/archive/id/draft-ietf-webtrans-http3-14 for details.
+	// see section 3.3 of https://www.ietf.org/archive/id/draft-ietf-webtrans-http3-15 for details.
 	ApplicationProtocols []string
 
 	// StreamReorderingTime is the time an incoming WebTransport stream that cannot be associated
@@ -252,29 +252,37 @@ func (d *Dialer) handleConn(ctx context.Context, tr *http3.Transport, qconn *qui
 	if rsp.StatusCode < 200 || rsp.StatusCode >= 300 {
 		return rsp, nil, fmt.Errorf("received status %d", rsp.StatusCode)
 	}
-	var protocol string
-	if protocolHeader, ok := rsp.Header[http.CanonicalHeaderKey(wtProtocolHeader)]; ok {
-		protocol = d.negotiateProtocol(protocolHeader)
-	}
 	sessID := sessionID(requestStr.StreamID())
+	var protocol string
+	// Don't send WT_ALPN_ERROR if WT-Protocol is absent: the server didn't
+	// negotiate a protocol. Send it only when WT-Protocol is present but invalid.
+	if protocolHeader, ok := rsp.Header[http.CanonicalHeaderKey(wtProtocolHeader)]; ok {
+		var err error
+		protocol, err = d.negotiateProtocol(protocolHeader)
+		if err != nil {
+			sessErr := &SessionError{ErrorCode: WTALPNErrorCode, Message: err.Error()}
+			_ = closeSessionStream(requestStr, sessErr.ErrorCode, sessErr.Message)
+			return rsp, nil, sessErr
+		}
+	}
 	sess := newSession(context.WithoutCancel(ctx), sessID, qconn, requestStr, protocol)
 	sessMgr.AddSession(sessID, sess)
 	return rsp, sess, nil
 }
 
-func (d *Dialer) negotiateProtocol(theirs []string) string {
+func (d *Dialer) negotiateProtocol(theirs []string) (string, error) {
 	negotiatedProtocolItem, err := httpsfv.UnmarshalItem(theirs)
 	if err != nil {
-		return ""
+		return "", fmt.Errorf("webtransport: invalid WT-Protocol header: %w", err)
 	}
 	negotiatedProtocol, ok := negotiatedProtocolItem.Value.(string)
 	if !ok {
-		return ""
+		return "", errors.New("webtransport: invalid WT-Protocol header: value is not a string")
 	}
 	if !slices.Contains(d.ApplicationProtocols, negotiatedProtocol) {
-		return ""
+		return "", fmt.Errorf("webtransport: server selected application protocol %q that wasn't offered", negotiatedProtocol)
 	}
-	return negotiatedProtocol
+	return negotiatedProtocol, nil
 }
 
 func (d *Dialer) Close() error {

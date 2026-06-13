@@ -44,6 +44,9 @@ const (
 	// WTRequirementsNotMetErrorCode is the error code of the
 	// WT_REQUIREMENTS_NOT_MET error.
 	WTRequirementsNotMetErrorCode quic.ApplicationErrorCode = 0x212c0d48
+
+	// WTALPNErrorCode is the error code of the WT_ALPN_ERROR error.
+	WTALPNErrorCode SessionErrorCode = 0x0817b3dd
 )
 
 // StreamError is the error that is returned from stream operations (Read, Write) when the stream is canceled.
