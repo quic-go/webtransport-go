@@ -26,6 +26,9 @@ jobs:
       - name: Check that go.mod is tidied
         if: success() || failure() # run this step even if the previous one failed
         run: go mod tidy -diff
+      - name: Run go fix
+        if: (success() || failure()) && matrix.go == '1.26.x'
+        run: go fix -diff ./...
       - name: golangci-lint
         if: success() || failure() # run this step even if the previous one failed
         uses: golangci/golangci-lint-action@82606bf257cbaff209d206a39f5134f0cfbfd2ee # v9.2.1
