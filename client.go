@@ -178,6 +178,10 @@ func (d *Dialer) handleConn(ctx context.Context, tr *http3.Transport, qconn *qui
 				if err != nil {
 					return
 				}
+				if !isValidSessionID(id) {
+					qconn.CloseWithError(quic.ApplicationErrorCode(http3.ErrCodeIDError), "")
+					return
+				}
 				sessMgr.AddStream(str, sessionID(id))
 			}()
 		}
@@ -207,6 +211,10 @@ func (d *Dialer) handleConn(ctx context.Context, tr *http3.Transport, qconn *qui
 				id, err := quicvarint.Read(quicvarint.NewReader(str))
 				if err != nil {
 					str.CancelRead(quic.StreamErrorCode(http3.ErrCodeGeneralProtocolError))
+					return
+				}
+				if !isValidSessionID(id) {
+					qconn.CloseWithError(quic.ApplicationErrorCode(http3.ErrCodeIDError), "")
 					return
 				}
 				sessMgr.AddUniStream(str, sessionID(id))

@@ -21,7 +21,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-const webTransportFrameType = 0x41
+const (
+	webTransportFrameType     = 0x41
+	webTransportUniStreamType = 0x54
+)
 
 func scaleDuration(d time.Duration) time.Duration {
 	if os.Getenv("CI") != "" {
@@ -85,6 +88,55 @@ func createStreamAndWrite(t *testing.T, conn *quic.Conn, sessionID uint64, data 
 	require.NoError(t, err)
 	require.NoError(t, str.Close())
 	return str
+}
+
+func TestServerClosesConnectionForInvalidSessionID(t *testing.T) {
+	s := webtransport.Server{H3: &http3.Server{TLSConfig: webtransport.TLSConf}}
+	defer s.Close()
+
+	udpConn, err := net.ListenUDP("udp", nil)
+	require.NoError(t, err)
+	defer udpConn.Close()
+	webtransport.ConfigureHTTP3Server(s.H3)
+	go s.Serve(udpConn)
+	addr := fmt.Sprintf("localhost:%d", udpConn.LocalAddr().(*net.UDPAddr).Port)
+
+	for _, tt := range []struct {
+		name       string
+		streamType uint64
+	}{{"bidirectional", webTransportFrameType}, {"unidirectional", webTransportUniStreamType}} {
+		t.Run(tt.name, func(t *testing.T) {
+			conn, err := quic.DialAddr(
+				context.Background(),
+				addr,
+				&tls.Config{RootCAs: webtransport.CertPool, NextProtos: []string{http3.NextProtoH3}},
+				&quic.Config{EnableDatagrams: true, EnableStreamResetPartialDelivery: true},
+			)
+			require.NoError(t, err)
+			defer conn.CloseWithError(0, "")
+
+			var str io.WriteCloser
+			if tt.streamType == webTransportUniStreamType {
+				str, err = conn.OpenUniStream()
+			} else {
+				str, err = conn.OpenStream()
+			}
+			require.NoError(t, err)
+			_, err = str.Write(quicvarint.Append(quicvarint.Append(nil, tt.streamType), 1))
+			require.NoError(t, err)
+			require.NoError(t, str.Close())
+
+			select {
+			case <-conn.Context().Done():
+				require.ErrorIs(t,
+					context.Cause(conn.Context()),
+					&quic.ApplicationError{ErrorCode: quic.ApplicationErrorCode(http3.ErrCodeIDError), Remote: true},
+				)
+			case <-time.After(scaleDuration(time.Second)):
+				t.Fatal("timeout waiting for connection to close")
+			}
+		})
+	}
 }
 
 func TestServerReorderedUpgradeRequest(t *testing.T) {

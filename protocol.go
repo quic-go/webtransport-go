@@ -20,3 +20,10 @@ const (
 func isWebTransportProtocol(s string) bool {
 	return s == protocolHeader || s == protocolHeaderLegacy
 }
+
+// WebTransport session IDs are the stream IDs of the CONNECT requests that
+// establish the sessions. Those requests are sent on client-initiated
+// bidirectional streams, whose QUIC stream IDs are divisible by 4.
+func isValidSessionID(id uint64) bool {
+	return id%4 == 0
+}
