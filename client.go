@@ -101,7 +101,7 @@ func (d *Dialer) Dial(ctx context.Context, urlStr string, reqHdr http.Header) (*
 	req := &http.Request{
 		Method: http.MethodConnect,
 		Header: reqHdr,
-		Proto:  "webtransport",
+		Proto:  protocolHeader,
 		Host:   u.Host,
 		URL:    u,
 	}

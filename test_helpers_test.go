@@ -108,7 +108,7 @@ func NewWebTransportRequest(t *testing.T, addr string) *http.Request {
 	return &http.Request{
 		Method: http.MethodConnect,
 		Header: hdr,
-		Proto:  "webtransport",
+		Proto:  protocolHeader,
 		Host:   u.Host,
 		URL:    u,
 	}
