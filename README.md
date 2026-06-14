@@ -8,6 +8,9 @@ webtransport-go is an implementation of the WebTransport protocol, based on [qui
 
 Detailed documentation can be found on [quic-go.net](https://quic-go.net/docs/).
 
+## Example
+
+A runnable client and server example is available in [`example`](./example).
 
 ## Projects using webtransport-go
 
