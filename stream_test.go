@@ -203,6 +203,41 @@ func TestReceiveStreamSessionGone(t *testing.T) {
 	}
 }
 
+func TestReceiveStreamReadDuringSessionGoneAndCloseSession(t *testing.T) {
+	sendStr, recvStr := newUniStreamPair(t)
+
+	sm := newStreamsMap()
+	str := newReceiveStream(recvStr, func() { sm.RemoveStream(recvStr.StreamID()) })
+	sm.AddStream(recvStr.StreamID(), str.closeWithSession)
+
+	// start reading
+	errChan := make(chan error, 1)
+	go func() {
+		_, err := str.Read(make([]byte, 100))
+		errChan <- err
+	}()
+
+	// the remote peer sends a WT_SESSION_GONE
+	sendStr.CancelWrite(WTSessionGoneErrorCode)
+
+	// Read() should block, waiting for CloseSession()
+	select {
+	case <-errChan:
+		t.Fatal("should not happen")
+	case <-time.After(scaleDuration(10 * time.Millisecond)):
+	}
+
+	sessionErr := &SessionError{ErrorCode: 42, Message: "bye"}
+	sm.CloseSession(sessionErr)
+
+	select {
+	case err := <-errChan:
+		require.ErrorIs(t, err, sessionErr)
+	case <-time.After(scaleDuration(time.Second)):
+		t.Fatal("Read() should not hang after CloseSession()")
+	}
+}
+
 func TestReceiveStreamSessionGoneDeadline(t *testing.T) {
 	t.Run("deadline expires while waiting", func(t *testing.T) {
 		sendStr, recvStr := newUniStreamPair(t)
@@ -290,6 +325,46 @@ func TestSendStreamHeaderRetryAfterDeadlineError(t *testing.T) {
 	data, err := io.ReadAll(serverStr)
 	require.NoError(t, err)
 	require.Equal(t, append(hdr, []byte("data")...), data)
+}
+
+func TestSendStreamWriteDuringSessionGoneAndCloseSession(t *testing.T) {
+	sendStr, recvStr := newUniStreamPair(t)
+
+	sm := newStreamsMap()
+	str := newSendStream(sendStr, nil, func() { sm.RemoveStream(sendStr.StreamID()) })
+	sm.AddStream(sendStr.StreamID(), str.closeWithSession)
+
+	// write in a loop
+	errChan := make(chan error, 1)
+	go func() {
+		for {
+			if _, err := str.Write([]byte("foo")); err != nil {
+				errChan <- err
+				return
+			}
+			time.Sleep(time.Millisecond)
+		}
+	}()
+
+	// the remote peer sends a WT_SESSION_GONE
+	recvStr.CancelRead(WTSessionGoneErrorCode)
+
+	// Write() should block, waiting for closeWithSession()
+	select {
+	case <-errChan:
+		t.Fatal("should not happen")
+	case <-time.After(scaleDuration(10 * time.Millisecond)):
+	}
+
+	sessionErr := &SessionError{ErrorCode: 42, Message: "bye"}
+	sm.CloseSession(sessionErr)
+
+	select {
+	case err := <-errChan:
+		require.ErrorIs(t, err, sessionErr)
+	case <-time.After(scaleDuration(time.Second)):
+		t.Fatal("Write() should not hang after CloseSession()")
+	}
 }
 
 func TestReceiveStreamClose(t *testing.T) {
