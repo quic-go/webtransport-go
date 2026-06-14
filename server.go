@@ -37,11 +37,20 @@ var quicConnKey = quicConnKeyType{}
 
 func ConfigureHTTP3Server(s *http3.Server) {
 	if s.AdditionalSettings == nil {
-		s.AdditionalSettings = make(map[uint64]uint64, 2)
+		s.AdditionalSettings = make(map[uint64]uint64, 6)
 	}
 	// send the old setting for backwards compatibility with older clients
 	s.AdditionalSettings[settingsEnableWebtransportDraft06] = 1
 	s.AdditionalSettings[settingsWebTransportEnabled] = 1
+
+	// Safari requires SETTINGS_WT_MAX_SESSIONS >= 1 (draft-ietf-webtrans-http3-14)
+	s.AdditionalSettings[settingsWebTransportMaxSessions] = 1<<62 - 1
+
+	// Required when SETTINGS_WT_MAX_SESSIONS > 1
+	s.AdditionalSettings[settingsWebTransportInitialMaxStreamsUni] = 1 << 60
+	s.AdditionalSettings[settingsWebTransportInitialMaxStreamsBidi] = 1 << 60
+	s.AdditionalSettings[settingsWebTransportInitialMaxData] = 1 << 60
+
 	s.EnableDatagrams = true
 	origConnContext := s.ConnContext
 	s.ConnContext = func(ctx context.Context, conn *quic.Conn) context.Context {
