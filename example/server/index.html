@@ -26,20 +26,20 @@
         event.preventDefault();
         status.textContent = 'Connecting...';
 
-        const transport = new WebTransport('{{WEBTRANSPORT_URL}}', {
-          serverCertificateHashes: [{
-            algorithm: "sha-256",
-            value: base64ToBytes(input.value.trim()),
-          }]
-        });
-
-        transport.closed.then(() => {
-          console.log('The HTTP/3 connection closed gracefully.');
-        }).catch((error) => {
-          console.error('The HTTP/3 connection closed due to ' + error + '.');
-        });
-
         try {
+          const transport = new WebTransport('{{WEBTRANSPORT_URL}}', {
+            serverCertificateHashes: [{
+              algorithm: "sha-256",
+              value: base64ToBytes(input.value.trim()),
+            }]
+          });
+
+          transport.closed.then(() => {
+            console.log('The HTTP/3 connection closed gracefully.');
+          }).catch((error) => {
+            console.error('The HTTP/3 connection closed due to ' + error + '.');
+          });
+
           await transport.ready;
           status.textContent = 'Connected.';
           console.log('The HTTP/3 connection is ready.');
