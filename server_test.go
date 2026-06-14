@@ -47,9 +47,6 @@ func TestUpgradeFailures(t *testing.T) {
 }
 
 func TestUpgradeProtocolAcceptance(t *testing.T) {
-	// The protocol check runs before the QUIC-connection lookup, so once the
-	// token is accepted Upgrade fails with "missing QUIC connection". That's
-	// the proof the token was accepted; we don't need real QUIC plumbing.
 	var s webtransport.Server
 
 	t.Run("accepts webtransport-h3", func(t *testing.T) {

@@ -11,10 +11,9 @@ const (
 	// protocolHeader is the Extended-CONNECT :protocol value per
 	// draft-ietf-webtrans-http3-15 §3.2, §9.1.
 	protocolHeader = "webtransport-h3"
-	// protocolHeaderLegacy is the pre-draft-13 value. Accepted by the server
-	// (but not sent by the client) for compat with peers that have not yet
-	// migrated — notably Chromium-based clients, which still send the legacy
-	// token (see net/quic/dedicated_web_transport_http3_client.cc).
+	// protocolHeaderLegacy is the pre-draft-15 value. Accepted by the server
+	// (but not sent by the client) for compatibility with peers that have not yet
+	// migrated.
 	protocolHeaderLegacy = "webtransport"
 )
 
