@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"testing"
 	"time"
@@ -104,6 +105,61 @@ func TestClientInvalidResponseHandling(t *testing.T) {
 	var appErr *quic.ApplicationError
 	require.True(t, errors.As(sErr, &appErr))
 	require.Equal(t, http3.ErrCodeFrameUnexpected, http3.ErrCode(appErr.ErrorCode))
+}
+
+func TestClientClosesConnectionForInvalidSessionID(t *testing.T) {
+	ln, err := quic.ListenAddr("localhost:0", webtransport.TLSConf, &quic.Config{EnableDatagrams: true, EnableStreamResetPartialDelivery: true})
+	require.NoError(t, err)
+	defer ln.Close()
+	addr := fmt.Sprintf("https://localhost:%d", ln.Addr().(*net.UDPAddr).Port)
+
+	for _, tt := range []struct {
+		name       string
+		streamType uint64
+	}{{"bidirectional", webTransportFrameType}, {"unidirectional", webTransportUniStreamType}} {
+		t.Run(tt.name, func(t *testing.T) {
+			go func() {
+				d := webtransport.Dialer{TLSClientConfig: &tls.Config{RootCAs: webtransport.CertPool}}
+				_, _, _ = d.Dial(context.Background(), addr, nil)
+			}()
+
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			conn, err := ln.Accept(ctx)
+			require.NoError(t, err)
+			defer conn.CloseWithError(0, "")
+			settingsStr, err := conn.OpenUniStream()
+			require.NoError(t, err)
+			_, err = settingsStr.Write(
+				appendSettingsFrame(
+					[]byte{0},
+					map[uint64]uint64{settingDatagram: 1, settingExtendedConnect: 1, settingsWebTransportEnabled: 1},
+				),
+			)
+			require.NoError(t, err)
+
+			var str io.WriteCloser
+			if tt.streamType == webTransportUniStreamType {
+				str, err = conn.OpenUniStream()
+			} else {
+				str, err = conn.OpenStream()
+			}
+			require.NoError(t, err)
+			_, err = str.Write(quicvarint.Append(quicvarint.Append(nil, tt.streamType), 1))
+			require.NoError(t, err)
+			require.NoError(t, str.Close())
+
+			select {
+			case <-conn.Context().Done():
+				require.ErrorIs(t,
+					context.Cause(conn.Context()),
+					&quic.ApplicationError{ErrorCode: quic.ApplicationErrorCode(http3.ErrCodeIDError), Remote: true},
+				)
+			case <-time.After(time.Second):
+				t.Fatal("timeout waiting for connection to close")
+			}
+		})
+	}
 }
 
 func TestClientWaitForSettingsTimeout(t *testing.T) {

@@ -224,6 +224,10 @@ func (s *Server) ServeQUICConn(conn *quic.Conn) error {
 					str.CancelWrite(quic.StreamErrorCode(http3.ErrCodeGeneralProtocolError))
 					return
 				}
+				if !isValidSessionID(id) {
+					conn.CloseWithError(quic.ApplicationErrorCode(http3.ErrCodeIDError), "")
+					return
+				}
 				sessMgr.AddStream(str, sessionID(id))
 			})
 		}
@@ -256,6 +260,10 @@ func (s *Server) ServeQUICConn(conn *quic.Conn) error {
 				id, err := quicvarint.Read(r)
 				if err != nil {
 					str.CancelRead(quic.StreamErrorCode(http3.ErrCodeGeneralProtocolError))
+					return
+				}
+				if !isValidSessionID(id) {
+					conn.CloseWithError(quic.ApplicationErrorCode(http3.ErrCodeIDError), "")
 					return
 				}
 				sessMgr.AddUniStream(str, sessionID(id))
