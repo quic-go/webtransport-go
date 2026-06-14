@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
+	"encoding/base64"
 	"flag"
 	"fmt"
 	"log"
@@ -24,6 +26,8 @@ func main() {
 func runClient() error {
 	url := flag.String("url", "https://localhost:6121/webtransport", "WebTransport URL")
 	protocolsFlag := flag.String("protocols", "webtransport-test,webtransport-test-2", "comma-separated application protocols")
+	certHash := flag.String("cert-hash", "", "base64-encoded SHA-256 server certificate hash")
+	insecure := flag.Bool("insecure", false, "skip certificate verification")
 	flag.Parse()
 
 	var protocols []string
@@ -33,11 +37,24 @@ func runClient() error {
 		}
 	}
 
+	tlsConf := &tls.Config{InsecureSkipVerify: *insecure}
+	if hash := strings.TrimSpace(*certHash); hash != "" {
+		tlsConf.InsecureSkipVerify = true
+		tlsConf.VerifyConnection = func(state tls.ConnectionState) error {
+			if len(state.PeerCertificates) == 0 {
+				return fmt.Errorf("server didn't send a certificate")
+			}
+			actualHash := sha256.Sum256(state.PeerCertificates[0].Raw)
+			if got := base64.RawStdEncoding.EncodeToString(actualHash[:]); got != hash {
+				return fmt.Errorf("server certificate hash mismatch: got %s", got)
+			}
+			return nil
+		}
+	}
+
 	cl := &webtransport.Dialer{
 		ApplicationProtocols: protocols,
-		TLSClientConfig: &tls.Config{
-			InsecureSkipVerify: true,
-		},
+		TLSClientConfig:      tlsConf,
 		QUICConfig: &quic.Config{
 			Tracer:                           qlog.DefaultConnectionTracer,
 			EnableDatagrams:                  true,
@@ -52,7 +69,7 @@ func runClient() error {
 	if err != nil {
 		return err
 	}
-	fmt.Println(rsp.StatusCode)
+	fmt.Println("HTTP status code:", rsp.StatusCode)
 	if rsp.StatusCode < 200 || rsp.StatusCode >= 300 {
 		return fmt.Errorf("unexpected status: %d", rsp.StatusCode)
 	}
