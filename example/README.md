@@ -25,8 +25,10 @@ go run . -protocols webtransport-test,webtransport-test-2
 Start the server first. From the `client` directory:
 
 ```bash
-go run . -url https://localhost:6121/webtransport -protocols webtransport-test
+go run . -url https://localhost:6121/webtransport -protocols webtransport-test -cert-hash <server certificate hash>
 ```
+
+Use `-insecure` to skip certificate verification.
 
 ## Running the Browser Client
 
