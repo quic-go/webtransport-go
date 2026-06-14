@@ -398,6 +398,12 @@ func (s *Session) CloseWithError(code SessionErrorCode, msg string) error {
 		return err
 	}
 
+	err = closeSessionStream(s.str, code, msg)
+	<-s.ctx.Done()
+	return err
+}
+
+func closeSessionStream(str http3Stream, code SessionErrorCode, msg string) error {
 	// truncate the message if it's too long
 	if len(msg) > maxCloseCapsuleErrorMsgLen {
 		msg = truncateUTF8(msg, maxCloseCapsuleErrorMsgLen)
@@ -410,15 +416,13 @@ func (s *Session) CloseWithError(code SessionErrorCode, msg string) error {
 	// Optimistically send the WT_CLOSE_SESSION Capsule:
 	// If we're flow-control limited, we don't want to wait for the receiver to issue new flow control credits.
 	// There's no idiomatic way to do a non-blocking write in Go, so we set a short deadline.
-	s.str.SetWriteDeadline(time.Now().Add(10 * time.Millisecond))
-	if err := http3.WriteCapsule(quicvarint.NewWriter(s.str), closeSessionCapsuleType, b); err != nil {
-		s.str.CancelWrite(WTSessionGoneErrorCode)
+	str.SetWriteDeadline(time.Now().Add(10 * time.Millisecond))
+	if err := http3.WriteCapsule(quicvarint.NewWriter(str), closeSessionCapsuleType, b); err != nil {
+		str.CancelWrite(WTSessionGoneErrorCode)
 	}
 
-	s.str.CancelRead(WTSessionGoneErrorCode)
-	err = s.str.Close()
-	<-s.ctx.Done()
-	return err
+	str.CancelRead(WTSessionGoneErrorCode)
+	return str.Close()
 }
 
 func (s *Session) SendDatagram(b []byte) error {

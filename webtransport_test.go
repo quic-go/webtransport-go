@@ -148,6 +148,70 @@ func TestApplicationProtocolNegotiation(t *testing.T) {
 	})
 }
 
+func TestApplicationProtocolNegotiationErrors(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		header   string
+		errorStr string
+	}{
+		{
+			name:     "malformed protocol",
+			header:   "123",
+			errorStr: "webtransport: invalid WT-Protocol header",
+		},
+		{
+			name:     "protocol not offered",
+			header:   `"baz"`,
+			errorStr: `webtransport: server selected application protocol "baz" that wasn't offered`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := &webtransport.Server{
+				H3: &http3.Server{
+					TLSConfig: webtransport.TLSConf,
+					QUICConfig: &quic.Config{
+						EnableDatagrams:                  true,
+						EnableStreamResetPartialDelivery: true,
+						Tracer:                           qlog.DefaultConnectionTracer,
+					},
+				},
+			}
+
+			s.H3.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("WT-Protocol", tc.header)
+				w.WriteHeader(http.StatusOK)
+				w.(http.Flusher).Flush()
+				<-r.Context().Done()
+			})
+
+			addr, closeServer := runServer(t, s)
+			defer closeServer()
+
+			d := webtransport.Dialer{
+				TLSClientConfig: &tls.Config{RootCAs: webtransport.CertPool},
+				QUICConfig: &quic.Config{
+					EnableDatagrams:                  true,
+					EnableStreamResetPartialDelivery: true,
+					Tracer:                           qlog.DefaultConnectionTracer,
+				},
+				ApplicationProtocols: []string{"foo", "bar"},
+			}
+			defer d.Close()
+
+			url := fmt.Sprintf("https://localhost:%d/webtransport", addr.Port)
+			rsp, sess, err := d.Dial(context.Background(), url, nil)
+			require.Error(t, err)
+			require.ErrorContains(t, err, tc.errorStr)
+			require.Nil(t, sess)
+			require.Equal(t, http.StatusOK, rsp.StatusCode)
+			var sessErr *webtransport.SessionError
+			require.ErrorAs(t, err, &sessErr)
+			require.False(t, sessErr.Remote)
+			require.Equal(t, webtransport.WTALPNErrorCode, sessErr.ErrorCode)
+		})
+	}
+}
+
 func testApplicationProtocolNegotiation(t *testing.T, clientProtocols, serverProtocols []string, expected string) {
 	s := &webtransport.Server{
 		ApplicationProtocols: serverProtocols,
