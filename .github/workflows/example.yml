@@ -1,0 +1,33 @@
+name: Example
+permissions:
+  contents: read
+on: [push, pull_request]
+
+jobs:
+  example:
+    runs-on: ubuntu-latest
+    name: Example
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.26.x"
+      - name: Run client and server example
+        run: |
+          set -euo pipefail
+
+          server_log="$(mktemp)"
+          (cd example/server && go run . -protocols foobar) >"$server_log" 2>&1 &
+          server_pid=$!
+          trap 'kill "$server_pid" 2>/dev/null || true' EXIT
+
+          sleep 5
+          cert_hash="$(sed -n 's/^Server Certificate Hash: //p' "$server_log" | head -n 1)"
+          if [ -z "$cert_hash" ]; then
+            cat "$server_log"
+            exit 1
+          fi
+
+          client_output="$(cd example/client && go run . -url https://localhost:6121/webtransport -protocols foobaz,foobar -cert-hash "$cert_hash")"
+          echo "$client_output"
+          printf '%s\n' "$client_output" | grep -q "negotiated protocol: foobar"

@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html>
+  <body>
+    <form id="connect-form">
+      <label for="certhash-input">Certificate Hash (base64):</label>
+      <input type="text" id="certhash-input" name="certhash" value="{{SERVER_CERTIFICATE_HASH}}">
+      <button type="submit">Connect</button>
+    </form>
+    <div id="status">Not connected.</div>
+
+    <script type="module">
+      function base64ToBytes(base64) {
+        const binaryString = atob(base64);
+        const bytes = new Uint8Array(binaryString.length);
+        for (let i = 0; i < binaryString.length; i++) {
+          bytes[i] = binaryString.charCodeAt(i);
+        }
+        return bytes;
+      }
+
+      const status = document.getElementById('status');
+      const form = document.getElementById('connect-form');
+      const input = document.getElementById('certhash-input');
+
+      form.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        status.textContent = 'Connecting...';
+
+        try {
+          const transport = new WebTransport('{{WEBTRANSPORT_URL}}', {
+            serverCertificateHashes: [{
+              algorithm: "sha-256",
+              value: base64ToBytes(input.value.trim()),
+            }]
+          });
+
+          transport.closed.then(() => {
+            console.log('The HTTP/3 connection closed gracefully.');
+          }).catch((error) => {
+            console.error('The HTTP/3 connection closed due to ' + error + '.');
+          });
+
+          await transport.ready;
+          status.textContent = 'Connected.';
+          console.log('The HTTP/3 connection is ready.');
+          console.log(transport);
+        } catch (error) {
+          status.textContent = 'Connection failed.';
+          console.error(error);
+        }
+      });
+    </script>
+  </body>
+</html>
