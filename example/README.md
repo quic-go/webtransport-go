@@ -14,8 +14,6 @@ go run .
 
 This prints the base64-encoded certificate hash, serves the browser client at `http://localhost:6120`, and starts the WebTransport server at `https://localhost:6121/webtransport`.
 
-To use different listen addresses:
-
 By default, the server offers `webtransport-test,webtransport-test-2`. To change that:
 
 ```bash
