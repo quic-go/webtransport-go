@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/tls"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -706,55 +707,84 @@ func TestWriteCloseRace(t *testing.T) {
 
 func TestDatagrams(t *testing.T) {
 	const num = 100
-	var mx sync.Mutex
-	m := make(map[string]bool, num)
+	const minReceived = num*4/5 + 1
 
-	var counter int
+	received := make(chan struct{}, num)
+	ready := make(chan struct{})
 	done := make(chan struct{})
 	serverErrChan := make(chan error, 1)
+	ctx, cancel := context.WithCancel(t.Context())
 	sess, closeServer := establishSession(t, func(sess *webtransport.Session) {
+		seen := make([]bool, num)
+		close(ready)
 		defer close(done)
 		for {
-			b, err := sess.ReceiveDatagram(context.Background())
+			b, err := sess.ReceiveDatagram(ctx)
 			if err != nil {
 				return
 			}
-			mx.Lock()
-			if _, ok := m[string(b)]; !ok {
-				serverErrChan <- errors.New("received unexpected datagram")
+			if len(b) != 800 {
+				serverErrChan <- fmt.Errorf("received datagram with length %d", len(b))
 				return
 			}
-			m[string(b)] = true
-			mx.Unlock()
-			counter++
+			n := binary.BigEndian.Uint64(b)
+			if n >= num {
+				serverErrChan <- fmt.Errorf("received datagram with unexpected number %d", n)
+				return
+			}
+			if seen[n] {
+				continue
+			}
+			seen[n] = true
+			received <- struct{}{}
 		}
 	})
 	defer closeServer()
+	defer cancel()
 
-	errChan := make(chan error, 1)
+	select {
+	case <-ready:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timeout")
+	}
 
-	for range num {
+	var receivedCount int
+	for i := range num {
 		b := make([]byte, 800)
-		rand.Read(b)
-		mx.Lock()
-		m[string(b)] = false
-		mx.Unlock()
-		if err := sess.SendDatagram(b); err != nil {
-			break
+		binary.BigEndian.PutUint64(b, uint64(i))
+		require.NoError(t, sess.SendDatagram(b))
+		select {
+		case err := <-serverErrChan:
+			t.Fatal(err)
+		case <-received:
+			receivedCount++
+		case <-time.After(scaleDuration(50 * time.Millisecond)):
 		}
 	}
-	time.Sleep(scaleDuration(10 * time.Millisecond))
-	sess.CloseWithError(0, "")
+
+	timeout := time.After(5 * time.Second)
+	for receivedCount < minReceived {
+		select {
+		case err := <-serverErrChan:
+			t.Fatal(err)
+		case <-received:
+			receivedCount++
+		case <-timeout:
+			t.Fatalf("sent: %d, received: %d", num, receivedCount)
+		}
+	}
+
+	require.NoError(t, sess.CloseWithError(0, ""))
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timeout")
+	}
 	select {
 	case err := <-serverErrChan:
 		t.Fatal(err)
-	case err := <-errChan:
-		t.Fatal(err)
-	case <-done:
-		t.Logf("sent: %d, received: %d", num, counter)
-		require.Greater(t, counter, num*4/5)
-	case <-time.After(5 * time.Second):
-		t.Fatal("timeout")
+	default:
 	}
 }
 
