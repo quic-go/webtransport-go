@@ -26,6 +26,32 @@ var (
 	_ quicSendStream = &quic.Stream{}
 )
 
+// sessionGoneGracePeriod bounds how long a Read or Write blocks after the peer
+// resets the stream with WT_SESSION_GONE, waiting for the WT_CLOSE_SESSION
+// capsule to arrive on the CONNECT stream (which lets us surface the precise
+// session-close error).
+//
+// Normally the stream reset and the close capsule are delivered together (often
+// coalesced in the same packet), so s.closed fires almost immediately. However,
+// if the peer signals "session gone" at the stream level but never completes the
+// session-close handshake (e.g. it is shutting down and the process goes away),
+// s.closed would never fire. Without this bound, and with no read/write deadline
+// set, the call would block until the QUIC idle timeout (or indefinitely). After
+// the grace period elapses we surface a generic session-gone error instead.
+//
+// It is a variable rather than a constant so it can be overridden in tests.
+var sessionGoneGracePeriod = 100 * time.Millisecond
+
+// errSessionGone is returned from Read/Write when the stream was reset with
+// WT_SESSION_GONE but the peer never delivered the WT_CLOSE_SESSION capsule
+// within sessionGoneGracePeriod.
+func errSessionGone() error {
+	return &SessionError{
+		Remote:  true,
+		Message: "session gone: WT_SESSION_GONE received without WT_CLOSE_SESSION capsule",
+	}
+}
+
 type quicReceiveStream interface {
 	io.Reader
 	CancelRead(quic.StreamErrorCode)
@@ -96,6 +122,10 @@ func (s *SendStream) handleSessionGoneError() error {
 	}
 	s.deadlineMu.Unlock()
 
+	// Bound the wait for the session-close capsule so a vanished peer can't make this block indefinitely.
+	// See sessionGoneGracePeriod for details.
+	graceTimer := time.NewTimer(sessionGoneGracePeriod)
+
 	for {
 		s.deadlineMu.Lock()
 		deadline := s.writeDeadline
@@ -114,6 +144,8 @@ func (s *SendStream) handleSessionGoneError() error {
 			return s.closeErr
 		case <-timerCh:
 			return os.ErrDeadlineExceeded
+		case <-graceTimer.C:
+			return errSessionGone()
 		case <-s.deadlineNotifyCh:
 		}
 	}
@@ -299,6 +331,10 @@ func (s *ReceiveStream) handleSessionGoneError() error {
 	}
 	s.deadlineMu.Unlock()
 
+	// Bound the wait for the session-close capsule so a vanished peer can't make this block indefinitely.
+	// See sessionGoneGracePeriod for details.
+	graceTimer := time.NewTimer(sessionGoneGracePeriod)
+
 	for {
 		s.deadlineMu.Lock()
 		deadline := s.readDeadline
@@ -317,6 +353,8 @@ func (s *ReceiveStream) handleSessionGoneError() error {
 			return s.closeErr
 		case <-timerCh:
 			return os.ErrDeadlineExceeded
+		case <-graceTimer.C:
+			return errSessionGone()
 		case <-s.deadlineNotifyCh:
 		}
 	}
