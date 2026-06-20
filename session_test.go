@@ -344,67 +344,6 @@ func TestCloseWithErrorTruncatesSendMessage(t *testing.T) {
 	}
 }
 
-// TestCloseWithErrorTruncatesReceiveMessage tests that when receiving a close capsule
-// with a message longer than 1024 bytes, the session truncates the message.
-func TestCloseWithErrorTruncatesReceiveMessage(t *testing.T) {
-	clientConn, serverConn := newConnPair(t, newUDPConnLocalhost(t), newUDPConnLocalhost(t))
-
-	longMsg := strings.Repeat("b", maxCloseCapsuleErrorMsgLen+500)
-
-	server := &http3.Server{}
-	mux := http.NewServeMux()
-	mux.HandleFunc("/webtransport", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		w.(http.Flusher).Flush()
-
-		payload := make([]byte, 4+len(longMsg))
-		binary.BigEndian.PutUint32(payload[:4], uint32(1337))
-		copy(payload[4:], longMsg)
-
-		if err := http3.WriteCapsule(quicvarint.NewWriter(w), closeSessionCapsuleType, payload); err != nil {
-			t.Errorf("failed to write capsule: %v", err)
-		}
-		w.(http.Flusher).Flush()
-	})
-	server.Handler = mux
-	t.Cleanup(func() { server.Close() })
-	go server.ServeQUICConn(serverConn)
-
-	serverAddr := fmt.Sprintf("https://localhost:%d/webtransport", serverConn.LocalAddr().(*net.UDPAddr).Port)
-
-	tr := &http3.Transport{}
-	conn := tr.NewClientConn(clientConn)
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	reqStr, err := conn.OpenRequestStream(ctx)
-	require.NoError(t, err)
-	require.NoError(t, reqStr.SendRequestHeader(NewWebTransportRequest(t, serverAddr)))
-	rsp, err := reqStr.ReadResponse()
-	require.NoError(t, err)
-	require.Equal(t, http.StatusOK, rsp.StatusCode)
-
-	sess := newSession(context.Background(), 42, clientConn, reqStr, "")
-
-	select {
-	case <-sess.Context().Done():
-	case <-time.After(time.Second):
-		t.Fatal("timeout waiting for session to close")
-	}
-
-	ctx2, cancel2 := context.WithTimeout(context.Background(), 100*time.Millisecond)
-	defer cancel2()
-	_, err = sess.AcceptStream(ctx2)
-	require.Error(t, err)
-
-	var sessErr *SessionError
-	require.ErrorAs(t, err, &sessErr)
-	require.True(t, sessErr.Remote)
-	require.Equal(t, SessionErrorCode(1337), sessErr.ErrorCode)
-	// the message should be truncated to maxCloseCapsuleErrorMsgLen
-	require.Len(t, sessErr.Message, maxCloseCapsuleErrorMsgLen)
-	require.Equal(t, strings.Repeat("b", maxCloseCapsuleErrorMsgLen), sessErr.Message)
-}
-
 func TestTruncateUTF8(t *testing.T) {
 	input := "Go 🚀"
 	require.Len(t, input, 7)

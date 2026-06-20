@@ -18,10 +18,6 @@ import (
 // sessionID is the WebTransport Session ID
 type sessionID uint64
 
-const closeSessionCapsuleType http3.CapsuleType = 0x2843
-
-const maxCloseCapsuleErrorMsgLen = 1024
-
 type acceptQueue[T any] struct {
 	mx sync.Mutex
 	// The channel is used to notify consumers (via Chan) about new incoming items.
@@ -138,42 +134,8 @@ func newSession(ctx context.Context, sessionID sessionID, conn *quic.Conn, str h
 }
 
 func (s *Session) handleConn() {
-	err := s.parseNextCapsule()
+	err := parseNextCapsule(s.str)
 	s.closeWithError(err)
-}
-
-// parseNextCapsule parses the next Capsule sent on the request stream.
-// It returns a SessionError, if the capsule received is a WT_CLOSE_SESSION Capsule.
-func (s *Session) parseNextCapsule() error {
-	for {
-		typ, r, err := http3.ParseCapsule(quicvarint.NewReader(s.str))
-		if err != nil {
-			return err
-		}
-		switch typ {
-		case closeSessionCapsuleType:
-			var b [4]byte
-			if _, err := io.ReadFull(r, b[:]); err != nil {
-				return err
-			}
-			appErrCode := binary.BigEndian.Uint32(b[:])
-			// the length of the error message is limited to 1024 bytes
-			appErrMsg, err := io.ReadAll(io.LimitReader(r, maxCloseCapsuleErrorMsgLen))
-			if err != nil {
-				return err
-			}
-			return &SessionError{
-				Remote:    true,
-				ErrorCode: SessionErrorCode(appErrCode),
-				Message:   string(appErrMsg),
-			}
-		default:
-			// unknown capsule, skip it
-			if _, err := io.Copy(io.Discard, r); err != nil {
-				return err
-			}
-		}
-	}
 }
 
 func (s *Session) addStream(qstr *quic.Stream, addStreamHeader bool) *Stream {
