@@ -15,48 +15,6 @@ import (
 // sessionID is the WebTransport Session ID
 type sessionID uint64
 
-type acceptQueue[T any] struct {
-	// The channel is used to notify consumers (via Chan) about new incoming items.
-	// Needs to be buffered to preserve the notification if an item is enqueued
-	// between a call to Next and to Chan.
-	c chan struct{}
-
-	mx sync.Mutex
-	// Contains all the streams waiting to be accepted.
-	// There's no explicit limit to the length of the queue, but it is implicitly
-	// limited by the stream flow control provided by QUIC.
-	queue []T
-}
-
-func newAcceptQueue[T any]() *acceptQueue[T] {
-	return &acceptQueue[T]{c: make(chan struct{}, 1)}
-}
-
-func (q *acceptQueue[T]) Add(str T) {
-	q.mx.Lock()
-	q.queue = append(q.queue, str)
-	q.mx.Unlock()
-
-	select {
-	case q.c <- struct{}{}:
-	default:
-	}
-}
-
-func (q *acceptQueue[T]) Next() T {
-	q.mx.Lock()
-	defer q.mx.Unlock()
-
-	if len(q.queue) == 0 {
-		return *new(T)
-	}
-	str := q.queue[0]
-	q.queue = q.queue[1:]
-	return str
-}
-
-func (q *acceptQueue[T]) Chan() <-chan struct{} { return q.c }
-
 type http3Stream interface {
 	io.ReadWriteCloser
 	ReceiveDatagram(context.Context) ([]byte, error)
@@ -90,9 +48,6 @@ type Session struct {
 	closeMx  sync.Mutex
 	closeErr error // not nil once the session is closed
 
-	bidiAcceptQueue acceptQueue[*Stream]
-	uniAcceptQueue  acceptQueue[*ReceiveStream]
-
 	incomingStreams incomingStreamsMap
 	outgoingStreams outgoingStreamsMap
 }
@@ -105,9 +60,7 @@ func newSession(ctx context.Context, sessionID sessionID, conn *quic.Conn, str h
 		str:                 str,
 		applicationProtocol: applicationProtocol,
 		ctx:                 ctx,
-		bidiAcceptQueue:     *newAcceptQueue[*Stream](),
-		uniAcceptQueue:      *newAcceptQueue[*ReceiveStream](),
-		incomingStreams:     *newIncomingStreamsMap(),
+		incomingStreams:     *newIncomingStreamsMap(ctx),
 		outgoingStreams:     *newOutgoingStreamsMap(conn, sessionID),
 	}
 
@@ -125,35 +78,12 @@ func (s *Session) handleConn() {
 
 // addIncomingStream adds a bidirectional stream that the remote peer opened
 func (s *Session) addIncomingStream(qstr *quic.Stream) {
-	s.closeMx.Lock()
-	closeErr := s.closeErr
-	if closeErr != nil {
-		s.closeMx.Unlock()
-		qstr.CancelRead(WTSessionGoneErrorCode)
-		qstr.CancelWrite(WTSessionGoneErrorCode)
-		return
-	}
-	str := newStream(qstr, nil, func() { s.incomingStreams.removeStream(qstr.StreamID()) })
-	s.incomingStreams.addStream(qstr.StreamID(), str.closeWithSession)
-	s.closeMx.Unlock()
-
-	s.bidiAcceptQueue.Add(str)
+	s.incomingStreams.AddStream(qstr)
 }
 
 // addIncomingUniStream adds a unidirectional stream that the remote peer opened
 func (s *Session) addIncomingUniStream(qstr *quic.ReceiveStream) {
-	s.closeMx.Lock()
-	closeErr := s.closeErr
-	if closeErr != nil {
-		s.closeMx.Unlock()
-		qstr.CancelRead(WTSessionGoneErrorCode)
-		return
-	}
-	str := newReceiveStream(qstr, func() { s.incomingStreams.removeStream(qstr.StreamID()) })
-	s.incomingStreams.addStream(qstr.StreamID(), str.closeWithSession)
-	s.closeMx.Unlock()
-
-	s.uniAcceptQueue.Add(str)
+	s.incomingStreams.AddUniStream(qstr)
 }
 
 // Context returns a context that is closed when the session is closed.
@@ -162,51 +92,11 @@ func (s *Session) Context() context.Context {
 }
 
 func (s *Session) AcceptStream(ctx context.Context) (*Stream, error) {
-	s.closeMx.Lock()
-	closeErr := s.closeErr
-	s.closeMx.Unlock()
-	if closeErr != nil {
-		return nil, closeErr
-	}
-
-	for {
-		// If there's a stream in the accept queue, return it immediately.
-		if str := s.bidiAcceptQueue.Next(); str != nil {
-			return str, nil
-		}
-		// No stream in the accept queue. Wait until we accept one.
-		select {
-		case <-s.ctx.Done():
-			return nil, s.closeErr
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-s.bidiAcceptQueue.Chan():
-		}
-	}
+	return s.incomingStreams.AcceptStream(ctx)
 }
 
 func (s *Session) AcceptUniStream(ctx context.Context) (*ReceiveStream, error) {
-	s.closeMx.Lock()
-	closeErr := s.closeErr
-	s.closeMx.Unlock()
-	if closeErr != nil {
-		return nil, s.closeErr
-	}
-
-	for {
-		// If there's a stream in the accept queue, return it immediately.
-		if str := s.uniAcceptQueue.Next(); str != nil {
-			return str, nil
-		}
-		// No stream in the accept queue. Wait until we accept one.
-		select {
-		case <-s.ctx.Done():
-			return nil, s.closeErr
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-s.uniAcceptQueue.Chan():
-		}
-	}
+	return s.incomingStreams.AcceptUniStream(ctx)
 }
 
 func (s *Session) OpenStream() (*Stream, error) {
@@ -319,8 +209,8 @@ func (s *Session) closeWithError(closeErr error) (bool /* first call to close se
 	}
 	s.closeErr = closeErr
 
-	s.incomingStreams.closeSession(closeErr)
 	s.outgoingStreams.CloseSession(closeErr)
+	s.incomingStreams.CloseSession(closeErr)
 
 	return true, nil
 }

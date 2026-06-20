@@ -206,9 +206,11 @@ func TestReceiveStreamSessionGone(t *testing.T) {
 func TestReceiveStreamReadDuringSessionGoneAndCloseSession(t *testing.T) {
 	sendStr, recvStr := newUniStreamPair(t)
 
-	sm := newIncomingStreamsMap()
+	sm := newIncomingStreamsMap(context.Background())
 	str := newReceiveStream(recvStr, func() { sm.removeStream(recvStr.StreamID()) })
-	sm.addStream(recvStr.StreamID(), str.closeWithSession)
+	sm.mx.Lock()
+	sm.m[recvStr.StreamID()] = str.closeWithSession
+	sm.mx.Unlock()
 
 	// start reading
 	errChan := make(chan error, 1)
@@ -228,7 +230,7 @@ func TestReceiveStreamReadDuringSessionGoneAndCloseSession(t *testing.T) {
 	}
 
 	sessionErr := &SessionError{ErrorCode: 42, Message: "bye"}
-	sm.closeSession(sessionErr)
+	sm.CloseSession(sessionErr)
 
 	select {
 	case err := <-errChan:
