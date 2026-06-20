@@ -169,7 +169,7 @@ func (s *Session) parseNextCapsule() error {
 			}
 		default:
 			// unknown capsule, skip it
-			if _, err := io.ReadAll(r); err != nil {
+			if _, err := io.Copy(io.Discard, r); err != nil {
 				return err
 			}
 		}
