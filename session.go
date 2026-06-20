@@ -9,7 +9,6 @@ import (
 
 	"github.com/quic-go/quic-go"
 	"github.com/quic-go/quic-go/http3"
-	"github.com/quic-go/quic-go/quicvarint"
 )
 
 // sessionID is the WebTransport Session ID
@@ -72,8 +71,20 @@ func newSession(ctx context.Context, sessionID sessionID, conn *quic.Conn, str h
 }
 
 func (s *Session) handleConn() {
-	err := parseNextCapsule(s.str)
-	s.closeWithError(err)
+	for {
+		c, err := parseNextCapsule(s.str)
+		if err != nil {
+			s.closeWithError(err)
+			return
+		}
+		switch c := c.(type) {
+		case closeSessionCapsule:
+			s.closeWithError(c.ToSessionError())
+			return
+		case maxStreamsBidiCapsule, maxStreamsUniCapsule:
+			// TODO: handle max streams capsules
+		}
+	}
 }
 
 // addIncomingStream adds a bidirectional stream that the remote peer opened
@@ -183,8 +194,7 @@ func closeSessionStream(str http3Stream, code SessionErrorCode, msg string) erro
 	// If we're flow-control limited, we don't want to wait for the receiver to issue new flow control credits.
 	// There's no idiomatic way to do a non-blocking write in Go, so we set a short deadline.
 	str.SetWriteDeadline(time.Now().Add(10 * time.Millisecond))
-	payload := appendCloseSessionCapsulePayload(nil, code, msg)
-	if err := http3.WriteCapsule(quicvarint.NewWriter(str), closeSessionCapsuleType, payload); err != nil {
+	if _, err := str.Write((closeSessionCapsule{ErrorCode: code, Message: msg}).Append(nil)); err != nil {
 		str.CancelWrite(WTSessionGoneErrorCode)
 	}
 
