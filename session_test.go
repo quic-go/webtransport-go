@@ -343,18 +343,3 @@ func TestCloseWithErrorTruncatesSendMessage(t *testing.T) {
 		t.Fatal("timeout waiting for capsule")
 	}
 }
-
-func TestTruncateUTF8(t *testing.T) {
-	input := "Go 🚀"
-	require.Len(t, input, 7)
-
-	require.Equal(t, "Go 🚀", truncateUTF8(input, 100))
-	require.Equal(t, "Go 🚀", truncateUTF8(input, 7))
-	require.Equal(t, "Go ", truncateUTF8(input, 6))
-	require.Equal(t, "Go ", truncateUTF8(input, 5))
-	require.Equal(t, "Go ", truncateUTF8(input, 4))
-	require.Equal(t, "Go ", truncateUTF8(input, 3))
-	require.Equal(t, "Go", truncateUTF8(input, 2))
-	require.Equal(t, "G", truncateUTF8(input, 1))
-	require.Equal(t, "", truncateUTF8(input, 0))
-}

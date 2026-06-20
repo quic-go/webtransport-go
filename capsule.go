@@ -3,6 +3,7 @@ package webtransport
 import (
 	"encoding/binary"
 	"io"
+	"unicode/utf8"
 
 	"github.com/quic-go/quic-go/http3"
 	"github.com/quic-go/quic-go/quicvarint"
@@ -44,4 +45,26 @@ func parseNextCapsule(r io.Reader) error {
 			}
 		}
 	}
+}
+
+func appendCloseSessionCapsulePayload(b []byte, code SessionErrorCode, msg string) []byte {
+	if len(msg) > maxCloseCapsuleErrorMsgLen {
+		msg = truncateUTF8(msg, maxCloseCapsuleErrorMsgLen)
+	}
+
+	payloadStart := len(b)
+	b = append(b, 0, 0, 0, 0)
+	binary.BigEndian.PutUint32(b[payloadStart:], uint32(code))
+	return append(b, msg...)
+}
+
+// truncateUTF8 cuts a string to max n bytes without breaking UTF-8 characters.
+func truncateUTF8(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
+	}
+	return s[:n]
 }
