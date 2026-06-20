@@ -99,7 +99,8 @@ type Session struct {
 	bidiAcceptQueue acceptQueue[*Stream]
 	uniAcceptQueue  acceptQueue[*ReceiveStream]
 
-	streams streamsMap
+	incomingStreams incomingStreamsMap
+	outgoingStreams outgoingStreamsMap
 }
 
 func newSession(ctx context.Context, sessionID sessionID, conn *quic.Conn, str http3Stream, applicationProtocol string) *Session {
@@ -113,7 +114,8 @@ func newSession(ctx context.Context, sessionID sessionID, conn *quic.Conn, str h
 		streamCtxs:          make(map[int]context.CancelFunc),
 		bidiAcceptQueue:     *newAcceptQueue[*Stream](),
 		uniAcceptQueue:      *newAcceptQueue[*ReceiveStream](),
-		streams:             *newStreamsMap(),
+		incomingStreams:     *newIncomingStreamsMap(),
+		outgoingStreams:     *newOutgoingStreamsMap(),
 	}
 	// precompute the headers for unidirectional streams
 	c.uniStreamHdr = make([]byte, 0, 2+quicvarint.Len(uint64(c.sessionID)))
@@ -140,21 +142,24 @@ func (s *Session) addStream(qstr *quic.Stream, addStreamHeader bool) *Stream {
 	var hdr []byte
 	if addStreamHeader {
 		hdr = s.streamHdr
+		str := newStream(qstr, hdr, func() { s.outgoingStreams.RemoveStream(qstr.StreamID()) })
+		s.outgoingStreams.AddStream(qstr.StreamID(), str.closeWithSession)
+		return str
 	}
-	str := newStream(qstr, hdr, func() { s.streams.RemoveStream(qstr.StreamID()) })
-	s.streams.AddStream(qstr.StreamID(), str.closeWithSession)
+	str := newStream(qstr, hdr, func() { s.incomingStreams.RemoveStream(qstr.StreamID()) })
+	s.incomingStreams.AddStream(qstr.StreamID(), str.closeWithSession)
 	return str
 }
 
 func (s *Session) addReceiveStream(qstr *quic.ReceiveStream) *ReceiveStream {
-	str := newReceiveStream(qstr, func() { s.streams.RemoveStream(qstr.StreamID()) })
-	s.streams.AddStream(qstr.StreamID(), str.closeWithSession)
+	str := newReceiveStream(qstr, func() { s.incomingStreams.RemoveStream(qstr.StreamID()) })
+	s.incomingStreams.AddStream(qstr.StreamID(), str.closeWithSession)
 	return str
 }
 
 func (s *Session) addSendStream(qstr *quic.SendStream) *SendStream {
-	str := newSendStream(qstr, s.uniStreamHdr, func() { s.streams.RemoveStream(qstr.StreamID()) })
-	s.streams.AddStream(qstr.StreamID(), str.closeWithSession)
+	str := newSendStream(qstr, s.uniStreamHdr, func() { s.outgoingStreams.RemoveStream(qstr.StreamID()) })
+	s.outgoingStreams.AddStream(qstr.StreamID(), str.closeWithSession)
 	return str
 }
 
@@ -399,7 +404,8 @@ func (s *Session) closeWithError(closeErr error) (bool /* first call to close se
 	for _, cancel := range s.streamCtxs {
 		cancel()
 	}
-	s.streams.CloseSession(closeErr)
+	s.incomingStreams.CloseSession(closeErr)
+	s.outgoingStreams.CloseSession(closeErr)
 
 	return true, nil
 }

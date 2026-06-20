@@ -206,7 +206,7 @@ func TestReceiveStreamSessionGone(t *testing.T) {
 func TestReceiveStreamReadDuringSessionGoneAndCloseSession(t *testing.T) {
 	sendStr, recvStr := newUniStreamPair(t)
 
-	sm := newStreamsMap()
+	sm := newIncomingStreamsMap()
 	str := newReceiveStream(recvStr, func() { sm.RemoveStream(recvStr.StreamID()) })
 	sm.AddStream(recvStr.StreamID(), str.closeWithSession)
 
@@ -330,7 +330,7 @@ func TestSendStreamHeaderRetryAfterDeadlineError(t *testing.T) {
 func TestSendStreamWriteDuringSessionGoneAndCloseSession(t *testing.T) {
 	sendStr, recvStr := newUniStreamPair(t)
 
-	sm := newStreamsMap()
+	sm := newOutgoingStreamsMap()
 	str := newSendStream(sendStr, nil, func() { sm.RemoveStream(sendStr.StreamID()) })
 	sm.AddStream(sendStr.StreamID(), str.closeWithSession)
 
