@@ -2,13 +2,11 @@ package webtransport
 
 import (
 	"context"
-	"encoding/binary"
 	"io"
 	"math/rand/v2"
 	"net"
 	"sync"
 	"time"
-	"unicode/utf8"
 
 	"github.com/quic-go/quic-go"
 	"github.com/quic-go/quic-go/http3"
@@ -17,10 +15,6 @@ import (
 
 // sessionID is the WebTransport Session ID
 type sessionID uint64
-
-const closeSessionCapsuleType http3.CapsuleType = 0x2843
-
-const maxCloseCapsuleErrorMsgLen = 1024
 
 type acceptQueue[T any] struct {
 	mx sync.Mutex
@@ -138,42 +132,8 @@ func newSession(ctx context.Context, sessionID sessionID, conn *quic.Conn, str h
 }
 
 func (s *Session) handleConn() {
-	err := s.parseNextCapsule()
+	err := parseNextCapsule(s.str)
 	s.closeWithError(err)
-}
-
-// parseNextCapsule parses the next Capsule sent on the request stream.
-// It returns a SessionError, if the capsule received is a WT_CLOSE_SESSION Capsule.
-func (s *Session) parseNextCapsule() error {
-	for {
-		typ, r, err := http3.ParseCapsule(quicvarint.NewReader(s.str))
-		if err != nil {
-			return err
-		}
-		switch typ {
-		case closeSessionCapsuleType:
-			var b [4]byte
-			if _, err := io.ReadFull(r, b[:]); err != nil {
-				return err
-			}
-			appErrCode := binary.BigEndian.Uint32(b[:])
-			// the length of the error message is limited to 1024 bytes
-			appErrMsg, err := io.ReadAll(io.LimitReader(r, maxCloseCapsuleErrorMsgLen))
-			if err != nil {
-				return err
-			}
-			return &SessionError{
-				Remote:    true,
-				ErrorCode: SessionErrorCode(appErrCode),
-				Message:   string(appErrMsg),
-			}
-		default:
-			// unknown capsule, skip it
-			if _, err := io.Copy(io.Discard, r); err != nil {
-				return err
-			}
-		}
-	}
 }
 
 func (s *Session) addStream(qstr *quic.Stream, addStreamHeader bool) *Stream {
@@ -404,20 +364,12 @@ func (s *Session) CloseWithError(code SessionErrorCode, msg string) error {
 }
 
 func closeSessionStream(str http3Stream, code SessionErrorCode, msg string) error {
-	// truncate the message if it's too long
-	if len(msg) > maxCloseCapsuleErrorMsgLen {
-		msg = truncateUTF8(msg, maxCloseCapsuleErrorMsgLen)
-	}
-
-	b := make([]byte, 4, 4+len(msg))
-	binary.BigEndian.PutUint32(b, uint32(code))
-	b = append(b, []byte(msg)...)
-
 	// Optimistically send the WT_CLOSE_SESSION Capsule:
 	// If we're flow-control limited, we don't want to wait for the receiver to issue new flow control credits.
 	// There's no idiomatic way to do a non-blocking write in Go, so we set a short deadline.
 	str.SetWriteDeadline(time.Now().Add(10 * time.Millisecond))
-	if err := http3.WriteCapsule(quicvarint.NewWriter(str), closeSessionCapsuleType, b); err != nil {
+	payload := appendCloseSessionCapsulePayload(nil, code, msg)
+	if err := http3.WriteCapsule(quicvarint.NewWriter(str), closeSessionCapsuleType, payload); err != nil {
 		str.CancelWrite(WTSessionGoneErrorCode)
 	}
 
@@ -456,16 +408,4 @@ func (s *Session) SessionState() SessionState {
 		ConnectionState:     s.conn.ConnectionState(),
 		ApplicationProtocol: s.applicationProtocol,
 	}
-}
-
-// truncateUTF8 cuts a string to max n bytes without breaking UTF-8 characters.
-func truncateUTF8(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-
-	for n > 0 && !utf8.RuneStart(s[n]) {
-		n--
-	}
-	return s[:n]
 }
