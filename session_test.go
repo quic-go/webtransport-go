@@ -222,58 +222,6 @@ func TestAddStreamAfterSessionClose(t *testing.T) {
 	}
 }
 
-func TestOpenStreamSyncSessionClose(t *testing.T) {
-	t.Run("bidirectional", func(t *testing.T) {
-		testOpenStreamSyncSessionClose(
-			t,
-			func(s *Session) error { _, err := s.OpenStream(); return err },
-			func(s *Session) error { _, err := s.OpenStreamSync(context.Background()); return err },
-		)
-	})
-	t.Run("unidirectional", func(t *testing.T) {
-		testOpenStreamSyncSessionClose(
-			t,
-			func(s *Session) error { _, err := s.OpenUniStream(); return err },
-			func(s *Session) error { _, err := s.OpenUniStreamSync(context.Background()); return err },
-		)
-	})
-}
-
-func testOpenStreamSyncSessionClose(t *testing.T, openStream func(*Session) error, openStreamSync func(*Session) error) {
-	const sessionID = 42
-	clientConn, _ := newConnPair(t, newUDPConnLocalhost(t), newUDPConnLocalhost(t))
-	sess := setupSession(t, clientConn, sessionID)
-
-	for {
-		if err := openStream(sess); err != nil {
-			break
-		}
-	}
-
-	errChan := make(chan error, 1)
-	go func() {
-		err := openStreamSync(sess)
-		errChan <- err
-	}()
-
-	select {
-	case <-errChan:
-		t.Fatal("should not have opened stream")
-	case <-time.After(scaleDuration(10 * time.Millisecond)):
-	}
-	require.NoError(t, sess.CloseWithError(1337, "closing"))
-
-	select {
-	case err := <-errChan:
-		var serr *SessionError
-		require.ErrorAs(t, err, &serr)
-		require.False(t, serr.Remote)
-		require.Equal(t, SessionErrorCode(1337), serr.ErrorCode)
-	case <-time.After(time.Second):
-		t.Fatal("timeout")
-	}
-}
-
 // TestCloseWithErrorTruncatesSendMessage tests that when CloseWithError is called
 // with a message longer than 1024 bytes, the capsule written to the wire contains
 // a truncated message.

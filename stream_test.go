@@ -207,8 +207,8 @@ func TestReceiveStreamReadDuringSessionGoneAndCloseSession(t *testing.T) {
 	sendStr, recvStr := newUniStreamPair(t)
 
 	sm := newIncomingStreamsMap()
-	str := newReceiveStream(recvStr, func() { sm.RemoveStream(recvStr.StreamID()) })
-	sm.AddStream(recvStr.StreamID(), str.closeWithSession)
+	str := newReceiveStream(recvStr, func() { sm.removeStream(recvStr.StreamID()) })
+	sm.addStream(recvStr.StreamID(), str.closeWithSession)
 
 	// start reading
 	errChan := make(chan error, 1)
@@ -228,7 +228,7 @@ func TestReceiveStreamReadDuringSessionGoneAndCloseSession(t *testing.T) {
 	}
 
 	sessionErr := &SessionError{ErrorCode: 42, Message: "bye"}
-	sm.CloseSession(sessionErr)
+	sm.closeSession(sessionErr)
 
 	select {
 	case err := <-errChan:
@@ -330,9 +330,11 @@ func TestSendStreamHeaderRetryAfterDeadlineError(t *testing.T) {
 func TestSendStreamWriteDuringSessionGoneAndCloseSession(t *testing.T) {
 	sendStr, recvStr := newUniStreamPair(t)
 
-	sm := newOutgoingStreamsMap()
-	str := newSendStream(sendStr, nil, func() { sm.RemoveStream(sendStr.StreamID()) })
-	sm.AddStream(sendStr.StreamID(), str.closeWithSession)
+	sm := newOutgoingStreamsMap(nil, 0)
+	str := newSendStream(sendStr, nil, func() { sm.removeStream(sendStr.StreamID()) })
+	sm.mx.Lock()
+	sm.m[sendStr.StreamID()] = str.closeWithSession
+	sm.mx.Unlock()
 
 	// write in a loop
 	errChan := make(chan error, 1)

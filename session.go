@@ -3,7 +3,6 @@ package webtransport
 import (
 	"context"
 	"io"
-	"math/rand/v2"
 	"net"
 	"sync"
 	"time"
@@ -17,11 +16,12 @@ import (
 type sessionID uint64
 
 type acceptQueue[T any] struct {
-	mx sync.Mutex
 	// The channel is used to notify consumers (via Chan) about new incoming items.
 	// Needs to be buffered to preserve the notification if an item is enqueued
 	// between a call to Next and to Chan.
 	c chan struct{}
+
+	mx sync.Mutex
 	// Contains all the streams waiting to be accepted.
 	// There's no explicit limit to the length of the queue, but it is implicitly
 	// limited by the stream flow control provided by QUIC.
@@ -86,15 +86,9 @@ type Session struct {
 	str                 http3Stream
 	applicationProtocol string
 
-	streamHdr    []byte
-	uniStreamHdr []byte
-
 	ctx      context.Context
 	closeMx  sync.Mutex
 	closeErr error // not nil once the session is closed
-	// streamCtxs holds all the context.CancelFuncs of calls to Open{Uni}StreamSync calls currently active.
-	// When the session is closed, this allows us to cancel all these contexts and make those calls return.
-	streamCtxs map[int]context.CancelFunc
 
 	bidiAcceptQueue acceptQueue[*Stream]
 	uniAcceptQueue  acceptQueue[*ReceiveStream]
@@ -111,20 +105,11 @@ func newSession(ctx context.Context, sessionID sessionID, conn *quic.Conn, str h
 		str:                 str,
 		applicationProtocol: applicationProtocol,
 		ctx:                 ctx,
-		streamCtxs:          make(map[int]context.CancelFunc),
 		bidiAcceptQueue:     *newAcceptQueue[*Stream](),
 		uniAcceptQueue:      *newAcceptQueue[*ReceiveStream](),
 		incomingStreams:     *newIncomingStreamsMap(),
-		outgoingStreams:     *newOutgoingStreamsMap(),
+		outgoingStreams:     *newOutgoingStreamsMap(conn, sessionID),
 	}
-	// precompute the headers for unidirectional streams
-	c.uniStreamHdr = make([]byte, 0, 2+quicvarint.Len(uint64(c.sessionID)))
-	c.uniStreamHdr = quicvarint.Append(c.uniStreamHdr, webTransportUniStreamType)
-	c.uniStreamHdr = quicvarint.Append(c.uniStreamHdr, uint64(c.sessionID))
-	// precompute the headers for bidirectional streams
-	c.streamHdr = make([]byte, 0, 2+quicvarint.Len(uint64(c.sessionID)))
-	c.streamHdr = quicvarint.Append(c.streamHdr, webTransportFrameType)
-	c.streamHdr = quicvarint.Append(c.streamHdr, uint64(c.sessionID))
 
 	go func() {
 		defer ctxCancel()
@@ -138,31 +123,6 @@ func (s *Session) handleConn() {
 	s.closeWithError(err)
 }
 
-func (s *Session) addStream(qstr *quic.Stream, addStreamHeader bool) *Stream {
-	var hdr []byte
-	if addStreamHeader {
-		hdr = s.streamHdr
-		str := newStream(qstr, hdr, func() { s.outgoingStreams.RemoveStream(qstr.StreamID()) })
-		s.outgoingStreams.AddStream(qstr.StreamID(), str.closeWithSession)
-		return str
-	}
-	str := newStream(qstr, hdr, func() { s.incomingStreams.RemoveStream(qstr.StreamID()) })
-	s.incomingStreams.AddStream(qstr.StreamID(), str.closeWithSession)
-	return str
-}
-
-func (s *Session) addReceiveStream(qstr *quic.ReceiveStream) *ReceiveStream {
-	str := newReceiveStream(qstr, func() { s.incomingStreams.RemoveStream(qstr.StreamID()) })
-	s.incomingStreams.AddStream(qstr.StreamID(), str.closeWithSession)
-	return str
-}
-
-func (s *Session) addSendStream(qstr *quic.SendStream) *SendStream {
-	str := newSendStream(qstr, s.uniStreamHdr, func() { s.outgoingStreams.RemoveStream(qstr.StreamID()) })
-	s.outgoingStreams.AddStream(qstr.StreamID(), str.closeWithSession)
-	return str
-}
-
 // addIncomingStream adds a bidirectional stream that the remote peer opened
 func (s *Session) addIncomingStream(qstr *quic.Stream) {
 	s.closeMx.Lock()
@@ -173,7 +133,8 @@ func (s *Session) addIncomingStream(qstr *quic.Stream) {
 		qstr.CancelWrite(WTSessionGoneErrorCode)
 		return
 	}
-	str := s.addStream(qstr, false)
+	str := newStream(qstr, nil, func() { s.incomingStreams.removeStream(qstr.StreamID()) })
+	s.incomingStreams.addStream(qstr.StreamID(), str.closeWithSession)
 	s.closeMx.Unlock()
 
 	s.bidiAcceptQueue.Add(str)
@@ -188,7 +149,8 @@ func (s *Session) addIncomingUniStream(qstr *quic.ReceiveStream) {
 		qstr.CancelRead(WTSessionGoneErrorCode)
 		return
 	}
-	str := s.addReceiveStream(qstr)
+	str := newReceiveStream(qstr, func() { s.incomingStreams.removeStream(qstr.StreamID()) })
+	s.incomingStreams.addStream(qstr.StreamID(), str.closeWithSession)
 	s.closeMx.Unlock()
 
 	s.uniAcceptQueue.Add(str)
@@ -254,22 +216,7 @@ func (s *Session) OpenStream() (*Stream, error) {
 	if s.closeErr != nil {
 		return nil, s.closeErr
 	}
-
-	qstr, err := s.conn.OpenStream()
-	if err != nil {
-		return nil, err
-	}
-	return s.addStream(qstr, true), nil
-}
-
-func (s *Session) addStreamCtxCancel(cancel context.CancelFunc) (id int) {
-rand:
-	id = rand.Int()
-	if _, ok := s.streamCtxs[id]; ok {
-		goto rand
-	}
-	s.streamCtxs[id] = cancel
-	return id
+	return s.outgoingStreams.OpenStream()
 }
 
 func (s *Session) OpenStreamSync(ctx context.Context) (*Stream, error) {
@@ -278,31 +225,18 @@ func (s *Session) OpenStreamSync(ctx context.Context) (*Stream, error) {
 		s.closeMx.Unlock()
 		return nil, s.closeErr
 	}
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	id := s.addStreamCtxCancel(cancel)
 	s.closeMx.Unlock()
 
-	// open a new bidirectional stream without holding the mutex: this call might block
-	qstr, err := s.conn.OpenStreamSync(ctx)
+	str, err := s.outgoingStreams.OpenStreamSync(ctx)
 
 	s.closeMx.Lock()
 	defer s.closeMx.Unlock()
-	delete(s.streamCtxs, id)
 
 	// the session might have been closed concurrently with OpenStreamSync returning
-	if qstr != nil && s.closeErr != nil {
-		qstr.CancelRead(WTSessionGoneErrorCode)
-		qstr.CancelWrite(WTSessionGoneErrorCode)
+	if s.closeErr != nil {
 		return nil, s.closeErr
 	}
-	if err != nil {
-		if s.closeErr != nil {
-			return nil, s.closeErr
-		}
-		return nil, err
-	}
-	return s.addStream(qstr, true), nil
+	return str, err
 }
 
 func (s *Session) OpenUniStream() (*SendStream, error) {
@@ -312,11 +246,7 @@ func (s *Session) OpenUniStream() (*SendStream, error) {
 	if s.closeErr != nil {
 		return nil, s.closeErr
 	}
-	qstr, err := s.conn.OpenUniStream()
-	if err != nil {
-		return nil, err
-	}
-	return s.addSendStream(qstr), nil
+	return s.outgoingStreams.OpenUniStream()
 }
 
 func (s *Session) OpenUniStreamSync(ctx context.Context) (str *SendStream, err error) {
@@ -325,30 +255,18 @@ func (s *Session) OpenUniStreamSync(ctx context.Context) (str *SendStream, err e
 		s.closeMx.Unlock()
 		return nil, s.closeErr
 	}
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	id := s.addStreamCtxCancel(cancel)
 	s.closeMx.Unlock()
 
-	// open a new unidirectional stream without holding the mutex: this call might block
-	qstr, err := s.conn.OpenUniStreamSync(ctx)
+	str, err = s.outgoingStreams.OpenUniStreamSync(ctx)
 
 	s.closeMx.Lock()
 	defer s.closeMx.Unlock()
-	delete(s.streamCtxs, id)
 
 	// the session might have been closed concurrently with OpenStreamSync returning
-	if qstr != nil && s.closeErr != nil {
-		qstr.CancelWrite(WTSessionGoneErrorCode)
+	if s.closeErr != nil {
 		return nil, s.closeErr
 	}
-	if err != nil {
-		if s.closeErr != nil {
-			return nil, s.closeErr
-		}
-		return nil, err
-	}
-	return s.addSendStream(qstr), nil
+	return str, err
 }
 
 func (s *Session) LocalAddr() net.Addr {
@@ -401,10 +319,7 @@ func (s *Session) closeWithError(closeErr error) (bool /* first call to close se
 	}
 	s.closeErr = closeErr
 
-	for _, cancel := range s.streamCtxs {
-		cancel()
-	}
-	s.incomingStreams.CloseSession(closeErr)
+	s.incomingStreams.closeSession(closeErr)
 	s.outgoingStreams.CloseSession(closeErr)
 
 	return true, nil
