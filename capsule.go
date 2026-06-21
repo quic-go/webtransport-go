@@ -123,16 +123,15 @@ func (c maxStreamsUniCapsule) Append(b []byte) []byte {
 }
 
 func parseMaxStreamsCapsule(r io.Reader) (uint64, error) {
-	b, err := io.ReadAll(r)
+	maxStreams, err := quicvarint.Read(quicvarint.NewReader(r))
 	if err != nil {
 		return 0, err
 	}
-	maxStreams, n, err := quicvarint.Parse(b)
-	if err != nil {
-		return 0, err
-	}
-	if n != len(b) {
+	var extra [1]byte
+	if _, err := io.ReadFull(r, extra[:]); err == nil {
 		return 0, errors.New("WT_MAX_STREAMS capsule has trailing data")
+	} else if err != io.EOF {
+		return 0, err
 	}
 	if maxStreams > maxStreamsLimit {
 		return 0, &http3.Error{ErrorCode: http3.ErrCodeDatagramError, ErrorMessage: "WT_MAX_STREAMS value too large"}

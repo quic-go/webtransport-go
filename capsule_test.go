@@ -101,6 +101,16 @@ func TestParseMaxStreamsCapsuleTooLarge(t *testing.T) {
 	require.ErrorIs(t, err, &http3.Error{ErrorCode: http3.ErrCodeDatagramError})
 }
 
+func TestParseMaxStreamsCapsuleTrailingData(t *testing.T) {
+	b := quicvarint.Append(nil, uint64(maxStreamsBidiCapsuleType))
+	b = quicvarint.Append(b, uint64(quicvarint.Len(42)+1))
+	b = quicvarint.Append(b, 42)
+	b = append(b, 0)
+
+	_, err := parseNextCapsule(bytes.NewReader(b))
+	require.ErrorContains(t, err, "trailing data")
+}
+
 func TestTruncateUTF8(t *testing.T) {
 	input := "Go 🚀"
 	require.Len(t, input, 7)
