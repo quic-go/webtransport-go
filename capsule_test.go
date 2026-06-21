@@ -93,12 +93,58 @@ func TestMaxStreamsCapsuleRoundTrip(t *testing.T) {
 	}
 }
 
+func TestStreamsBlockedCapsuleRoundTrip(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		c    capsule
+		typ  http3.CapsuleType
+		max  uint64
+	}{
+		{
+			name: "bidirectional",
+			c:    streamsBlockedBidiCapsule{MaximumStreams: 42},
+			typ:  streamsBlockedBidiCapsuleType,
+			max:  42,
+		},
+		{
+			name: "unidirectional",
+			c:    streamsBlockedUniCapsule{MaximumStreams: 1337},
+			typ:  streamsBlockedUniCapsuleType,
+			max:  1337,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var b bytes.Buffer
+			b.Write(tc.c.Append(nil))
+
+			typ, r, err := http3.ParseCapsule(quicvarint.NewReader(&b))
+			require.NoError(t, err)
+			require.Equal(t, tc.typ, typ)
+			maxStreams, err := quicvarint.Read(quicvarint.NewReader(r))
+			require.NoError(t, err)
+			require.Equal(t, tc.max, maxStreams)
+
+			c, err := parseNextCapsule(bytes.NewReader(tc.c.Append(nil)))
+			require.NoError(t, err)
+			require.Equal(t, tc.c, c)
+		})
+	}
+}
+
 func TestParseMaxStreamsCapsuleTooLarge(t *testing.T) {
 	var b bytes.Buffer
 	b.Write((maxStreamsBidiCapsule{MaximumStreams: maxStreamsLimit + 1}).Append(nil))
 
 	_, err := parseNextCapsule(&b)
 	require.ErrorContains(t, err, "value too large")
+}
+
+func TestParseStreamsBlockedCapsuleTooLarge(t *testing.T) {
+	var b bytes.Buffer
+	b.Write((streamsBlockedBidiCapsule{MaximumStreams: maxStreamsLimit + 1}).Append(nil))
+
+	_, err := parseNextCapsule(&b)
+	require.ErrorContains(t, err, "WT_STREAMS_BLOCKED value too large")
 }
 
 func TestParseMaxStreamsCapsuleTrailingData(t *testing.T) {
@@ -109,6 +155,16 @@ func TestParseMaxStreamsCapsuleTrailingData(t *testing.T) {
 
 	_, err := parseNextCapsule(bytes.NewReader(b))
 	require.ErrorContains(t, err, "trailing data")
+}
+
+func TestParseStreamsBlockedCapsuleTrailingData(t *testing.T) {
+	b := quicvarint.Append(nil, uint64(streamsBlockedUniCapsuleType))
+	b = quicvarint.Append(b, uint64(quicvarint.Len(42)+1))
+	b = quicvarint.Append(b, 42)
+	b = append(b, 0)
+
+	_, err := parseNextCapsule(bytes.NewReader(b))
+	require.ErrorContains(t, err, "WT_STREAMS_BLOCKED capsule has trailing data")
 }
 
 func TestTruncateUTF8(t *testing.T) {

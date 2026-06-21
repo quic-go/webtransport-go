@@ -11,9 +11,11 @@ import (
 )
 
 const (
-	closeSessionCapsuleType   http3.CapsuleType = 0x2843
-	maxStreamsBidiCapsuleType http3.CapsuleType = 0x190b4d3f
-	maxStreamsUniCapsuleType  http3.CapsuleType = 0x190b4d40
+	closeSessionCapsuleType       http3.CapsuleType = 0x2843
+	maxStreamsBidiCapsuleType     http3.CapsuleType = 0x190b4d3f
+	maxStreamsUniCapsuleType      http3.CapsuleType = 0x190b4d40
+	streamsBlockedBidiCapsuleType http3.CapsuleType = 0x190b4d43
+	streamsBlockedUniCapsuleType  http3.CapsuleType = 0x190b4d44
 )
 
 const maxCloseCapsuleErrorMsgLen = 1024
@@ -51,6 +53,18 @@ func parseNextCapsule(r io.Reader) (capsule, error) {
 				return nil, err
 			}
 			return maxStreamsUniCapsule{MaximumStreams: maxStreams}, nil
+		case streamsBlockedBidiCapsuleType:
+			maxStreams, err := parseStreamsBlockedCapsule(capsuleReader)
+			if err != nil {
+				return nil, err
+			}
+			return streamsBlockedBidiCapsule{MaximumStreams: maxStreams}, nil
+		case streamsBlockedUniCapsuleType:
+			maxStreams, err := parseStreamsBlockedCapsule(capsuleReader)
+			if err != nil {
+				return nil, err
+			}
+			return streamsBlockedUniCapsule{MaximumStreams: maxStreams}, nil
 		default:
 			// unknown capsule, skip it
 			if _, err := io.Copy(io.Discard, capsuleReader); err != nil {
@@ -122,6 +136,26 @@ func (c maxStreamsUniCapsule) Append(b []byte) []byte {
 	return quicvarint.Append(b, c.MaximumStreams)
 }
 
+type streamsBlockedBidiCapsule struct {
+	MaximumStreams uint64
+}
+
+func (c streamsBlockedBidiCapsule) Append(b []byte) []byte {
+	b = quicvarint.Append(b, uint64(streamsBlockedBidiCapsuleType))
+	b = quicvarint.Append(b, uint64(quicvarint.Len(c.MaximumStreams)))
+	return quicvarint.Append(b, c.MaximumStreams)
+}
+
+type streamsBlockedUniCapsule struct {
+	MaximumStreams uint64
+}
+
+func (c streamsBlockedUniCapsule) Append(b []byte) []byte {
+	b = quicvarint.Append(b, uint64(streamsBlockedUniCapsuleType))
+	b = quicvarint.Append(b, uint64(quicvarint.Len(c.MaximumStreams)))
+	return quicvarint.Append(b, c.MaximumStreams)
+}
+
 func parseMaxStreamsCapsule(r io.Reader) (uint64, error) {
 	maxStreams, err := quicvarint.Read(quicvarint.NewReader(r))
 	if err != nil {
@@ -135,6 +169,23 @@ func parseMaxStreamsCapsule(r io.Reader) (uint64, error) {
 	}
 	if maxStreams > maxStreamsLimit {
 		return 0, errors.New("WT_MAX_STREAMS value too large")
+	}
+	return maxStreams, nil
+}
+
+func parseStreamsBlockedCapsule(r io.Reader) (uint64, error) {
+	maxStreams, err := quicvarint.Read(quicvarint.NewReader(r))
+	if err != nil {
+		return 0, err
+	}
+	var extra [1]byte
+	if _, err := io.ReadFull(r, extra[:]); err == nil {
+		return 0, errors.New("WT_STREAMS_BLOCKED capsule has trailing data")
+	} else if err != io.EOF {
+		return 0, err
+	}
+	if maxStreams > maxStreamsLimit {
+		return 0, errors.New("WT_STREAMS_BLOCKED value too large")
 	}
 	return maxStreams, nil
 }
