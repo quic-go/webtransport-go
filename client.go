@@ -269,7 +269,10 @@ func (d *Dialer) handleConn(ctx context.Context, tr *http3.Transport, qconn *qui
 		protocol, err = d.negotiateProtocol(protocolHeader)
 		if err != nil {
 			sessErr := &SessionError{ErrorCode: WTALPNErrorCode, Message: err.Error()}
-			_ = closeSessionStream(requestStr, sessErr.ErrorCode, sessErr.Message)
+			_ = closeSessionStream(
+				requestStr,
+				closeSessionCapsule{ErrorCode: sessErr.ErrorCode, Message: sessErr.Message},
+			)
 			return rsp, nil, sessErr
 		}
 	}
