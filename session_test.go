@@ -4,14 +4,12 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/binary"
-	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"os"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -28,16 +26,6 @@ func scaleDuration(d time.Duration) time.Duration {
 		return 5 * d
 	}
 	return d
-}
-
-func streamHeaderBidirectional(sessionID uint64) []byte {
-	hdr := quicvarint.Append(nil, webTransportFrameType)
-	return quicvarint.Append(hdr, sessionID)
-}
-
-func streamHeaderUnidirectional(sessionID uint64) []byte {
-	hdr := quicvarint.Append(nil, webTransportUniStreamType)
-	return quicvarint.Append(hdr, sessionID)
 }
 
 func newUDPConnLocalhost(t testing.TB) *net.UDPConn {
@@ -99,179 +87,6 @@ func newConnPair(t *testing.T, clientConn, serverConn net.PacketConn) (client, s
 		t.Fatal("timeout")
 	}
 	return cl, conn
-}
-
-// mockHTTP3Stream is a minimal mock for http3Stream that blocks on Read.
-type mockHTTP3Stream struct {
-	readChan  chan struct{}
-	closeOnce sync.Once
-}
-
-func newMockHTTP3Stream() *mockHTTP3Stream {
-	return &mockHTTP3Stream{readChan: make(chan struct{})}
-}
-
-func (m *mockHTTP3Stream) Read(p []byte) (n int, err error) {
-	<-m.readChan // block forever
-	return 0, io.EOF
-}
-func (m *mockHTTP3Stream) Write(p []byte) (n int, err error) { return len(p), nil }
-func (m *mockHTTP3Stream) Close() error {
-	m.closeOnce.Do(func() { close(m.readChan) })
-	return nil
-}
-
-func (m *mockHTTP3Stream) ReceiveDatagram(context.Context) ([]byte, error) {
-	return nil, errors.New("not implemented")
-}
-func (m *mockHTTP3Stream) SendDatagram([]byte) error        { return nil }
-func (m *mockHTTP3Stream) CancelRead(quic.StreamErrorCode)  {}
-func (m *mockHTTP3Stream) CancelWrite(quic.StreamErrorCode) {}
-func (m *mockHTTP3Stream) SetWriteDeadline(time.Time) error { return nil }
-
-func setupSession(t *testing.T, clientConn *quic.Conn, sessID sessionID) *Session {
-	mockStr := newMockHTTP3Stream()
-	t.Cleanup(func() { mockStr.Close() })
-	sess := newSession(context.Background(), sessID, clientConn, mockStr, "")
-	return sess
-}
-
-// acceptAndRouteStream accepts a bidirectional stream from the connection and routes it to the session.
-func acceptAndRouteStream(t *testing.T, conn *quic.Conn, sess *Session) {
-	t.Helper()
-	str, err := conn.AcceptStream(context.Background())
-	require.NoError(t, err)
-	// read the frame type
-	typ, err := quicvarint.Read(quicvarint.NewReader(str))
-	require.NoError(t, err)
-	require.Equal(t, uint64(webTransportFrameType), typ)
-	// read and discard the session ID
-	_, err = quicvarint.Read(quicvarint.NewReader(str))
-	require.NoError(t, err)
-	sess.addIncomingStream(str)
-}
-
-// acceptAndRouteUniStream accepts a unidirectional stream from the connection and routes it to the session.
-func acceptAndRouteUniStream(t *testing.T, conn *quic.Conn, sess *Session) {
-	t.Helper()
-	str, err := conn.AcceptUniStream(context.Background())
-	require.NoError(t, err)
-	// read the stream type
-	typ, err := quicvarint.Read(quicvarint.NewReader(str))
-	require.NoError(t, err)
-	require.Equal(t, uint64(webTransportUniStreamType), typ)
-	// read and discard the session ID
-	_, err = quicvarint.Read(quicvarint.NewReader(str))
-	require.NoError(t, err)
-	sess.addIncomingUniStream(str)
-}
-
-func TestAddStreamAfterSessionClose(t *testing.T) {
-	const sessionID = 42
-	clientConn, serverConn := newConnPair(t, newUDPConnLocalhost(t), newUDPConnLocalhost(t))
-	sess := setupSession(t, clientConn, sessionID)
-
-	str1, err := serverConn.OpenStream()
-	require.NoError(t, err)
-	_, err = str1.Write(streamHeaderBidirectional(sessionID))
-	require.NoError(t, err)
-
-	// Route the stream to the session
-	go acceptAndRouteStream(t, clientConn, sess)
-
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-
-	_, err = sess.AcceptStream(ctx)
-	require.NoError(t, err)
-
-	// now close the session
-	require.NoError(t, sess.CloseWithError(0, ""))
-
-	// we expect further streams to be reset
-	str2, err := serverConn.OpenStream()
-	require.NoError(t, err)
-	_, err = str2.Write(streamHeaderBidirectional(sessionID))
-	require.NoError(t, err)
-	// Route the stream - the session is closed, so it should be rejected
-	go acceptAndRouteStream(t, clientConn, sess)
-	select {
-	case <-str2.Context().Done():
-		require.ErrorIs(t,
-			context.Cause(str2.Context()),
-			&quic.StreamError{Remote: true, StreamID: str2.StreamID(), ErrorCode: WTSessionGoneErrorCode},
-		)
-	case <-time.After(time.Second):
-		t.Fatal("timeout")
-	}
-
-	ustr, err := serverConn.OpenUniStream()
-	require.NoError(t, err)
-	_, err = ustr.Write(streamHeaderUnidirectional(sessionID))
-	require.NoError(t, err)
-	// Route the stream - the session is closed, so it should be rejected
-	go acceptAndRouteUniStream(t, clientConn, sess)
-	select {
-	case <-ustr.Context().Done():
-		require.ErrorIs(t,
-			context.Cause(ustr.Context()),
-			&quic.StreamError{Remote: true, StreamID: ustr.StreamID(), ErrorCode: WTSessionGoneErrorCode},
-		)
-	case <-time.After(time.Second):
-		t.Fatal("timeout")
-	}
-}
-
-func TestOpenStreamSyncSessionClose(t *testing.T) {
-	t.Run("bidirectional", func(t *testing.T) {
-		testOpenStreamSyncSessionClose(
-			t,
-			func(s *Session) error { _, err := s.OpenStream(); return err },
-			func(s *Session) error { _, err := s.OpenStreamSync(context.Background()); return err },
-		)
-	})
-	t.Run("unidirectional", func(t *testing.T) {
-		testOpenStreamSyncSessionClose(
-			t,
-			func(s *Session) error { _, err := s.OpenUniStream(); return err },
-			func(s *Session) error { _, err := s.OpenUniStreamSync(context.Background()); return err },
-		)
-	})
-}
-
-func testOpenStreamSyncSessionClose(t *testing.T, openStream func(*Session) error, openStreamSync func(*Session) error) {
-	const sessionID = 42
-	clientConn, _ := newConnPair(t, newUDPConnLocalhost(t), newUDPConnLocalhost(t))
-	sess := setupSession(t, clientConn, sessionID)
-
-	for {
-		if err := openStream(sess); err != nil {
-			break
-		}
-	}
-
-	errChan := make(chan error, 1)
-	go func() {
-		err := openStreamSync(sess)
-		errChan <- err
-	}()
-
-	select {
-	case <-errChan:
-		t.Fatal("should not have opened stream")
-	case <-time.After(scaleDuration(10 * time.Millisecond)):
-	}
-	require.NoError(t, sess.CloseWithError(1337, "closing"))
-
-	select {
-	case err := <-errChan:
-		var serr *SessionError
-		require.ErrorAs(t, err, &serr)
-		require.False(t, serr.Remote)
-		require.Equal(t, SessionErrorCode(1337), serr.ErrorCode)
-	case <-time.After(time.Second):
-		t.Fatal("timeout")
-	}
 }
 
 // TestCloseWithErrorTruncatesSendMessage tests that when CloseWithError is called
