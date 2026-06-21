@@ -74,7 +74,7 @@ func (s *Session) handleConn() {
 	for {
 		c, err := parseNextCapsule(s.str)
 		if err != nil {
-			s.closeWithError(err)
+			s.closeWithError(&http3.Error{ErrorCode: http3.ErrCodeDatagramError, ErrorMessage: err.Error()})
 			return
 		}
 		switch c := c.(type) {
