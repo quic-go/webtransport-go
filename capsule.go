@@ -134,7 +134,7 @@ func parseMaxStreamsCapsule(r io.Reader) (uint64, error) {
 		return 0, err
 	}
 	if maxStreams > maxStreamsLimit {
-		return 0, &http3.Error{ErrorCode: http3.ErrCodeDatagramError, ErrorMessage: "WT_MAX_STREAMS value too large"}
+		return 0, errors.New("WT_MAX_STREAMS value too large")
 	}
 	return maxStreams, nil
 }

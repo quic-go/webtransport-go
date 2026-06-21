@@ -98,7 +98,7 @@ func TestParseMaxStreamsCapsuleTooLarge(t *testing.T) {
 	b.Write((maxStreamsBidiCapsule{MaximumStreams: maxStreamsLimit + 1}).Append(nil))
 
 	_, err := parseNextCapsule(&b)
-	require.ErrorIs(t, err, &http3.Error{ErrorCode: http3.ErrCodeDatagramError})
+	require.ErrorContains(t, err, "value too large")
 }
 
 func TestParseMaxStreamsCapsuleTrailingData(t *testing.T) {
