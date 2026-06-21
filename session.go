@@ -314,6 +314,7 @@ func (s *Session) OpenStreamSync(ctx context.Context) (*Stream, error) {
 		return nil, s.closeErr
 	}
 	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	id := s.addStreamCtxCancel(cancel)
 	s.closeMx.Unlock()
 
@@ -360,6 +361,7 @@ func (s *Session) OpenUniStreamSync(ctx context.Context) (str *SendStream, err e
 		return nil, s.closeErr
 	}
 	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	id := s.addStreamCtxCancel(cancel)
 	s.closeMx.Unlock()
 
