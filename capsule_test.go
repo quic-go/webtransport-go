@@ -3,6 +3,7 @@ package webtransport
 import (
 	"bytes"
 	"encoding/binary"
+	"io"
 	"strings"
 	"testing"
 
@@ -21,18 +22,25 @@ func TestParseCloseSessionCapsuleMessageTruncation(t *testing.T) {
 	var b bytes.Buffer
 	require.NoError(t, http3.WriteCapsule(quicvarint.NewWriter(&b), closeSessionCapsuleType, payload))
 
-	err := parseNextCapsule(&b)
-	var sessErr *SessionError
-	require.ErrorAs(t, err, &sessErr)
-	require.True(t, sessErr.Remote)
-	require.Equal(t, SessionErrorCode(1337), sessErr.ErrorCode)
-	require.Len(t, sessErr.Message, maxCloseCapsuleErrorMsgLen)
-	require.Equal(t, strings.Repeat("b", maxCloseCapsuleErrorMsgLen), sessErr.Message)
+	c, err := parseNextCapsule(&b)
+	require.NoError(t, err)
+	closeCapsule, ok := c.(closeSessionCapsule)
+	require.True(t, ok)
+	require.Equal(t, SessionErrorCode(1337), closeCapsule.ErrorCode)
+	require.Len(t, closeCapsule.Message, maxCloseCapsuleErrorMsgLen)
+	require.Equal(t, strings.Repeat("b", maxCloseCapsuleErrorMsgLen), closeCapsule.Message)
 }
 
-func TestAppendCloseSessionCapsulePayloadMessageTruncation(t *testing.T) {
-	payload := appendCloseSessionCapsulePayload(nil, 42, strings.Repeat("a", maxCloseCapsuleErrorMsgLen+500))
+func TestAppendCloseSessionCapsuleMessageTruncation(t *testing.T) {
+	var b bytes.Buffer
+	b.Write((closeSessionCapsule{ErrorCode: 42, Message: strings.Repeat("a", maxCloseCapsuleErrorMsgLen+500)}).Append(nil))
 
+	typ, r, err := http3.ParseCapsule(quicvarint.NewReader(&b))
+	require.NoError(t, err)
+	require.Equal(t, closeSessionCapsuleType, typ)
+
+	payload, err := io.ReadAll(r)
+	require.NoError(t, err)
 	require.Len(t, payload, 4+maxCloseCapsuleErrorMsgLen)
 	require.Equal(t, uint32(42), binary.BigEndian.Uint32(payload[:4]))
 	require.Equal(t, strings.Repeat("a", maxCloseCapsuleErrorMsgLen), string(payload[4:]))
@@ -40,15 +48,67 @@ func TestAppendCloseSessionCapsulePayloadMessageTruncation(t *testing.T) {
 
 func TestCloseSessionCapsuleRoundTrip(t *testing.T) {
 	var b bytes.Buffer
-	payload := appendCloseSessionCapsulePayload(nil, 42, "all good")
-	require.NoError(t, http3.WriteCapsule(quicvarint.NewWriter(&b), closeSessionCapsuleType, payload))
+	b.Write((closeSessionCapsule{ErrorCode: 42, Message: "all good"}).Append(nil))
 
-	err := parseNextCapsule(&b)
-	var sessErr *SessionError
-	require.ErrorAs(t, err, &sessErr)
-	require.True(t, sessErr.Remote)
-	require.Equal(t, SessionErrorCode(42), sessErr.ErrorCode)
-	require.Equal(t, "all good", sessErr.Message)
+	c, err := parseNextCapsule(&b)
+	require.NoError(t, err)
+	require.Equal(t, closeSessionCapsule{ErrorCode: 42, Message: "all good"}, c)
+}
+
+func TestMaxStreamsCapsuleRoundTrip(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		c    capsule
+		typ  http3.CapsuleType
+		max  uint64
+	}{
+		{
+			name: "bidirectional",
+			c:    maxStreamsBidiCapsule{MaximumStreams: 42},
+			typ:  maxStreamsBidiCapsuleType,
+			max:  42,
+		},
+		{
+			name: "unidirectional",
+			c:    maxStreamsUniCapsule{MaximumStreams: 1337},
+			typ:  maxStreamsUniCapsuleType,
+			max:  1337,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var b bytes.Buffer
+			b.Write(tc.c.Append(nil))
+
+			typ, r, err := http3.ParseCapsule(quicvarint.NewReader(&b))
+			require.NoError(t, err)
+			require.Equal(t, tc.typ, typ)
+			maxStreams, err := quicvarint.Read(quicvarint.NewReader(r))
+			require.NoError(t, err)
+			require.Equal(t, tc.max, maxStreams)
+
+			c, err := parseNextCapsule(bytes.NewReader(tc.c.Append(nil)))
+			require.NoError(t, err)
+			require.Equal(t, tc.c, c)
+		})
+	}
+}
+
+func TestParseMaxStreamsCapsuleTooLarge(t *testing.T) {
+	var b bytes.Buffer
+	b.Write((maxStreamsBidiCapsule{MaximumStreams: maxStreamsLimit + 1}).Append(nil))
+
+	_, err := parseNextCapsule(&b)
+	require.ErrorContains(t, err, "value too large")
+}
+
+func TestParseMaxStreamsCapsuleTrailingData(t *testing.T) {
+	b := quicvarint.Append(nil, uint64(maxStreamsBidiCapsuleType))
+	b = quicvarint.Append(b, uint64(quicvarint.Len(42)+1))
+	b = quicvarint.Append(b, 42)
+	b = append(b, 0)
+
+	_, err := parseNextCapsule(bytes.NewReader(b))
+	require.ErrorContains(t, err, "trailing data")
 }
 
 func TestTruncateUTF8(t *testing.T) {
