@@ -1,6 +1,7 @@
 package webtransport
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"encoding/binary"
@@ -20,6 +21,16 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+type mockHTTP3Stream struct{ *bytes.Reader }
+
+func (s mockHTTP3Stream) Write(p []byte) (int, error)                     { return len(p), nil }
+func (s mockHTTP3Stream) Close() error                                    { return nil }
+func (s mockHTTP3Stream) ReceiveDatagram(context.Context) ([]byte, error) { return nil, io.EOF }
+func (s mockHTTP3Stream) SendDatagram([]byte) error                       { return nil }
+func (s mockHTTP3Stream) CancelRead(quic.StreamErrorCode)                 {}
+func (s mockHTTP3Stream) CancelWrite(quic.StreamErrorCode)                {}
+func (s mockHTTP3Stream) SetWriteDeadline(time.Time) error                { return nil }
 
 func scaleDuration(d time.Duration) time.Duration {
 	if os.Getenv("CI") != "" {
@@ -157,4 +168,25 @@ func TestCloseWithErrorTruncatesSendMessage(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("timeout waiting for capsule")
 	}
+}
+
+func TestCapsuleParseErrorClosesSessionWithDatagramError(t *testing.T) {
+	b := quicvarint.Append(nil, uint64(maxStreamsBidiCapsuleType))
+	b = quicvarint.Append(b, uint64(quicvarint.Len(42)+1))
+	b = quicvarint.Append(b, 42)
+	b = append(b, 0)
+
+	sess := newSession(context.Background(), 42, nil, mockHTTP3Stream{bytes.NewReader(b)}, "")
+	select {
+	case <-sess.Context().Done():
+	case <-time.After(time.Second):
+		t.Fatal("timeout")
+	}
+
+	sess.closeMx.Lock()
+	err := sess.closeErr
+	sess.closeMx.Unlock()
+
+	require.ErrorIs(t, err, &http3.Error{ErrorCode: http3.ErrCodeDatagramError})
+	require.ErrorContains(t, err, "trailing data")
 }
