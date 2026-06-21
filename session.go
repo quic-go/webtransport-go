@@ -83,6 +83,8 @@ func (s *Session) handleConn() {
 			return
 		case maxStreamsBidiCapsule, maxStreamsUniCapsule:
 			// TODO: handle max streams capsules
+		case streamsBlockedBidiCapsule, streamsBlockedUniCapsule:
+			// TODO: log blocked capsules
 		}
 	}
 }
