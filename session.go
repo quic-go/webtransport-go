@@ -278,13 +278,10 @@ func (s *Session) RemoteAddr() net.Addr {
 
 func (s *Session) CloseWithError(code SessionErrorCode, msg string) error {
 	closeCapsule := closeSessionCapsule{ErrorCode: code, Message: msg}
-	first, err := s.closeWithError(&SessionError{ErrorCode: code, Message: msg}, &closeCapsule)
-	if !first {
-		return err
+	if first := s.closeWithError(&SessionError{ErrorCode: code, Message: msg}, &closeCapsule); first {
+		<-s.ctx.Done()
 	}
-
-	<-s.ctx.Done()
-	return err
+	return nil
 }
 
 func closeSessionStream(str http3Stream, closeCapsule closeSessionCapsule) error {
@@ -308,12 +305,12 @@ func (s *Session) ReceiveDatagram(ctx context.Context) ([]byte, error) {
 	return s.str.ReceiveDatagram(ctx)
 }
 
-func (s *Session) closeWithError(closeErr error, closeCapsule *closeSessionCapsule) (bool /* first call to close session */, error) {
+func (s *Session) closeWithError(closeErr error, closeCapsule *closeSessionCapsule) bool {
 	s.closeMx.Lock()
 	// Duplicate call, or the remote already closed this session.
 	if s.closeErr != nil {
 		s.closeMx.Unlock()
-		return false, nil
+		return false
 	}
 	s.closeErr = closeErr
 	s.closeMx.Unlock()
@@ -331,7 +328,7 @@ func (s *Session) closeWithError(closeErr error, closeCapsule *closeSessionCapsu
 		case s.capsuleQueueUpdated <- struct{}{}:
 		default:
 		}
-		return true, nil
+		return true
 	}
 
 	code := WTSessionGoneErrorCode
@@ -344,7 +341,7 @@ func (s *Session) closeWithError(closeErr error, closeCapsule *closeSessionCapsu
 	}
 	s.str.CancelRead(code)
 	s.str.CancelWrite(code)
-	return true, nil
+	return true
 }
 
 // SessionState returns the current state of the session
