@@ -111,6 +111,22 @@ func newConnPairWithServerConfig(t *testing.T, clientConn, serverConn net.Packet
 	return cl, conn
 }
 
+func TestServerRejectsQUICConnAfterClose(t *testing.T) {
+	clientConn, serverConn := newConnPair(t, newUDPConnLocalhost(t), newUDPConnLocalhost(t))
+
+	s := Server{H3: &http3.Server{TLSConfig: TLSConf}}
+	require.NoError(t, s.initialize())
+	require.NoError(t, s.Close())
+
+	require.ErrorIs(t, s.ServeQUICConn(serverConn), context.Canceled)
+	select {
+	case <-clientConn.Context().Done():
+	case <-time.After(time.Second):
+		t.Fatal("timeout waiting for connection to close")
+	}
+	require.Nil(t, s.conns)
+}
+
 // TestCloseWithErrorTruncatesSendMessage tests that when CloseWithError is called
 // with a message longer than 1024 bytes, the capsule written to the wire contains
 // a truncated message.
