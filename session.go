@@ -56,10 +56,13 @@ type Session struct {
 	outgoingStreams outgoingStreamsMap
 }
 
-// Capsule writes can block if the peer withholds CONNECT stream flow control credit.
-// We bound the queue to avoid unbounded memory growth.
-// 4096 should be more than enough slack for normal loss/reordering.
-const maxQueuedOutgoingCapsules = 4096
+const (
+	// Capsule writes can block if the peer withholds CONNECT stream flow control credit.
+	// We bound the queue to avoid unbounded memory growth.
+	// 4096 should be more than enough slack for normal loss / reordering.
+	maxQueuedOutgoingCapsules = 4096
+	closeSessionTimeout       = 10 * time.Millisecond
+)
 
 func newSession(ctx context.Context, sessionID sessionID, conn *quic.Conn, str http3Stream, applicationProtocol string) *Session {
 	ctx, ctxCancel := context.WithCancel(ctx)
@@ -105,6 +108,8 @@ func (s *Session) readFromConnectStream() {
 }
 
 func (s *Session) writeToConnectStream() {
+	// This goroutine owns all writes to the CONNECT stream.
+	// WT_CLOSE_SESSION is sent from here so it doesn't race with capsule writes.
 	for {
 		select {
 		case <-s.ctx.Done():
@@ -121,12 +126,35 @@ func (s *Session) writeToConnectStream() {
 			c := s.capsuleQueue[0]
 			s.capsuleQueueMx.Unlock()
 
-			if _, err := s.str.Write(c.Append(nil)); err != nil {
+			if closeCapsule, ok := c.(closeSessionCapsule); ok {
+				_ = closeSessionStream(s.str, closeCapsule)
+				return
+			}
+			n, err := s.str.Write(c.Append(nil))
+			if err != nil {
+				s.capsuleQueueMx.Lock()
+				closing := false
+				if len(s.capsuleQueue) > 0 {
+					_, closing = s.capsuleQueue[0].(closeSessionCapsule)
+				}
+				s.capsuleQueueMx.Unlock()
+				if closing {
+					if n > 0 {
+						s.str.CancelRead(WTSessionGoneErrorCode)
+						s.str.CancelWrite(WTSessionGoneErrorCode)
+						return
+					}
+					continue
+				}
 				s.closeWithError(err, nil)
 				return
 			}
 			s.capsuleQueueMx.Lock()
-			s.capsuleQueue = s.capsuleQueue[1:]
+			if len(s.capsuleQueue) > 0 {
+				if _, closing := s.capsuleQueue[0].(closeSessionCapsule); !closing {
+					s.capsuleQueue = s.capsuleQueue[1:]
+				}
+			}
 			s.capsuleQueueMx.Unlock()
 		}
 	}
@@ -263,7 +291,7 @@ func closeSessionStream(str http3Stream, closeCapsule closeSessionCapsule) error
 	// Optimistically send the WT_CLOSE_SESSION Capsule:
 	// If we're flow-control limited, we don't want to wait for the receiver to issue new flow control credits.
 	// There's no idiomatic way to do a non-blocking write in Go, so we set a short deadline.
-	str.SetWriteDeadline(time.Now().Add(10 * time.Millisecond))
+	str.SetWriteDeadline(time.Now().Add(closeSessionTimeout))
 	if _, err := str.Write(closeCapsule.Append(nil)); err != nil {
 		str.CancelWrite(WTSessionGoneErrorCode)
 	}
@@ -294,7 +322,16 @@ func (s *Session) closeWithError(closeErr error, closeCapsule *closeSessionCapsu
 	s.incomingStreams.CloseSession(closeErr)
 
 	if closeCapsule != nil {
-		return true, closeSessionStream(s.str, *closeCapsule)
+		s.capsuleQueueMx.Lock()
+		s.capsuleQueue = []capsule{*closeCapsule}
+		s.capsuleQueueMx.Unlock()
+
+		s.str.SetWriteDeadline(time.Now().Add(closeSessionTimeout))
+		select {
+		case s.capsuleQueueUpdated <- struct{}{}:
+		default:
+		}
+		return true, nil
 	}
 
 	code := WTSessionGoneErrorCode

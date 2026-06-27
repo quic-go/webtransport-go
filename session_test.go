@@ -282,3 +282,50 @@ func TestSessionClosesWhenOutgoingCapsuleQueueFull(t *testing.T) {
 	require.ErrorAs(t, err, &h3Err)
 	require.Equal(t, http3.ErrCodeExcessiveLoad, h3Err.ErrorCode)
 }
+
+func TestCloseWithErrorDropsQueuedCapsulesWhenConnectStreamBlocked(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	clientConn, serverConn := newConnPairWithServerConfig(
+		t,
+		newUDPConnLocalhost(t),
+		newUDPConnLocalhost(t),
+		&quic.Config{
+			InitialStreamReceiveWindow:       1,
+			MaxStreamReceiveWindow:           1,
+			InitialConnectionReceiveWindow:   1,
+			MaxConnectionReceiveWindow:       1,
+			EnableDatagrams:                  true,
+			EnableStreamResetPartialDelivery: true,
+		},
+	)
+
+	clientStr, err := clientConn.OpenStreamSync(ctx)
+	require.NoError(t, err)
+
+	_, err = clientStr.Write([]byte{0})
+	require.NoError(t, err)
+	serverStr, err := serverConn.AcceptStream(ctx)
+	require.NoError(t, err)
+	require.NoError(t, serverStr.SetReadDeadline(time.Now().Add(time.Second)))
+	_, err = io.ReadFull(serverStr, make([]byte, 1))
+	require.NoError(t, err)
+	require.NoError(t, serverStr.SetReadDeadline(time.Time{}))
+
+	_, err = clientStr.Write(make([]byte, 1450))
+	require.NoError(t, err)
+
+	sess := newSession(context.Background(), 0, clientConn, quicHTTP3Stream{clientStr}, "")
+	sess.queueCapsule(streamsBlockedBidiCapsule{})
+
+	done := make(chan error, 1)
+	go func() { done <- sess.CloseWithError(42, "close") }()
+
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("timeout")
+	}
+}
