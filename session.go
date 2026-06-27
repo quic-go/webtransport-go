@@ -50,6 +50,7 @@ type Session struct {
 
 	capsuleQueueMx      sync.Mutex
 	capsuleQueue        []capsule
+	pendingCloseCapsule *closeSessionCapsule
 	capsuleQueueUpdated chan struct{}
 
 	incomingStreams incomingStreamsMap
@@ -119,6 +120,12 @@ func (s *Session) writeToConnectStream() {
 
 		for {
 			s.capsuleQueueMx.Lock()
+			if s.pendingCloseCapsule != nil {
+				closeCapsule := *s.pendingCloseCapsule
+				s.capsuleQueueMx.Unlock()
+				_ = closeSessionStream(s.str, closeCapsule)
+				return
+			}
 			if len(s.capsuleQueue) == 0 {
 				s.capsuleQueueMx.Unlock()
 				break
@@ -126,34 +133,26 @@ func (s *Session) writeToConnectStream() {
 			c := s.capsuleQueue[0]
 			s.capsuleQueueMx.Unlock()
 
-			if closeCapsule, ok := c.(closeSessionCapsule); ok {
-				_ = closeSessionStream(s.str, closeCapsule)
-				return
-			}
 			n, err := s.str.Write(c.Append(nil))
 			if err != nil {
-				s.capsuleQueueMx.Lock()
-				closing := false
-				if len(s.capsuleQueue) > 0 {
-					_, closing = s.capsuleQueue[0].(closeSessionCapsule)
-				}
-				s.capsuleQueueMx.Unlock()
-				if closing {
-					if n > 0 {
-						s.str.CancelRead(WTSessionGoneErrorCode)
-						s.str.CancelWrite(WTSessionGoneErrorCode)
-						return
+				if !s.closeWithError(err, nil) {
+					s.capsuleQueueMx.Lock()
+					hasClose := s.pendingCloseCapsule != nil
+					s.capsuleQueueMx.Unlock()
+					if hasClose {
+						if n > 0 {
+							s.str.CancelRead(WTSessionGoneErrorCode)
+							s.str.CancelWrite(WTSessionGoneErrorCode)
+							return
+						}
+						continue
 					}
-					continue
 				}
-				s.closeWithError(err, nil)
 				return
 			}
 			s.capsuleQueueMx.Lock()
 			if len(s.capsuleQueue) > 0 {
-				if _, closing := s.capsuleQueue[0].(closeSessionCapsule); !closing {
-					s.capsuleQueue = s.capsuleQueue[1:]
-				}
+				s.capsuleQueue = s.capsuleQueue[1:]
 			}
 			s.capsuleQueueMx.Unlock()
 		}
@@ -320,7 +319,8 @@ func (s *Session) closeWithError(closeErr error, closeCapsule *closeSessionCapsu
 
 	if closeCapsule != nil {
 		s.capsuleQueueMx.Lock()
-		s.capsuleQueue = []capsule{*closeCapsule}
+		s.capsuleQueue = nil
+		s.pendingCloseCapsule = closeCapsule
 		s.capsuleQueueMx.Unlock()
 
 		s.str.SetWriteDeadline(time.Now().Add(closeSessionTimeout))
@@ -330,6 +330,11 @@ func (s *Session) closeWithError(closeErr error, closeCapsule *closeSessionCapsu
 		}
 		return true
 	}
+
+	s.capsuleQueueMx.Lock()
+	s.capsuleQueue = nil
+	s.pendingCloseCapsule = nil
+	s.capsuleQueueMx.Unlock()
 
 	code := WTSessionGoneErrorCode
 	var h3Err *http3.Error
