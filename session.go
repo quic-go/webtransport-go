@@ -135,16 +135,17 @@ func (s *Session) writeToConnectStream() {
 
 			n, err := s.str.Write(c.Append(nil))
 			if err != nil {
+				if n > 0 {
+					s.str.CancelRead(WTSessionGoneErrorCode)
+					s.str.CancelWrite(WTSessionGoneErrorCode)
+					s.closeWithError(err, nil)
+					return
+				}
 				if !s.closeWithError(err, nil) {
 					s.capsuleQueueMx.Lock()
 					hasClose := s.pendingCloseCapsule != nil
 					s.capsuleQueueMx.Unlock()
 					if hasClose {
-						if n > 0 {
-							s.str.CancelRead(WTSessionGoneErrorCode)
-							s.str.CancelWrite(WTSessionGoneErrorCode)
-							return
-						}
 						continue
 					}
 				}
