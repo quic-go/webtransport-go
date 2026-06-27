@@ -2,6 +2,7 @@ package webtransport
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net"
 	"sync"
@@ -47,9 +48,22 @@ type Session struct {
 	closeMx  sync.Mutex
 	closeErr error // not nil once the session is closed
 
+	capsuleQueueMx      sync.Mutex
+	capsuleQueue        []capsule
+	pendingCloseCapsule *closeSessionCapsule
+	capsuleQueueUpdated chan struct{}
+
 	incomingStreams incomingStreamsMap
 	outgoingStreams outgoingStreamsMap
 }
+
+const (
+	// Capsule writes can block if the peer withholds CONNECT stream flow control credit.
+	// We bound the queue to avoid unbounded memory growth.
+	// 4096 should be more than enough slack for normal loss / reordering.
+	maxQueuedOutgoingCapsules = 4096
+	closeSessionTimeout       = 10 * time.Millisecond
+)
 
 func newSession(ctx context.Context, sessionID sessionID, conn *quic.Conn, str http3Stream, applicationProtocol string) *Session {
 	ctx, ctxCancel := context.WithCancel(ctx)
@@ -59,33 +73,115 @@ func newSession(ctx context.Context, sessionID sessionID, conn *quic.Conn, str h
 		str:                 str,
 		applicationProtocol: applicationProtocol,
 		ctx:                 ctx,
+		capsuleQueueUpdated: make(chan struct{}, 1),
 		incomingStreams:     *newIncomingStreamsMap(ctx),
-		outgoingStreams:     *newOutgoingStreamsMap(conn, sessionID),
 	}
+	c.outgoingStreams = *newOutgoingStreamsMap(conn, sessionID)
 
 	go func() {
 		defer ctxCancel()
-		c.handleConn()
+		c.readFromConnectStream()
+	}()
+	go func() {
+		defer ctxCancel()
+		c.writeToConnectStream()
 	}()
 	return c
 }
 
-func (s *Session) handleConn() {
+func (s *Session) readFromConnectStream() {
 	for {
 		c, err := parseNextCapsule(s.str)
 		if err != nil {
-			s.closeWithError(&http3.Error{ErrorCode: http3.ErrCodeDatagramError, ErrorMessage: err.Error()})
+			s.closeWithError(&http3.Error{ErrorCode: http3.ErrCodeDatagramError, ErrorMessage: err.Error()}, nil)
 			return
 		}
 		switch c := c.(type) {
 		case closeSessionCapsule:
-			s.closeWithError(c.ToSessionError())
+			s.closeWithError(c.ToSessionError(), nil)
 			return
 		case maxStreamsBidiCapsule, maxStreamsUniCapsule:
 			// TODO: handle max streams capsules
 		case streamsBlockedBidiCapsule, streamsBlockedUniCapsule:
 			// TODO: log blocked capsules
 		}
+	}
+}
+
+func (s *Session) writeToConnectStream() {
+	// This goroutine owns all writes to the CONNECT stream.
+	// WT_CLOSE_SESSION is sent from here so it doesn't race with capsule writes.
+	for {
+		select {
+		case <-s.ctx.Done():
+			return
+		case <-s.capsuleQueueUpdated:
+		}
+
+		for {
+			s.capsuleQueueMx.Lock()
+			if s.pendingCloseCapsule != nil {
+				closeCapsule := *s.pendingCloseCapsule
+				s.capsuleQueueMx.Unlock()
+				_ = closeSessionStream(s.str, closeCapsule)
+				return
+			}
+			if len(s.capsuleQueue) == 0 {
+				s.capsuleQueueMx.Unlock()
+				break
+			}
+			c := s.capsuleQueue[0]
+			s.capsuleQueueMx.Unlock()
+
+			n, err := s.str.Write(c.Append(nil))
+			if err != nil {
+				if n > 0 {
+					s.str.CancelRead(WTSessionGoneErrorCode)
+					s.str.CancelWrite(WTSessionGoneErrorCode)
+					s.closeWithError(err, nil)
+					return
+				}
+				if !s.closeWithError(err, nil) {
+					s.capsuleQueueMx.Lock()
+					hasClose := s.pendingCloseCapsule != nil
+					s.capsuleQueueMx.Unlock()
+					if hasClose {
+						continue
+					}
+				}
+				return
+			}
+			s.capsuleQueueMx.Lock()
+			if len(s.capsuleQueue) > 0 {
+				s.capsuleQueue = s.capsuleQueue[1:]
+			}
+			s.capsuleQueueMx.Unlock()
+		}
+	}
+}
+
+func (s *Session) queueCapsule(c capsule) {
+	select {
+	case <-s.ctx.Done():
+		return
+	default:
+	}
+
+	s.capsuleQueueMx.Lock()
+	if len(s.capsuleQueue) >= maxQueuedOutgoingCapsules {
+		s.capsuleQueueMx.Unlock()
+		s.closeWithError(&http3.Error{
+			ErrorCode:    http3.ErrCodeExcessiveLoad,
+			ErrorMessage: "webtransport: outgoing capsule queue full",
+		}, nil)
+		return
+	}
+	s.capsuleQueue = append(s.capsuleQueue, c)
+	s.capsuleQueueMx.Unlock()
+
+	select {
+	case s.capsuleQueueUpdated <- struct{}{}:
+	default:
 	}
 }
 
@@ -181,22 +277,19 @@ func (s *Session) RemoteAddr() net.Addr {
 }
 
 func (s *Session) CloseWithError(code SessionErrorCode, msg string) error {
-	first, err := s.closeWithError(&SessionError{ErrorCode: code, Message: msg})
-	if err != nil || !first {
-		return err
+	closeCapsule := closeSessionCapsule{ErrorCode: code, Message: msg}
+	if first := s.closeWithError(&SessionError{ErrorCode: code, Message: msg}, &closeCapsule); first {
+		<-s.ctx.Done()
 	}
-
-	err = closeSessionStream(s.str, code, msg)
-	<-s.ctx.Done()
-	return err
+	return nil
 }
 
-func closeSessionStream(str http3Stream, code SessionErrorCode, msg string) error {
+func closeSessionStream(str http3Stream, closeCapsule closeSessionCapsule) error {
 	// Optimistically send the WT_CLOSE_SESSION Capsule:
 	// If we're flow-control limited, we don't want to wait for the receiver to issue new flow control credits.
 	// There's no idiomatic way to do a non-blocking write in Go, so we set a short deadline.
-	str.SetWriteDeadline(time.Now().Add(10 * time.Millisecond))
-	if _, err := str.Write((closeSessionCapsule{ErrorCode: code, Message: msg}).Append(nil)); err != nil {
+	str.SetWriteDeadline(time.Now().Add(closeSessionTimeout))
+	if _, err := str.Write(closeCapsule.Append(nil)); err != nil {
 		str.CancelWrite(WTSessionGoneErrorCode)
 	}
 
@@ -212,19 +305,49 @@ func (s *Session) ReceiveDatagram(ctx context.Context) ([]byte, error) {
 	return s.str.ReceiveDatagram(ctx)
 }
 
-func (s *Session) closeWithError(closeErr error) (bool /* first call to close session */, error) {
+func (s *Session) closeWithError(closeErr error, closeCapsule *closeSessionCapsule) bool {
 	s.closeMx.Lock()
-	defer s.closeMx.Unlock()
 	// Duplicate call, or the remote already closed this session.
 	if s.closeErr != nil {
-		return false, nil
+		s.closeMx.Unlock()
+		return false
 	}
 	s.closeErr = closeErr
+	s.closeMx.Unlock()
 
 	s.outgoingStreams.CloseSession(closeErr)
 	s.incomingStreams.CloseSession(closeErr)
 
-	return true, nil
+	if closeCapsule != nil {
+		s.capsuleQueueMx.Lock()
+		s.capsuleQueue = nil
+		s.pendingCloseCapsule = closeCapsule
+		s.capsuleQueueMx.Unlock()
+
+		s.str.SetWriteDeadline(time.Now().Add(closeSessionTimeout))
+		select {
+		case s.capsuleQueueUpdated <- struct{}{}:
+		default:
+		}
+		return true
+	}
+
+	s.capsuleQueueMx.Lock()
+	s.capsuleQueue = nil
+	s.pendingCloseCapsule = nil
+	s.capsuleQueueMx.Unlock()
+
+	code := WTSessionGoneErrorCode
+	var h3Err *http3.Error
+	var strErr *quic.StreamError
+	if errors.As(closeErr, &h3Err) {
+		code = quic.StreamErrorCode(h3Err.ErrorCode)
+	} else if errors.As(closeErr, &strErr) {
+		code = strErr.ErrorCode
+	}
+	s.str.CancelRead(code)
+	s.str.CancelWrite(code)
+	return true
 }
 
 // SessionState returns the current state of the session
