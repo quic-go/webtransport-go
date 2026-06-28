@@ -56,39 +56,79 @@ type incomingStreamsMap[T incomingStream] struct {
 	ctx    context.Context
 	cancel context.CancelCauseFunc
 
-	acceptQueue acceptQueue[T]
+	acceptQueue     acceptQueue[T]
+	queueMaxStreams func(uint64)
+
+	maxStreamsMx     sync.Mutex
+	queuedMaxStreams uint64
 
 	mx sync.Mutex
 	m  map[quic.StreamID]T
+
+	numStreams     uint64 // total number of streams opened by the peer
+	maxStreams     uint64 // stream limit, as advertised to the peer
+	maxOpenStreams uint64 // maximum number of concurrently open streams
 }
 
-func newIncomingStreamsMap[T incomingStream]() *incomingStreamsMap[T] {
+func newIncomingStreamsMap[T incomingStream](maxOpenStreams uint64, queueMaxStreams func(uint64)) *incomingStreamsMap[T] {
+	maxOpenStreams = min(maxOpenStreams, maxStreamsLimit)
+	if queueMaxStreams == nil {
+		queueMaxStreams = func(uint64) {}
+	}
 	ctx, cancel := context.WithCancelCause(context.Background())
 	return &incomingStreamsMap[T]{
-		ctx:         ctx,
-		cancel:      cancel,
-		acceptQueue: *newAcceptQueue[T](),
-		m:           make(map[quic.StreamID]T),
+		ctx:              ctx,
+		cancel:           cancel,
+		acceptQueue:      *newAcceptQueue[T](),
+		queueMaxStreams:  queueMaxStreams,
+		queuedMaxStreams: maxOpenStreams,
+		maxStreams:       maxOpenStreams,
+		maxOpenStreams:   maxOpenStreams,
+		m:                make(map[quic.StreamID]T),
 	}
 }
 
-func (s *incomingStreamsMap[T]) addStream(id quic.StreamID, str T) {
+func (s *incomingStreamsMap[T]) AddStream(id quic.StreamID, str T) {
 	s.mx.Lock()
 	if closeErr := context.Cause(s.ctx); closeErr != nil {
 		s.mx.Unlock()
 		str.closeWithSession(closeErr)
 		return
 	}
+	s.numStreams++
 	s.m[id] = str
 	s.mx.Unlock()
 
 	s.acceptQueue.add(str)
 }
 
-func (s *incomingStreamsMap[T]) removeStream(id quic.StreamID) {
+func (s *incomingStreamsMap[T]) RemoveStream(id quic.StreamID) {
 	s.mx.Lock()
+	if _, ok := s.m[id]; !ok {
+		s.mx.Unlock()
+		return
+	}
 	delete(s.m, id)
+
+	var maxStreams uint64
+	var shouldQueue bool
+	if uint64(len(s.m)) < s.maxOpenStreams && s.maxStreams < maxStreamsLimit {
+		maxStreams = min(s.numStreams+s.maxOpenStreams-uint64(len(s.m)), maxStreamsLimit)
+		if maxStreams > s.maxStreams {
+			s.maxStreams = maxStreams
+			shouldQueue = true
+		}
+	}
 	s.mx.Unlock()
+	if shouldQueue {
+		s.maxStreamsMx.Lock()
+		if maxStreams > s.queuedMaxStreams {
+			s.queuedMaxStreams = maxStreams
+			// WT_MAX_STREAMS must not be queued out of order
+			s.queueMaxStreams(maxStreams)
+		}
+		s.maxStreamsMx.Unlock()
+	}
 }
 
 func (s *incomingStreamsMap[T]) AcceptStream(ctx context.Context) (T, error) {
