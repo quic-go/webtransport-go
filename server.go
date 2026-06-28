@@ -92,6 +92,7 @@ type Server struct {
 
 	connsMx sync.Mutex
 	conns   map[*quic.Conn]*sessionManager
+	closed  bool
 }
 
 func (s *Server) initialize() error {
@@ -150,8 +151,18 @@ func (s *Server) serve(conn net.PacketConn) error {
 		if err != nil {
 			return err
 		}
+
+		if s.isClosed() {
+			// Do not accept a new connection during shutdown
+			qconn.CloseWithError(0, "")
+			continue
+		}
+
 		s.refCount.Go(func() {
-			if err := s.ServeQUICConn(qconn); err != nil {
+			err := s.ServeQUICConn(qconn)
+			if errors.Is(err, context.Canceled) {
+				return
+			} else if err != nil {
 				log.Printf("http3: error serving QUIC connection: %v", err)
 			}
 		})
@@ -172,6 +183,14 @@ func (s *Server) ServeQUICConn(conn *quic.Conn) error {
 	}
 
 	s.connsMx.Lock()
+
+	if s.closed {
+		// Shutting down, do not accept new connections
+		s.connsMx.Unlock()
+		conn.CloseWithError(0, "")
+		return context.Canceled
+	}
+
 	sessMgr, ok := s.conns[conn]
 	if !ok {
 		sessMgr = newSessionManager(s.timeout())
@@ -192,7 +211,7 @@ func (s *Server) ServeQUICConn(conn *quic.Conn) error {
 		return err
 	}
 
-	// slose the connection when the server context is cancelled.
+	// Close the connection when the server context is cancelled.
 	go func() {
 		select {
 		case <-s.ctx.Done():
@@ -320,23 +339,39 @@ func (s *Server) ListenAndServeTLS(certFile, keyFile string) error {
 	return s.ListenAndServe()
 }
 
+func (s *Server) isClosed() bool {
+	s.connsMx.Lock()
+	defer s.connsMx.Unlock()
+
+	return s.closed
+}
+
 func (s *Server) Close() error {
 	// Make sure that ctxCancel is defined.
 	// This is expected to be uncommon.
 	// It only happens if the server is closed without Serve / ListenAndServe having been called.
 	s.initOnce.Do(func() {})
 
-	if s.ctxCancel != nil {
-		s.ctxCancel()
-	}
+	// Close the established connections first, while the listener's socket is still
+	// open, so each CONNECTION_CLOSE frame is actually transmitted to the peer.
+	// This must happen before canceling s.ctx: canceling it makes serve() return,
+	// and its deferred listener teardown closes the socket. If the socket is torn
+	// down first, the queued CONNECTION_CLOSE frames are never sent and the peers
+	// only learn the connections are gone at their idle timeout.
 	s.connsMx.Lock()
+	s.closed = true
 	if s.conns != nil {
-		for _, mgr := range s.conns {
+		for conn, mgr := range s.conns {
+			conn.CloseWithError(0, "")
 			mgr.Close()
 		}
 		s.conns = nil
 	}
 	s.connsMx.Unlock()
+
+	if s.ctxCancel != nil {
+		s.ctxCancel()
+	}
 
 	err := s.H3.Close()
 	s.refCount.Wait()
