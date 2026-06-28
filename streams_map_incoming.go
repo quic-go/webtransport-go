@@ -59,6 +59,9 @@ type incomingStreamsMap[T incomingStream] struct {
 	acceptQueue     acceptQueue[T]
 	queueMaxStreams func(uint64)
 
+	maxStreamsMx     sync.Mutex
+	queuedMaxStreams uint64
+
 	mx sync.Mutex
 	m  map[quic.StreamID]T
 
@@ -74,13 +77,14 @@ func newIncomingStreamsMap[T incomingStream](maxOpenStreams uint64, queueMaxStre
 	}
 	ctx, cancel := context.WithCancelCause(context.Background())
 	return &incomingStreamsMap[T]{
-		ctx:             ctx,
-		cancel:          cancel,
-		acceptQueue:     *newAcceptQueue[T](),
-		queueMaxStreams: queueMaxStreams,
-		maxStreams:      maxOpenStreams,
-		maxOpenStreams:  maxOpenStreams,
-		m:               make(map[quic.StreamID]T),
+		ctx:              ctx,
+		cancel:           cancel,
+		acceptQueue:      *newAcceptQueue[T](),
+		queueMaxStreams:  queueMaxStreams,
+		queuedMaxStreams: maxOpenStreams,
+		maxStreams:       maxOpenStreams,
+		maxOpenStreams:   maxOpenStreams,
+		m:                make(map[quic.StreamID]T),
 	}
 }
 
@@ -116,9 +120,14 @@ func (s *incomingStreamsMap[T]) RemoveStream(id quic.StreamID) {
 		}
 	}
 	s.mx.Unlock()
-
 	if shouldQueue {
-		s.queueMaxStreams(maxStreams)
+		s.maxStreamsMx.Lock()
+		if maxStreams > s.queuedMaxStreams {
+			s.queuedMaxStreams = maxStreams
+			// WT_MAX_STREAMS must not be queued out of order
+			s.queueMaxStreams(maxStreams)
+		}
+		s.maxStreamsMx.Unlock()
 	}
 }
 
