@@ -12,8 +12,8 @@ import (
 func TestIncomingStreamsMapAddStreamAfterCloseSession(t *testing.T) {
 	ctx := context.Background()
 	clientConn, serverConn := newConnPair(t, newUDPConnLocalhost(t), newUDPConnLocalhost(t))
-	streams := newIncomingStreamsMap[*Stream]()
-	uniStreams := newIncomingStreamsMap[*ReceiveStream]()
+	streams := newIncomingStreamsMap[*Stream](maxStreamsLimit, nil)
+	uniStreams := newIncomingStreamsMap[*ReceiveStream](maxStreamsLimit, nil)
 
 	serverStr, err := serverConn.OpenStream()
 	require.NoError(t, err)
@@ -22,7 +22,7 @@ func TestIncomingStreamsMapAddStreamAfterCloseSession(t *testing.T) {
 	clientStr, err := clientConn.AcceptStream(ctx)
 	require.NoError(t, err)
 	streamID := clientStr.StreamID()
-	streams.addStream(streamID, newStream(clientStr, nil, func() { streams.removeStream(streamID) }))
+	streams.AddStream(streamID, newStream(clientStr, nil, func() { streams.RemoveStream(streamID) }))
 
 	str, err := streams.AcceptStream(ctx)
 	require.NoError(t, err)
@@ -41,7 +41,7 @@ func TestIncomingStreamsMapAddStreamAfterCloseSession(t *testing.T) {
 	clientStr, err = clientConn.AcceptStream(ctx)
 	require.NoError(t, err)
 	streamID = clientStr.StreamID()
-	streams.addStream(streamID, newStream(clientStr, nil, func() { streams.removeStream(streamID) }))
+	streams.AddStream(streamID, newStream(clientStr, nil, func() { streams.RemoveStream(streamID) }))
 
 	select {
 	case <-serverStr.Context().Done():
@@ -60,7 +60,7 @@ func TestIncomingStreamsMapAddStreamAfterCloseSession(t *testing.T) {
 	clientUniStr, err := clientConn.AcceptUniStream(ctx)
 	require.NoError(t, err)
 	uniStreamID := clientUniStr.StreamID()
-	uniStreams.addStream(uniStreamID, newReceiveStream(clientUniStr, func() { uniStreams.removeStream(uniStreamID) }))
+	uniStreams.AddStream(uniStreamID, newReceiveStream(clientUniStr, func() { uniStreams.RemoveStream(uniStreamID) }))
 
 	select {
 	case <-serverUniStr.Context().Done():
@@ -74,12 +74,12 @@ func TestIncomingStreamsMapAddStreamAfterCloseSession(t *testing.T) {
 }
 
 func TestIncomingStreamsMapCloseSessionUnblocksAcceptStream(t *testing.T) {
-	streams := newIncomingStreamsMap[*Stream]()
+	streams := newIncomingStreamsMap[*Stream](maxStreamsLimit, nil)
 	sessionErr := &SessionError{ErrorCode: 42, Message: "bye"}
 
 	errChan := make(chan error, 1)
 	go func() {
-		_, err := streams.AcceptStream(context.Background())
+		_, err := streams.AcceptStream(t.Context())
 		errChan <- err
 	}()
 
@@ -90,4 +90,36 @@ func TestIncomingStreamsMapCloseSessionUnblocksAcceptStream(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("timeout")
 	}
+}
+
+func TestIncomingStreamsMapQueuesMaxStreamsOnRemove(t *testing.T) {
+	var capsules []uint64
+	streams := newIncomingStreamsMap[*ReceiveStream](3, func(limit uint64) {
+		capsules = append(capsules, limit)
+	})
+
+	streams.AddStream(1, newReceiveStream(nil, nil))
+	streams.AddStream(2, newReceiveStream(nil, nil))
+
+	streams.RemoveStream(1)
+	require.Equal(t, []uint64{4}, capsules)
+
+	streams.RemoveStream(2)
+	require.Equal(t, []uint64{4, 5}, capsules)
+}
+
+func TestIncomingStreamsMapMaxStreamsLimit(t *testing.T) {
+	var capsules []uint64
+	streams := newIncomingStreamsMap[*ReceiveStream](maxStreamsLimit-1, func(limit uint64) {
+		capsules = append(capsules, limit)
+	})
+
+	streams.AddStream(1, newReceiveStream(nil, nil))
+	streams.AddStream(2, newReceiveStream(nil, nil))
+
+	streams.RemoveStream(1)
+	require.Equal(t, []uint64{maxStreamsLimit}, capsules)
+
+	streams.RemoveStream(2)
+	require.Equal(t, []uint64{maxStreamsLimit}, capsules)
 }

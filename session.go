@@ -76,9 +76,13 @@ func newSession(ctx context.Context, sessionID sessionID, conn *quic.Conn, str h
 		applicationProtocol: applicationProtocol,
 		ctx:                 ctx,
 		capsuleQueueUpdated: make(chan struct{}, 1),
-		incomingStreams:     newIncomingStreamsMap[*Stream](),
-		incomingUniStreams:  newIncomingStreamsMap[*ReceiveStream](),
 	}
+	c.incomingStreams = newIncomingStreamsMap[*Stream](maxStreamsLimit, func(limit uint64) {
+		c.queueCapsule(maxStreamsBidiCapsule{MaximumStreams: limit})
+	})
+	c.incomingUniStreams = newIncomingStreamsMap[*ReceiveStream](maxStreamsLimit, func(limit uint64) {
+		c.queueCapsule(maxStreamsUniCapsule{MaximumStreams: limit})
+	})
 	c.outgoingStreams = newOutgoingBidiStreamsMap(conn, sessionID, c.queueCapsule)
 	c.outgoingUniStreams = newOutgoingUniStreamsMap(conn, sessionID, c.queueCapsule)
 
@@ -206,13 +210,13 @@ func (s *Session) queueCapsule(c capsule) {
 // addIncomingStream adds a bidirectional stream that the remote peer opened
 func (s *Session) addIncomingStream(qstr *quic.Stream) {
 	id := qstr.StreamID()
-	s.incomingStreams.addStream(id, newStream(qstr, nil, func() { s.incomingStreams.removeStream(id) }))
+	s.incomingStreams.AddStream(id, newStream(qstr, nil, func() { s.incomingStreams.RemoveStream(id) }))
 }
 
 // addIncomingUniStream adds a unidirectional stream that the remote peer opened
 func (s *Session) addIncomingUniStream(qstr *quic.ReceiveStream) {
 	id := qstr.StreamID()
-	s.incomingUniStreams.addStream(id, newReceiveStream(qstr, func() { s.incomingUniStreams.removeStream(id) }))
+	s.incomingUniStreams.AddStream(id, newReceiveStream(qstr, func() { s.incomingUniStreams.RemoveStream(id) }))
 }
 
 // Context returns a context that is closed when the session is closed.
