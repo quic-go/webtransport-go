@@ -104,8 +104,22 @@ func (s *Session) readFromConnectStream() {
 		case closeSessionCapsule:
 			s.closeWithError(c.ToSessionError(), nil)
 			return
-		case maxStreamsBidiCapsule, maxStreamsUniCapsule:
-			// TODO: handle max streams capsules
+		case maxStreamsBidiCapsule:
+			if err := s.outgoingStreams.UpdateStreamLimit(c.MaximumStreams); err != nil {
+				s.closeWithError(&http3.Error{
+					ErrorCode:    http3.ErrCode(WTFlowControlErrorCode),
+					ErrorMessage: err.Error(),
+				}, nil)
+				return
+			}
+		case maxStreamsUniCapsule:
+			if err := s.outgoingUniStreams.UpdateStreamLimit(c.MaximumStreams); err != nil {
+				s.closeWithError(&http3.Error{
+					ErrorCode:    http3.ErrCode(WTFlowControlErrorCode),
+					ErrorMessage: err.Error(),
+				}, nil)
+				return
+			}
 		case streamsBlockedBidiCapsule, streamsBlockedUniCapsule:
 			// TODO: log blocked capsules
 		}

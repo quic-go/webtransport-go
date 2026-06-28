@@ -183,7 +183,7 @@ func TestOutgoingStreamsMapBlockedCapsules(t *testing.T) {
 	}
 
 	// allow 2 more streams
-	streams.UpdateStreamLimit(5)
+	require.NoError(t, streams.UpdateStreamLimit(5))
 	for range 2 {
 		select {
 		case <-openStreamSyncCalled:
@@ -208,7 +208,7 @@ func TestOutgoingStreamsMapBlockedCapsules(t *testing.T) {
 	default:
 	}
 
-	streams.UpdateStreamLimit(6)
+	require.NoError(t, streams.UpdateStreamLimit(6))
 	select {
 	case <-openStreamSyncCalled:
 	case <-time.After(time.Second):
@@ -234,6 +234,23 @@ func TestOutgoingStreamsMapBlockedCapsules(t *testing.T) {
 			t.Fatal("timeout waiting for stream")
 		}
 	}
+}
+
+func TestOutgoingStreamsMapUpdateStreamLimitDuplicateAndDecrease(t *testing.T) {
+	streams := newOutgoingStreamsMap(
+		func() (*outgoingStreamForTests, quic.StreamID, error) { return &outgoingStreamForTests{}, 0, nil },
+		func(context.Context) (*outgoingStreamForTests, quic.StreamID, error) {
+			return &outgoingStreamForTests{}, 0, nil
+		},
+		func(uint64) {},
+	)
+	streams.maxStreams = 5
+
+	require.NoError(t, streams.UpdateStreamLimit(5))
+	err := streams.UpdateStreamLimit(4)
+	require.ErrorIs(t, err, errMaxStreamsDecreased)
+	require.ErrorContains(t, err, "current limit: 5, received limit: 4")
+	require.Equal(t, uint64(5), streams.maxStreams)
 }
 
 func TestOutgoingStreamsMapQueueBlockedCanCloseSession(t *testing.T) {

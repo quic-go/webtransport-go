@@ -240,6 +240,25 @@ func TestForbiddenStreamDataFlowControlCapsulesCloseSession(t *testing.T) {
 	}
 }
 
+func TestMaxStreamsCapsuleDecreaseClosesSession(t *testing.T) {
+	b := (maxStreamsBidiCapsule{MaximumStreams: maxOutgoingStreams}).Append(nil)
+	b = (maxStreamsBidiCapsule{MaximumStreams: maxOutgoingStreams - 1}).Append(b)
+
+	sess := newSession(context.Background(), 42, nil, mockHTTP3Stream{bytes.NewReader(b)}, "")
+	select {
+	case <-sess.Context().Done():
+	case <-time.After(time.Second):
+		t.Fatal("timeout")
+	}
+
+	sess.closeMx.Lock()
+	err := sess.closeErr
+	sess.closeMx.Unlock()
+
+	require.ErrorIs(t, err, &http3.Error{ErrorCode: http3.ErrCode(WTFlowControlErrorCode)})
+	require.ErrorContains(t, err, errMaxStreamsDecreased.Error())
+}
+
 func TestSessionSendsQueuedCapsules(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
