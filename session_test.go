@@ -181,6 +181,43 @@ func TestCloseWithErrorTruncatesSendMessage(t *testing.T) {
 	}
 }
 
+func TestExportKeyingMaterial(t *testing.T) {
+	clientConn, serverConn := newConnPair(t, newUDPConnLocalhost(t), newUDPConnLocalhost(t))
+	id := sessionID(0x1020304050607080)
+	clientSess := newSession(context.Background(), id, clientConn, mockHTTP3Stream{bytes.NewReader(nil)}, "")
+	serverSess := newSession(context.Background(), id, serverConn, mockHTTP3Stream{bytes.NewReader(nil)}, "")
+
+	label := "label"
+	context := []byte("context")
+	clientMaterial, err := clientSess.ExportKeyingMaterial(label, context, 32)
+	require.NoError(t, err)
+	serverMaterial, err := serverSess.ExportKeyingMaterial(label, context, 32)
+	require.NoError(t, err)
+	require.Equal(t, clientMaterial, serverMaterial)
+
+	exporterContext := make([]byte, 8, 8+1+len(label)+1+len(context))
+	binary.BigEndian.PutUint64(exporterContext, uint64(id))
+	exporterContext = append(exporterContext, byte(len(label)))
+	exporterContext = append(exporterContext, label...)
+	exporterContext = append(exporterContext, byte(len(context)))
+	exporterContext = append(exporterContext, context...)
+	connState := clientConn.ConnectionState()
+	expected, err := connState.TLS.ExportKeyingMaterial("EXPORTER-WebTransport", exporterContext, 32)
+	require.NoError(t, err)
+	require.Equal(t, expected, clientMaterial)
+
+	otherMaterial, err := clientSess.ExportKeyingMaterial("other", context, 32)
+	require.NoError(t, err)
+	require.NotEqual(t, clientMaterial, otherMaterial)
+
+	_, err = clientSess.ExportKeyingMaterial(strings.Repeat("a", 256), nil, 32)
+	require.ErrorContains(t, err, "exporter label")
+	_, err = clientSess.ExportKeyingMaterial(label, bytes.Repeat([]byte("a"), 256), 32)
+	require.ErrorContains(t, err, "exporter context")
+	_, err = clientSess.ExportKeyingMaterial(label, nil, -1)
+	require.ErrorContains(t, err, "non-negative")
+}
+
 func TestCapsuleParseErrorClosesSessionWithDatagramError(t *testing.T) {
 	b := quicvarint.Append(nil, uint64(maxStreamsBidiCapsuleType))
 	b = quicvarint.Append(b, uint64(quicvarint.Len(42)+1))

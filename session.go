@@ -2,6 +2,7 @@ package webtransport
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
 	"io"
 	"net"
@@ -305,6 +306,29 @@ func (s *Session) SendDatagram(b []byte) error {
 
 func (s *Session) ReceiveDatagram(ctx context.Context) ([]byte, error) {
 	return s.str.ReceiveDatagram(ctx)
+}
+
+// ExportKeyingMaterial exports keying material bound to this WebTransport session.
+func (s *Session) ExportKeyingMaterial(label string, context []byte, length int) ([]byte, error) {
+	if len(label) > 255 {
+		return nil, errors.New("webtransport: exporter label longer than 255 bytes")
+	}
+	if len(context) > 255 {
+		return nil, errors.New("webtransport: exporter context longer than 255 bytes")
+	}
+	if length < 0 {
+		return nil, errors.New("webtransport: exporter length must be non-negative")
+	}
+
+	exporterContext := make([]byte, 8, 8+1+len(label)+1+len(context))
+	binary.BigEndian.PutUint64(exporterContext, uint64(s.sessionID))
+	exporterContext = append(exporterContext, byte(len(label)))
+	exporterContext = append(exporterContext, label...)
+	exporterContext = append(exporterContext, byte(len(context)))
+	exporterContext = append(exporterContext, context...)
+
+	connState := s.conn.ConnectionState()
+	return connState.TLS.ExportKeyingMaterial("EXPORTER-WebTransport", exporterContext, length)
 }
 
 func (s *Session) closeWithError(closeErr error, closeCapsule *closeSessionCapsule) bool {
