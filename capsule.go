@@ -12,8 +12,10 @@ import (
 
 const (
 	closeSessionCapsuleType       http3.CapsuleType = 0x2843
+	maxStreamDataCapsuleType      http3.CapsuleType = 0x190b4d3e // only used on WebTransport over HTTP/2
 	maxStreamsBidiCapsuleType     http3.CapsuleType = 0x190b4d3f
 	maxStreamsUniCapsuleType      http3.CapsuleType = 0x190b4d40
+	streamDataBlockedCapsuleType  http3.CapsuleType = 0x190b4d42 // only used on WebTransport over HTTP/2
 	streamsBlockedBidiCapsuleType http3.CapsuleType = 0x190b4d43
 	streamsBlockedUniCapsuleType  http3.CapsuleType = 0x190b4d44
 )
@@ -41,6 +43,8 @@ func parseNextCapsule(r io.Reader) (capsule, error) {
 				return nil, err
 			}
 			return capsule, nil
+		case maxStreamDataCapsuleType:
+			return nil, errors.New("WT_MAX_STREAM_DATA capsule received")
 		case maxStreamsBidiCapsuleType:
 			maxStreams, err := parseMaxStreamsCapsule(capsuleReader)
 			if err != nil {
@@ -53,6 +57,8 @@ func parseNextCapsule(r io.Reader) (capsule, error) {
 				return nil, err
 			}
 			return maxStreamsUniCapsule{MaximumStreams: maxStreams}, nil
+		case streamDataBlockedCapsuleType:
+			return nil, errors.New("WT_STREAM_DATA_BLOCKED capsule received")
 		case streamsBlockedBidiCapsuleType:
 			maxStreams, err := parseStreamsBlockedCapsule(capsuleReader)
 			if err != nil {
