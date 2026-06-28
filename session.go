@@ -53,8 +53,9 @@ type Session struct {
 	pendingCloseCapsule *closeSessionCapsule
 	capsuleQueueUpdated chan struct{}
 
-	incomingStreams incomingStreamsMap
-	outgoingStreams outgoingStreamsMap
+	incomingStreams    incomingStreamsMap
+	outgoingStreams    *outgoingStreamsMap[*Stream]
+	outgoingUniStreams *outgoingStreamsMap[*SendStream]
 }
 
 const (
@@ -76,7 +77,8 @@ func newSession(ctx context.Context, sessionID sessionID, conn *quic.Conn, str h
 		capsuleQueueUpdated: make(chan struct{}, 1),
 		incomingStreams:     *newIncomingStreamsMap(ctx),
 	}
-	c.outgoingStreams = *newOutgoingStreamsMap(conn, sessionID, c.queueCapsule)
+	c.outgoingStreams = newOutgoingBidiStreamsMap(conn, sessionID, c.queueCapsule)
+	c.outgoingUniStreams = newOutgoingUniStreamsMap(conn, sessionID, c.queueCapsule)
 
 	go func() {
 		defer ctxCancel()
@@ -245,7 +247,7 @@ func (s *Session) OpenUniStream() (*SendStream, error) {
 	if s.closeErr != nil {
 		return nil, s.closeErr
 	}
-	return s.outgoingStreams.OpenUniStream()
+	return s.outgoingUniStreams.OpenStream()
 }
 
 func (s *Session) OpenUniStreamSync(ctx context.Context) (str *SendStream, err error) {
@@ -256,7 +258,7 @@ func (s *Session) OpenUniStreamSync(ctx context.Context) (str *SendStream, err e
 	}
 	s.closeMx.Unlock()
 
-	str, err = s.outgoingStreams.OpenUniStreamSync(ctx)
+	str, err = s.outgoingUniStreams.OpenStreamSync(ctx)
 
 	s.closeMx.Lock()
 	defer s.closeMx.Unlock()
@@ -316,6 +318,7 @@ func (s *Session) closeWithError(closeErr error, closeCapsule *closeSessionCapsu
 	s.closeMx.Unlock()
 
 	s.outgoingStreams.CloseSession(closeErr)
+	s.outgoingUniStreams.CloseSession(closeErr)
 	s.incomingStreams.CloseSession(closeErr)
 
 	if closeCapsule != nil {
