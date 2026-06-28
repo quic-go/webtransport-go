@@ -35,138 +35,95 @@ func (q *acceptQueue[T]) add(str T) {
 	}
 }
 
-func (q *acceptQueue[T]) next() T {
+func (q *acceptQueue[T]) next() (T, bool) {
 	q.mx.Lock()
 	defer q.mx.Unlock()
 
 	if len(q.queue) == 0 {
-		return *new(T)
+		return *new(T), false
 	}
 	str := q.queue[0]
 	q.queue = q.queue[1:]
-	return str
+	return str, true
 }
 
-type incomingStreamsMap struct {
-	ctx context.Context
-
-	bidiAcceptQueue acceptQueue[*Stream]
-	uniAcceptQueue  acceptQueue[*ReceiveStream]
-
-	mx       sync.Mutex
-	closeErr error
-	m        map[quic.StreamID]func(error)
+type incomingStream interface {
+	*Stream | *ReceiveStream
+	closeWithSession(error)
 }
 
-func newIncomingStreamsMap(ctx context.Context) *incomingStreamsMap {
-	return &incomingStreamsMap{
-		ctx:             ctx,
-		bidiAcceptQueue: *newAcceptQueue[*Stream](),
-		uniAcceptQueue:  *newAcceptQueue[*ReceiveStream](),
-		m:               make(map[quic.StreamID]func(error)),
+type incomingStreamsMap[T incomingStream] struct {
+	ctx    context.Context
+	cancel context.CancelCauseFunc
+
+	acceptQueue acceptQueue[T]
+
+	mx sync.Mutex
+	m  map[quic.StreamID]T
+}
+
+func newIncomingStreamsMap[T incomingStream]() *incomingStreamsMap[T] {
+	ctx, cancel := context.WithCancelCause(context.Background())
+	return &incomingStreamsMap[T]{
+		ctx:         ctx,
+		cancel:      cancel,
+		acceptQueue: *newAcceptQueue[T](),
+		m:           make(map[quic.StreamID]T),
 	}
 }
 
-func (s *incomingStreamsMap) AddStream(qstr *quic.Stream) {
+func (s *incomingStreamsMap[T]) addStream(id quic.StreamID, str T) {
 	s.mx.Lock()
-	if s.closeErr != nil {
+	if closeErr := context.Cause(s.ctx); closeErr != nil {
 		s.mx.Unlock()
-		qstr.CancelRead(WTSessionGoneErrorCode)
-		qstr.CancelWrite(WTSessionGoneErrorCode)
+		str.closeWithSession(closeErr)
 		return
 	}
-	str := newStream(qstr, nil, func() { s.removeStream(qstr.StreamID()) })
-	s.m[qstr.StreamID()] = str.closeWithSession
+	s.m[id] = str
 	s.mx.Unlock()
 
-	s.bidiAcceptQueue.add(str)
+	s.acceptQueue.add(str)
 }
 
-func (s *incomingStreamsMap) AddUniStream(qstr *quic.ReceiveStream) {
-	s.mx.Lock()
-	if s.closeErr != nil {
-		s.mx.Unlock()
-		qstr.CancelRead(WTSessionGoneErrorCode)
-		return
-	}
-	str := newReceiveStream(qstr, func() { s.removeStream(qstr.StreamID()) })
-	s.m[qstr.StreamID()] = str.closeWithSession
-	s.mx.Unlock()
-
-	s.uniAcceptQueue.add(str)
-}
-
-func (s *incomingStreamsMap) removeStream(id quic.StreamID) {
+func (s *incomingStreamsMap[T]) removeStream(id quic.StreamID) {
 	s.mx.Lock()
 	delete(s.m, id)
 	s.mx.Unlock()
 }
 
-func (s *incomingStreamsMap) AcceptStream(ctx context.Context) (*Stream, error) {
-	s.mx.Lock()
-	closeErr := s.closeErr
-	s.mx.Unlock()
-	if closeErr != nil {
-		return nil, closeErr
+func (s *incomingStreamsMap[T]) AcceptStream(ctx context.Context) (T, error) {
+	var zero T
+	if closeErr := context.Cause(s.ctx); closeErr != nil {
+		return zero, closeErr
 	}
 
 	for {
 		// If there's a stream in the accept queue, return it immediately.
-		if str := s.bidiAcceptQueue.next(); str != nil {
+		if str, ok := s.acceptQueue.next(); ok {
 			return str, nil
 		}
 		// No stream in the accept queue. Wait until we accept one.
 		select {
 		case <-s.ctx.Done():
-			s.mx.Lock()
-			closeErr := s.closeErr
-			s.mx.Unlock()
-			return nil, closeErr
+			return zero, context.Cause(s.ctx)
 		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-s.bidiAcceptQueue.c:
+			return zero, ctx.Err()
+		case <-s.acceptQueue.c:
 		}
 	}
 }
 
-func (s *incomingStreamsMap) AcceptUniStream(ctx context.Context) (*ReceiveStream, error) {
-	s.mx.Lock()
-	closeErr := s.closeErr
-	s.mx.Unlock()
-	if closeErr != nil {
-		return nil, closeErr
-	}
-
-	for {
-		// If there's a stream in the accept queue, return it immediately.
-		if str := s.uniAcceptQueue.next(); str != nil {
-			return str, nil
-		}
-		// No stream in the accept queue. Wait until we accept one.
-		select {
-		case <-s.ctx.Done():
-			s.mx.Lock()
-			closeErr := s.closeErr
-			s.mx.Unlock()
-			return nil, closeErr
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-s.uniAcceptQueue.c:
-		}
-	}
-}
-
-func (s *incomingStreamsMap) CloseSession(err error) {
+func (s *incomingStreamsMap[T]) CloseSession(err error) {
 	s.mx.Lock()
 	defer s.mx.Unlock()
 
-	if s.closeErr != nil {
+	if context.Cause(s.ctx) != nil {
 		return
 	}
-	s.closeErr = err
+	s.cancel(err)
 
-	for _, cl := range s.m {
-		cl(err)
+	for _, str := range s.m {
+		str.closeWithSession(err)
 	}
 	s.m = nil
 }
