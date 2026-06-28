@@ -206,11 +206,9 @@ func TestReceiveStreamSessionGone(t *testing.T) {
 func TestReceiveStreamReadDuringSessionGoneAndCloseSession(t *testing.T) {
 	sendStr, recvStr := newUniStreamPair(t)
 
-	sm := newIncomingStreamsMap(context.Background())
-	str := newReceiveStream(recvStr, func() { sm.removeStream(recvStr.StreamID()) })
-	sm.mx.Lock()
-	sm.m[recvStr.StreamID()] = str.closeWithSession
-	sm.mx.Unlock()
+	sm := newIncomingStreamsMap[*ReceiveStream](maxStreamsLimit, nil)
+	str := newReceiveStream(recvStr, func() { sm.RemoveStream(recvStr.StreamID()) })
+	sm.AddStream(recvStr.StreamID(), str)
 
 	// start reading
 	errChan := make(chan error, 1)
@@ -332,10 +330,12 @@ func TestSendStreamHeaderRetryAfterDeadlineError(t *testing.T) {
 func TestSendStreamWriteDuringSessionGoneAndCloseSession(t *testing.T) {
 	sendStr, recvStr := newUniStreamPair(t)
 
-	sm := newOutgoingStreamsMap(nil, 0)
+	sm := newOutgoingUniStreamsMap(nil, 0, func(c capsule) {
+		t.Fatalf("unexpected capsule: %#v", c)
+	})
 	str := newSendStream(sendStr, nil, func() { sm.removeStream(sendStr.StreamID()) })
 	sm.mx.Lock()
-	sm.m[sendStr.StreamID()] = str.closeWithSession
+	sm.m[sendStr.StreamID()] = str
 	sm.mx.Unlock()
 
 	// write in a loop

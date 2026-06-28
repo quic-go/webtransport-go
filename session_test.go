@@ -32,6 +32,11 @@ func (s mockHTTP3Stream) CancelRead(quic.StreamErrorCode)                 {}
 func (s mockHTTP3Stream) CancelWrite(quic.StreamErrorCode)                {}
 func (s mockHTTP3Stream) SetWriteDeadline(time.Time) error                { return nil }
 
+type quicHTTP3Stream struct{ *quic.Stream }
+
+func (s quicHTTP3Stream) ReceiveDatagram(context.Context) ([]byte, error) { return nil, io.EOF }
+func (s quicHTTP3Stream) SendDatagram([]byte) error                       { return nil }
+
 func scaleDuration(d time.Duration) time.Duration {
 	if os.Getenv("CI") != "" {
 		return 5 * d
@@ -49,10 +54,10 @@ func newUDPConnLocalhost(t testing.TB) *net.UDPConn {
 
 func newConnPair(t *testing.T, clientConn, serverConn net.PacketConn) (client, server *quic.Conn) {
 	t.Helper()
-
-	ln, err := quic.ListenEarly(
+	return newConnPairWithServerConfig(
+		t,
+		clientConn,
 		serverConn,
-		TLSConf,
 		&quic.Config{
 			InitialStreamReceiveWindow:       1 << 60,
 			InitialConnectionReceiveWindow:   1 << 60,
@@ -60,6 +65,12 @@ func newConnPair(t *testing.T, clientConn, serverConn net.PacketConn) (client, s
 			EnableStreamResetPartialDelivery: true,
 		},
 	)
+}
+
+func newConnPairWithServerConfig(t *testing.T, clientConn, serverConn net.PacketConn, serverConf *quic.Config) (client, server *quic.Conn) {
+	t.Helper()
+
+	ln, err := quic.ListenEarly(serverConn, TLSConf, serverConf)
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -205,4 +216,189 @@ func TestCapsuleParseErrorClosesSessionWithDatagramError(t *testing.T) {
 
 	require.ErrorIs(t, err, &http3.Error{ErrorCode: http3.ErrCodeDatagramError})
 	require.ErrorContains(t, err, "trailing data")
+}
+
+func TestForbiddenStreamDataFlowControlCapsulesCloseSession(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		typ  http3.CapsuleType
+		msg  string
+	}{
+		{
+			name: "WT_MAX_STREAM_DATA",
+			typ:  maxStreamDataCapsuleType,
+			msg:  "WT_MAX_STREAM_DATA capsule received",
+		},
+		{
+			name: "WT_STREAM_DATA_BLOCKED",
+			typ:  streamDataBlockedCapsuleType,
+			msg:  "WT_STREAM_DATA_BLOCKED capsule received",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			b := quicvarint.Append(nil, uint64(tc.typ))
+			b = quicvarint.Append(b, 0)
+
+			sess := newSession(context.Background(), 42, nil, mockHTTP3Stream{bytes.NewReader(b)}, "")
+			select {
+			case <-sess.Context().Done():
+			case <-time.After(time.Second):
+				t.Fatal("timeout")
+			}
+
+			sess.closeMx.Lock()
+			err := sess.closeErr
+			sess.closeMx.Unlock()
+
+			require.ErrorIs(t, err, &http3.Error{ErrorCode: http3.ErrCodeDatagramError})
+			require.ErrorContains(t, err, tc.msg)
+		})
+	}
+}
+
+func TestMaxStreamsCapsuleDecreaseClosesSession(t *testing.T) {
+	b := (maxStreamsBidiCapsule{MaximumStreams: maxOutgoingStreams}).Append(nil)
+	b = (maxStreamsBidiCapsule{MaximumStreams: maxOutgoingStreams - 1}).Append(b)
+
+	sess := newSession(context.Background(), 42, nil, mockHTTP3Stream{bytes.NewReader(b)}, "")
+	select {
+	case <-sess.Context().Done():
+	case <-time.After(time.Second):
+		t.Fatal("timeout")
+	}
+
+	sess.closeMx.Lock()
+	err := sess.closeErr
+	sess.closeMx.Unlock()
+
+	require.ErrorIs(t, err, &http3.Error{ErrorCode: http3.ErrCode(WTFlowControlErrorCode)})
+	require.ErrorContains(t, err, errMaxStreamsDecreased.Error())
+}
+
+func TestSessionSendsQueuedCapsules(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	clientConn, serverConn := newConnPair(t, newUDPConnLocalhost(t), newUDPConnLocalhost(t))
+
+	clientStr, err := clientConn.OpenStreamSync(ctx)
+	require.NoError(t, err)
+	sess := newSession(context.Background(), 42, clientConn, quicHTTP3Stream{clientStr}, "")
+	sess.queueCapsule(streamsBlockedBidiCapsule{MaximumStreams: 42})
+	sess.queueCapsule(streamsBlockedUniCapsule{MaximumStreams: 1337})
+
+	serverStr, err := serverConn.AcceptStream(ctx)
+	require.NoError(t, err)
+	require.NoError(t, serverStr.SetReadDeadline(time.Now().Add(time.Second)))
+
+	c, err := parseNextCapsule(serverStr)
+	require.NoError(t, err)
+	require.Equal(t, streamsBlockedBidiCapsule{MaximumStreams: 42}, c)
+	c, err = parseNextCapsule(serverStr)
+	require.NoError(t, err)
+	require.Equal(t, streamsBlockedUniCapsule{MaximumStreams: 1337}, c)
+}
+
+func TestSessionClosesWhenOutgoingCapsuleQueueFull(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	clientConn, serverConn := newConnPairWithServerConfig(
+		t,
+		newUDPConnLocalhost(t),
+		newUDPConnLocalhost(t),
+		&quic.Config{
+			InitialStreamReceiveWindow:       1,
+			MaxStreamReceiveWindow:           1,
+			InitialConnectionReceiveWindow:   1,
+			MaxConnectionReceiveWindow:       1,
+			EnableDatagrams:                  true,
+			EnableStreamResetPartialDelivery: true,
+		},
+	)
+
+	clientStr, err := clientConn.OpenStreamSync(ctx)
+	require.NoError(t, err)
+
+	_, err = clientStr.Write([]byte{0})
+	require.NoError(t, err)
+	serverStr, err := serverConn.AcceptStream(ctx)
+	require.NoError(t, err)
+	require.NoError(t, serverStr.SetReadDeadline(time.Now().Add(time.Second)))
+	_, err = io.ReadFull(serverStr, make([]byte, 1))
+	require.NoError(t, err)
+	require.NoError(t, serverStr.SetReadDeadline(time.Time{}))
+
+	// Fill quic-go's per-stream packet buffer. With the peer window capped at 1,
+	// the next capsule write stays blocked while we fill our capsule queue.
+	_, err = clientStr.Write(make([]byte, 1450))
+	require.NoError(t, err)
+
+	sess := newSession(context.Background(), 0, clientConn, quicHTTP3Stream{clientStr}, "")
+	for range maxQueuedOutgoingCapsules {
+		sess.queueCapsule(streamsBlockedBidiCapsule{})
+	}
+	sess.queueCapsule(streamsBlockedUniCapsule{})
+
+	b := make([]byte, 1024)
+	require.NoError(t, serverStr.SetReadDeadline(time.Now().Add(time.Second)))
+	for err == nil {
+		_, err = serverStr.Read(b)
+	}
+	require.ErrorIs(t, err, &quic.StreamError{
+		StreamID:  serverStr.StreamID(),
+		ErrorCode: quic.StreamErrorCode(http3.ErrCodeExcessiveLoad),
+		Remote:    true,
+	})
+
+	_, err = sess.OpenStream()
+	var h3Err *http3.Error
+	require.ErrorAs(t, err, &h3Err)
+	require.Equal(t, http3.ErrCodeExcessiveLoad, h3Err.ErrorCode)
+}
+
+func TestCloseWithErrorDropsQueuedCapsulesWhenConnectStreamBlocked(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	clientConn, serverConn := newConnPairWithServerConfig(
+		t,
+		newUDPConnLocalhost(t),
+		newUDPConnLocalhost(t),
+		&quic.Config{
+			InitialStreamReceiveWindow:       1,
+			MaxStreamReceiveWindow:           1,
+			InitialConnectionReceiveWindow:   1,
+			MaxConnectionReceiveWindow:       1,
+			EnableDatagrams:                  true,
+			EnableStreamResetPartialDelivery: true,
+		},
+	)
+
+	clientStr, err := clientConn.OpenStreamSync(ctx)
+	require.NoError(t, err)
+
+	_, err = clientStr.Write([]byte{0})
+	require.NoError(t, err)
+	serverStr, err := serverConn.AcceptStream(ctx)
+	require.NoError(t, err)
+	require.NoError(t, serverStr.SetReadDeadline(time.Now().Add(time.Second)))
+	_, err = io.ReadFull(serverStr, make([]byte, 1))
+	require.NoError(t, err)
+	require.NoError(t, serverStr.SetReadDeadline(time.Time{}))
+
+	_, err = clientStr.Write(make([]byte, 1450))
+	require.NoError(t, err)
+
+	sess := newSession(context.Background(), 0, clientConn, quicHTTP3Stream{clientStr}, "")
+	sess.queueCapsule(streamsBlockedBidiCapsule{})
+
+	done := make(chan error, 1)
+	go func() { done <- sess.CloseWithError(42, "close") }()
+
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("timeout")
+	}
 }

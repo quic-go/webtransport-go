@@ -2,46 +2,44 @@ package webtransport
 
 import (
 	"context"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/quic-go/quic-go"
 	"github.com/stretchr/testify/require"
 )
 
-func TestOutgoingStreamsMapOpenStreamSyncCloseSession(t *testing.T) {
-	t.Run("bidirectional", func(t *testing.T) {
-		testOutgoingStreamsMapOpenStreamSyncCloseSession(
-			t,
-			func(m *outgoingStreamsMap) error { _, err := m.OpenStream(); return err },
-			func(m *outgoingStreamsMap) error { _, err := m.OpenStreamSync(context.Background()); return err },
-		)
-	})
-	t.Run("unidirectional", func(t *testing.T) {
-		testOutgoingStreamsMapOpenStreamSyncCloseSession(
-			t,
-			func(m *outgoingStreamsMap) error { _, err := m.OpenUniStream(); return err },
-			func(m *outgoingStreamsMap) error { _, err := m.OpenUniStreamSync(context.Background()); return err },
-		)
-	})
-}
+type outgoingStreamForTests struct{}
 
-func testOutgoingStreamsMapOpenStreamSyncCloseSession(t *testing.T, openStream, openStreamSync func(*outgoingStreamsMap) error) {
-	clientConn, _ := newConnPair(t, newUDPConnLocalhost(t), newUDPConnLocalhost(t))
-	streams := newOutgoingStreamsMap(clientConn, 42)
+func (*outgoingStreamForTests) closeWithSession(error) {}
 
-	for {
-		if err := openStream(streams); err != nil {
-			break
-		}
+func TestOutgoingStreamsMapOpenStreamSyncClose(t *testing.T) {
+	var nextStreamID atomic.Uint64
+	openStream := func() (*outgoingStreamForTests, quic.StreamID, error) {
+		return &outgoingStreamForTests{}, quic.StreamID(nextStreamID.Add(1)), nil
 	}
+	openStreamSyncCalled := make(chan struct{}, 1)
+	streams := newOutgoingStreamsMap(
+		openStream,
+		func(ctx context.Context) (*outgoingStreamForTests, quic.StreamID, error) {
+			openStreamSyncCalled <- struct{}{}
+			<-ctx.Done()
+			return nil, invalidStreamID, ctx.Err()
+		},
+		func(uint64) {},
+	)
+	streams.maxStreams = 1
 
 	errChan := make(chan error, 1)
-	go func() { errChan <- openStreamSync(streams) }()
-
+	go func() {
+		_, err := streams.OpenStreamSync(context.Background())
+		errChan <- err
+	}()
 	select {
-	case <-errChan:
-		t.Fatal("should not have opened stream")
-	case <-time.After(scaleDuration(10 * time.Millisecond)):
+	case <-openStreamSyncCalled:
+	case <-time.After(time.Second):
+		t.Fatal("timeout waiting for quic OpenStreamSync call")
 	}
 
 	sessionErr := &SessionError{ErrorCode: 1337, Message: "closing"}
@@ -55,119 +53,232 @@ func testOutgoingStreamsMapOpenStreamSyncCloseSession(t *testing.T, openStream, 
 	}
 }
 
-func TestOutgoingStreamsMapOpenStreamLimit(t *testing.T) {
-	t.Run("bidirectional", func(t *testing.T) {
-		streams := newOutgoingStreamsMap(nil, 42)
-		streams.bidiLimit.MaxStreams = 0
-		_, err := streams.OpenStream()
-		var limitErr *StreamLimitReachedError
-		require.ErrorAs(t, err, &limitErr)
-	})
+func TestOutgoingStreamsMapOpenStreamSyncBlocksAtLimit(t *testing.T) {
+	var nextStreamID atomic.Uint64
+	//nolint:unparam // ignore unused error return value
+	openStream := func() (*outgoingStreamForTests, quic.StreamID, error) {
+		return &outgoingStreamForTests{}, quic.StreamID(nextStreamID.Add(1)), nil
+	}
+	blocked := make(chan uint64, 10)
+	openStreamSyncCalled := make(chan struct{}, 1)
+	streams := newOutgoingStreamsMap(
+		openStream,
+		func(context.Context) (*outgoingStreamForTests, quic.StreamID, error) {
+			openStreamSyncCalled <- struct{}{}
+			return openStream()
+		},
+		func(limit uint64) { blocked <- limit },
+	)
+	streams.maxStreams = 0
 
-	t.Run("unidirectional", func(t *testing.T) {
-		streams := newOutgoingStreamsMap(nil, 42)
-		streams.uniLimit.MaxStreams = 0
-		_, err := streams.OpenUniStream()
-		var limitErr *StreamLimitReachedError
-		require.ErrorAs(t, err, &limitErr)
-	})
-}
-
-func TestOutgoingStreamsMapOpenStreamSyncBlockedUntilLimitUpdate(t *testing.T) {
-	t.Run("bidirectional", func(t *testing.T) {
-		testOutgoingStreamsMapOpenStreamSyncBlockedUntilLimitUpdate(
-			t,
-			func(m *outgoingStreamsMap) error { _, err := m.OpenStream(); return err },
-			func(m *outgoingStreamsMap, ctx context.Context) error { _, err := m.OpenStreamSync(ctx); return err },
-			(*outgoingStreamsMap).UpdateBidiStreamLimit,
-		)
-	})
-
-	t.Run("unidirectional", func(t *testing.T) {
-		testOutgoingStreamsMapOpenStreamSyncBlockedUntilLimitUpdate(
-			t,
-			func(m *outgoingStreamsMap) error { _, err := m.OpenUniStream(); return err },
-			func(m *outgoingStreamsMap, ctx context.Context) error { _, err := m.OpenUniStreamSync(ctx); return err },
-			(*outgoingStreamsMap).UpdateUniStreamLimit,
-		)
-	})
-}
-
-func testOutgoingStreamsMapOpenStreamSyncBlockedUntilLimitUpdate(
-	t *testing.T,
-	openStream func(*outgoingStreamsMap) error,
-	openStreamSync func(*outgoingStreamsMap, context.Context) error,
-	updateLimit func(*outgoingStreamsMap, uint64),
-) {
-	clientConn, _ := newConnPair(t, newUDPConnLocalhost(t), newUDPConnLocalhost(t))
-	streams := newOutgoingStreamsMap(clientConn, 42)
-	streams.bidiLimit.MaxStreams = 0
-	streams.uniLimit.MaxStreams = 0
-
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-
+	ctx, cancel := context.WithCancel(context.Background())
 	errChan := make(chan error, 1)
-	go func() { errChan <- openStreamSync(streams, ctx) }()
-
+	go func() {
+		_, err := streams.OpenStreamSync(ctx)
+		errChan <- err
+	}()
 	select {
-	case <-errChan:
-		t.Fatal("should not have opened stream")
-	case <-time.After(scaleDuration(10 * time.Millisecond)):
+	case limit := <-blocked:
+		require.Equal(t, uint64(0), limit)
+	case <-time.After(time.Second):
+		t.Fatal("timeout waiting for blocked capsule")
+	}
+	select {
+	case err := <-errChan:
+		t.Fatalf("OpenStreamSync returned while blocked: %v", err)
+	default:
+	}
+	select {
+	case <-openStreamSyncCalled:
+		t.Fatal("quic OpenStreamSync called while blocked by WebTransport stream limit")
+	default:
 	}
 
-	updateLimit(streams, 1)
+	_, err := streams.OpenStream()
+	var limitErr *StreamLimitReachedError
+	require.ErrorAs(t, err, &limitErr)
+	select {
+	case limit := <-blocked:
+		t.Fatalf("unexpected blocked capsule for limit %d", limit)
+	default:
+	}
+
+	cancel()
+	select {
+	case err := <-errChan:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(time.Second):
+		t.Fatal("timeout waiting for stream cancellation")
+	}
+}
+
+func TestOutgoingStreamsMapBlockedCapsules(t *testing.T) {
+	var nextStreamID atomic.Uint64
+	//nolint:unparam // ignore unused error return value
+	openStream := func() (*outgoingStreamForTests, quic.StreamID, error) {
+		return &outgoingStreamForTests{}, quic.StreamID(nextStreamID.Add(1)), nil
+	}
+	blocked := make(chan uint64, 10)
+	openStreamSyncCalled := make(chan quic.StreamID, 10)
+	releaseOpenStreamSync := make(chan struct{})
+	streams := newOutgoingStreamsMap(
+		openStream,
+		func(ctx context.Context) (*outgoingStreamForTests, quic.StreamID, error) {
+			str, id, err := openStream()
+			if err != nil {
+				return nil, invalidStreamID, err
+			}
+			openStreamSyncCalled <- id
+			select {
+			case <-releaseOpenStreamSync:
+				return str, id, nil
+			case <-ctx.Done():
+				return nil, invalidStreamID, ctx.Err()
+			}
+		},
+		func(limit uint64) { blocked <- limit },
+	)
+	streams.maxStreams = 3
+	for range 3 {
+		_, err := streams.OpenStream()
+		require.NoError(t, err)
+	}
+	_, err := streams.OpenStream()
+	var limitErr *StreamLimitReachedError
+	require.ErrorAs(t, err, &limitErr)
+	select {
+	case limit := <-blocked:
+		require.Equal(t, uint64(3), limit)
+	case <-time.After(time.Second):
+		t.Fatal("timeout waiting for blocked capsule")
+	}
+
+	// further calls to OpenStream don't trigger new blocked capsules
+	for range 5 {
+		_, err = streams.OpenStream()
+		require.ErrorAs(t, err, &limitErr)
+	}
+	select {
+	case limit := <-blocked:
+		t.Fatalf("unexpected blocked capsule for limit %d", limit)
+	default:
+	}
+
+	errChan := make(chan error, 3)
+	for range 3 {
+		go func() {
+			_, err := streams.OpenStreamSync(context.Background())
+			errChan <- err
+		}()
+	}
+	select {
+	case limit := <-blocked:
+		t.Fatalf("unexpected blocked capsule for limit %d", limit)
+	default:
+	}
+	select {
+	case err := <-errChan:
+		t.Fatalf("OpenStreamSync returned while blocked: %v", err)
+	default:
+	}
+
+	// allow 2 more streams
+	require.NoError(t, streams.UpdateStreamLimit(5))
+	for range 2 {
+		select {
+		case <-openStreamSyncCalled:
+		case <-time.After(time.Second):
+			t.Fatal("timeout waiting for quic OpenStreamSync call")
+		}
+	}
+	select {
+	case limit := <-blocked:
+		require.Equal(t, uint64(5), limit)
+	case <-time.After(time.Second):
+		t.Fatal("timeout waiting for blocked capsule")
+	}
+	select {
+	case id := <-openStreamSyncCalled:
+		t.Fatalf("too many quic OpenStreamSync calls reached: %d", id)
+	default:
+	}
+	select {
+	case err := <-errChan:
+		t.Fatalf("OpenStreamSync returned while quic OpenStreamSync was blocked: %v", err)
+	default:
+	}
+
+	require.NoError(t, streams.UpdateStreamLimit(6))
+	select {
+	case <-openStreamSyncCalled:
+	case <-time.After(time.Second):
+		t.Fatal("timeout waiting for quic OpenStreamSync call")
+	}
+	select {
+	case limit := <-blocked:
+		t.Fatalf("unexpected blocked capsule for limit %d", limit)
+	default:
+	}
+	select {
+	case err := <-errChan:
+		t.Fatalf("OpenStreamSync returned while quic OpenStreamSync was blocked: %v", err)
+	default:
+	}
+
+	close(releaseOpenStreamSync)
+	for range 3 {
+		select {
+		case err := <-errChan:
+			require.NoError(t, err)
+		case <-time.After(time.Second):
+			t.Fatal("timeout waiting for stream")
+		}
+	}
+}
+
+func TestOutgoingStreamsMapUpdateStreamLimitDuplicateAndDecrease(t *testing.T) {
+	streams := newOutgoingStreamsMap(
+		func() (*outgoingStreamForTests, quic.StreamID, error) { return &outgoingStreamForTests{}, 0, nil },
+		func(context.Context) (*outgoingStreamForTests, quic.StreamID, error) {
+			return &outgoingStreamForTests{}, 0, nil
+		},
+		func(uint64) {},
+	)
+	streams.maxStreams = 5
+
+	require.NoError(t, streams.UpdateStreamLimit(5))
+	err := streams.UpdateStreamLimit(4)
+	require.ErrorIs(t, err, errMaxStreamsDecreased)
+	require.ErrorContains(t, err, "current limit: 5, received limit: 4")
+	require.Equal(t, uint64(5), streams.maxStreams)
+}
+
+func TestOutgoingStreamsMapQueueBlockedCanCloseSession(t *testing.T) {
+	var nextStreamID atomic.Uint64
+	//nolint:unparam // ignore unused error return value
+	openStream := func() (*outgoingStreamForTests, quic.StreamID, error) {
+		return &outgoingStreamForTests{}, quic.StreamID(nextStreamID.Add(1)), nil
+	}
+	sessionErr := &SessionError{ErrorCode: 1337, Message: "closing"}
+	var streams *outgoingStreamsMap[*outgoingStreamForTests]
+	streams = newOutgoingStreamsMap(
+		openStream,
+		func(context.Context) (*outgoingStreamForTests, quic.StreamID, error) { return openStream() },
+		func(uint64) { streams.CloseSession(sessionErr) },
+	)
+	streams.maxStreams = 0
+
+	errChan := make(chan error, 1)
+	go func() {
+		_, err := streams.OpenStream()
+		errChan <- err
+	}()
 
 	select {
 	case err := <-errChan:
-		require.NoError(t, err)
+		var limitErr *StreamLimitReachedError
+		require.ErrorAs(t, err, &limitErr)
 	case <-time.After(time.Second):
 		t.Fatal("timeout")
-	}
-
-	err := openStream(streams)
-	var limitErr *StreamLimitReachedError
-	require.ErrorAs(t, err, &limitErr)
-
-	go func() { errChan <- openStreamSync(streams, ctx) }()
-	select {
-	case <-errChan:
-		t.Fatal("should not have opened stream")
-	case <-time.After(scaleDuration(10 * time.Millisecond)):
-	}
-}
-
-func TestOutgoingStreamsMapOpenStreamSyncOrder(t *testing.T) {
-	clientConn, _ := newConnPair(t, newUDPConnLocalhost(t), newUDPConnLocalhost(t))
-	streams := newOutgoingStreamsMap(clientConn, 42)
-	streams.bidiLimit.MaxStreams = 0
-
-	const numStreams = 16
-	type result struct {
-		index int
-		err   error
-	}
-	resultChan := make(chan result, numStreams)
-	for i := range numStreams {
-		go func() {
-			_, err := streams.OpenStreamSync(context.Background())
-			resultChan <- result{index: i, err: err}
-		}()
-		require.Eventually(t, func() bool {
-			streams.mx.Lock()
-			defer streams.mx.Unlock()
-			return len(streams.bidiLimit.OpenQueue) == i+1
-		}, time.Second, scaleDuration(time.Millisecond))
-	}
-
-	for i := range numStreams {
-		streams.UpdateBidiStreamLimit(uint64(i + 1))
-		select {
-		case r := <-resultChan:
-			require.NoError(t, r.err)
-			require.Equal(t, i, r.index)
-		case <-time.After(time.Second):
-			t.Fatal("timeout")
-		}
 	}
 }
