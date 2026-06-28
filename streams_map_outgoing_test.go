@@ -27,7 +27,9 @@ func TestOutgoingStreamsMapOpenStreamSyncCloseSession(t *testing.T) {
 
 func testOutgoingStreamsMapOpenStreamSyncCloseSession(t *testing.T, openStream, openStreamSync func(*outgoingStreamsMap) error) {
 	clientConn, _ := newConnPair(t, newUDPConnLocalhost(t), newUDPConnLocalhost(t))
-	streams := newOutgoingStreamsMap(clientConn, 42)
+	streams := newOutgoingStreamsMap(clientConn, 42, func(c capsule) {
+		t.Fatalf("unexpected capsule: %#v", c)
+	})
 
 	for {
 		if err := openStream(streams); err != nil {
@@ -57,20 +59,71 @@ func testOutgoingStreamsMapOpenStreamSyncCloseSession(t *testing.T, openStream, 
 
 func TestOutgoingStreamsMapOpenStreamLimit(t *testing.T) {
 	t.Run("bidirectional", func(t *testing.T) {
-		streams := newOutgoingStreamsMap(nil, 42)
+		var capsules []capsule
+		streams := newOutgoingStreamsMap(nil, 42, func(c capsule) { capsules = append(capsules, c) })
 		streams.bidiLimit.MaxStreams = 0
 		_, err := streams.OpenStream()
 		var limitErr *StreamLimitReachedError
 		require.ErrorAs(t, err, &limitErr)
+		require.Equal(t, []capsule{streamsBlockedBidiCapsule{MaximumStreams: 0}}, capsules)
+
+		_, err = streams.OpenStream()
+		require.ErrorAs(t, err, &limitErr)
+		require.Len(t, capsules, 1)
 	})
 
 	t.Run("unidirectional", func(t *testing.T) {
-		streams := newOutgoingStreamsMap(nil, 42)
+		var capsules []capsule
+		streams := newOutgoingStreamsMap(nil, 42, func(c capsule) { capsules = append(capsules, c) })
 		streams.uniLimit.MaxStreams = 0
 		_, err := streams.OpenUniStream()
 		var limitErr *StreamLimitReachedError
 		require.ErrorAs(t, err, &limitErr)
+		require.Equal(t, []capsule{streamsBlockedUniCapsule{MaximumStreams: 0}}, capsules)
+
+		_, err = streams.OpenUniStream()
+		require.ErrorAs(t, err, &limitErr)
+		require.Len(t, capsules, 1)
 	})
+}
+
+func TestOutgoingStreamsMapBlockedCapsules(t *testing.T) {
+	clientConn, _ := newConnPair(t, newUDPConnLocalhost(t), newUDPConnLocalhost(t))
+	capsuleChan := make(chan capsule, 2)
+	streams := newOutgoingStreamsMap(clientConn, 42, func(c capsule) { capsuleChan <- c })
+	streams.bidiLimit.MaxStreams = 0
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	errChan := make(chan error, 1)
+	go func() {
+		_, err := streams.OpenStreamSync(ctx)
+		errChan <- err
+	}()
+
+	select {
+	case c := <-capsuleChan:
+		require.Equal(t, streamsBlockedBidiCapsule{MaximumStreams: 0}, c)
+	case <-time.After(time.Second):
+		t.Fatal("timeout waiting for capsule")
+	}
+
+	_, err := streams.OpenStream()
+	var limitErr *StreamLimitReachedError
+	require.ErrorAs(t, err, &limitErr)
+	select {
+	case c := <-capsuleChan:
+		t.Fatalf("unexpected capsule: %#v", c)
+	default:
+	}
+
+	cancel()
+	select {
+	case err := <-errChan:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(time.Second):
+		t.Fatal("timeout waiting for stream cancellation")
+	}
 }
 
 func TestOutgoingStreamsMapOpenStreamSyncBlockedUntilLimitUpdate(t *testing.T) {
@@ -80,6 +133,8 @@ func TestOutgoingStreamsMapOpenStreamSyncBlockedUntilLimitUpdate(t *testing.T) {
 			func(m *outgoingStreamsMap) error { _, err := m.OpenStream(); return err },
 			func(m *outgoingStreamsMap, ctx context.Context) error { _, err := m.OpenStreamSync(ctx); return err },
 			(*outgoingStreamsMap).UpdateBidiStreamLimit,
+			streamsBlockedBidiCapsule{MaximumStreams: 0},
+			streamsBlockedBidiCapsule{MaximumStreams: 1},
 		)
 	})
 
@@ -89,6 +144,8 @@ func TestOutgoingStreamsMapOpenStreamSyncBlockedUntilLimitUpdate(t *testing.T) {
 			func(m *outgoingStreamsMap) error { _, err := m.OpenUniStream(); return err },
 			func(m *outgoingStreamsMap, ctx context.Context) error { _, err := m.OpenUniStreamSync(ctx); return err },
 			(*outgoingStreamsMap).UpdateUniStreamLimit,
+			streamsBlockedUniCapsule{MaximumStreams: 0},
+			streamsBlockedUniCapsule{MaximumStreams: 1},
 		)
 	})
 }
@@ -98,9 +155,12 @@ func testOutgoingStreamsMapOpenStreamSyncBlockedUntilLimitUpdate(
 	openStream func(*outgoingStreamsMap) error,
 	openStreamSync func(*outgoingStreamsMap, context.Context) error,
 	updateLimit func(*outgoingStreamsMap, uint64),
+	initialBlocked capsule,
+	nextBlocked capsule,
 ) {
 	clientConn, _ := newConnPair(t, newUDPConnLocalhost(t), newUDPConnLocalhost(t))
-	streams := newOutgoingStreamsMap(clientConn, 42)
+	capsuleChan := make(chan capsule, 2)
+	streams := newOutgoingStreamsMap(clientConn, 42, func(c capsule) { capsuleChan <- c })
 	streams.bidiLimit.MaxStreams = 0
 	streams.uniLimit.MaxStreams = 0
 
@@ -115,6 +175,12 @@ func testOutgoingStreamsMapOpenStreamSyncBlockedUntilLimitUpdate(
 		t.Fatal("should not have opened stream")
 	case <-time.After(scaleDuration(10 * time.Millisecond)):
 	}
+	select {
+	case c := <-capsuleChan:
+		require.Equal(t, initialBlocked, c)
+	case <-time.After(time.Second):
+		t.Fatal("timeout waiting for capsule")
+	}
 
 	updateLimit(streams, 1)
 
@@ -124,10 +190,21 @@ func testOutgoingStreamsMapOpenStreamSyncBlockedUntilLimitUpdate(
 	case <-time.After(time.Second):
 		t.Fatal("timeout")
 	}
+	select {
+	case c := <-capsuleChan:
+		t.Fatalf("unexpected capsule: %#v", c)
+	default:
+	}
 
 	err := openStream(streams)
 	var limitErr *StreamLimitReachedError
 	require.ErrorAs(t, err, &limitErr)
+	select {
+	case c := <-capsuleChan:
+		require.Equal(t, nextBlocked, c)
+	case <-time.After(time.Second):
+		t.Fatal("timeout waiting for capsule")
+	}
 
 	go func() { errChan <- openStreamSync(streams, ctx) }()
 	select {
@@ -139,10 +216,11 @@ func testOutgoingStreamsMapOpenStreamSyncBlockedUntilLimitUpdate(
 
 func TestOutgoingStreamsMapOpenStreamSyncOrder(t *testing.T) {
 	clientConn, _ := newConnPair(t, newUDPConnLocalhost(t), newUDPConnLocalhost(t))
-	streams := newOutgoingStreamsMap(clientConn, 42)
+	const numStreams = 16
+	capsuleChan := make(chan capsule, numStreams)
+	streams := newOutgoingStreamsMap(clientConn, 42, func(c capsule) { capsuleChan <- c })
 	streams.bidiLimit.MaxStreams = 0
 
-	const numStreams = 16
 	type result struct {
 		index int
 		err   error
@@ -159,6 +237,17 @@ func TestOutgoingStreamsMapOpenStreamSyncOrder(t *testing.T) {
 			return len(streams.bidiLimit.OpenQueue) == i+1
 		}, time.Second, scaleDuration(time.Millisecond))
 	}
+	select {
+	case c := <-capsuleChan:
+		require.Equal(t, streamsBlockedBidiCapsule{MaximumStreams: 0}, c)
+	case <-time.After(time.Second):
+		t.Fatal("timeout waiting for capsule")
+	}
+	select {
+	case c := <-capsuleChan:
+		t.Fatalf("unexpected capsule: %#v", c)
+	case <-time.After(scaleDuration(10 * time.Millisecond)):
+	}
 
 	for i := range numStreams {
 		streams.UpdateBidiStreamLimit(uint64(i + 1))
@@ -168,6 +257,20 @@ func TestOutgoingStreamsMapOpenStreamSyncOrder(t *testing.T) {
 			require.Equal(t, i, r.index)
 		case <-time.After(time.Second):
 			t.Fatal("timeout")
+		}
+		if i == numStreams-1 {
+			select {
+			case c := <-capsuleChan:
+				t.Fatalf("unexpected capsule: %#v", c)
+			default:
+			}
+			continue
+		}
+		select {
+		case c := <-capsuleChan:
+			require.Equal(t, streamsBlockedBidiCapsule{MaximumStreams: uint64(i + 1)}, c)
+		case <-time.After(time.Second):
+			t.Fatal("timeout waiting for capsule")
 		}
 	}
 }

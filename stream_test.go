@@ -332,7 +332,9 @@ func TestSendStreamHeaderRetryAfterDeadlineError(t *testing.T) {
 func TestSendStreamWriteDuringSessionGoneAndCloseSession(t *testing.T) {
 	sendStr, recvStr := newUniStreamPair(t)
 
-	sm := newOutgoingStreamsMap(nil, 0)
+	sm := newOutgoingStreamsMap(nil, 0, func(c capsule) {
+		t.Fatalf("unexpected capsule: %#v", c)
+	})
 	str := newSendStream(sendStr, nil, func() { sm.removeStream(sendStr.StreamID()) })
 	sm.mx.Lock()
 	sm.m[sendStr.StreamID()] = str.closeWithSession

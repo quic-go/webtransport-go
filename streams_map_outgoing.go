@@ -23,14 +23,16 @@ const maxOutgoingStreams = 1 << 60
 type outgoingStreamLimit struct {
 	OpenQueue []chan struct{}
 
-	NumStreams uint64 // total number of streams opened for this session
-	MaxStreams uint64 // stream limit, as advertised by the peer
+	NumStreams  uint64 // total number of streams opened for this session
+	MaxStreams  uint64 // stream limit, as advertised by the peer
+	BlockedSent bool   // was a WT_STREAMS_BLOCKED sent for the current MaxStreams
 }
 
 type outgoingStreamsMap struct {
 	conn         *quic.Conn
 	streamHdr    []byte
 	uniStreamHdr []byte
+	queueCapsule func(capsule)
 
 	mx         sync.Mutex
 	closeErr   error
@@ -40,7 +42,7 @@ type outgoingStreamsMap struct {
 	m          map[quic.StreamID]func(error)
 }
 
-func newOutgoingStreamsMap(conn *quic.Conn, sessionID sessionID) *outgoingStreamsMap {
+func newOutgoingStreamsMap(conn *quic.Conn, sessionID sessionID, queueCapsule func(capsule)) *outgoingStreamsMap {
 	uniStreamHdr := make([]byte, 0, 2+quicvarint.Len(uint64(sessionID)))
 	uniStreamHdr = quicvarint.Append(uniStreamHdr, webTransportUniStreamType)
 	uniStreamHdr = quicvarint.Append(uniStreamHdr, uint64(sessionID))
@@ -53,6 +55,7 @@ func newOutgoingStreamsMap(conn *quic.Conn, sessionID sessionID) *outgoingStream
 		conn:         conn,
 		streamHdr:    streamHdr,
 		uniStreamHdr: uniStreamHdr,
+		queueCapsule: queueCapsule,
 		streamCtxs:   make(map[int]context.CancelFunc),
 		bidiLimit:    outgoingStreamLimit{MaxStreams: maxOutgoingStreams},
 		uniLimit:     outgoingStreamLimit{MaxStreams: maxOutgoingStreams},
@@ -80,13 +83,26 @@ func (s *outgoingStreamsMap) addSendStream(qstr *quic.SendStream) *SendStream {
 
 func (s *outgoingStreamsMap) OpenStream() (*Stream, error) {
 	s.mx.Lock()
-	defer s.mx.Unlock()
 
 	if s.closeErr != nil {
+		s.mx.Unlock()
 		return nil, s.closeErr
 	}
-	// if there are OpenStreamSync calls waiting, return an error here
-	if len(s.bidiLimit.OpenQueue) > 0 || s.bidiLimit.NumStreams >= s.bidiLimit.MaxStreams {
+	if len(s.bidiLimit.OpenQueue) > 0 {
+		s.mx.Unlock()
+		return nil, &StreamLimitReachedError{}
+	}
+
+	if s.bidiLimit.NumStreams >= s.bidiLimit.MaxStreams {
+		sendBlocked := !s.bidiLimit.BlockedSent
+		maxStreams := s.bidiLimit.MaxStreams
+		if sendBlocked {
+			s.bidiLimit.BlockedSent = true
+		}
+		s.mx.Unlock()
+		if sendBlocked {
+			s.queueCapsule(streamsBlockedBidiCapsule{MaximumStreams: maxStreams})
+		}
 		return nil, &StreamLimitReachedError{}
 	}
 	s.bidiLimit.NumStreams++
@@ -95,9 +111,12 @@ func (s *outgoingStreamsMap) OpenStream() (*Stream, error) {
 	if err != nil {
 		s.bidiLimit.NumStreams--
 		s.maybeUnblockOpenSync(&s.bidiLimit)
+		s.mx.Unlock()
 		return nil, err
 	}
-	return s.addStream(qstr), nil
+	str := s.addStream(qstr)
+	s.mx.Unlock()
+	return str, nil
 }
 
 func (s *outgoingStreamsMap) addStreamCtxCancel(cancel context.CancelFunc) (id int) {
@@ -116,7 +135,7 @@ func (s *outgoingStreamsMap) OpenStreamSync(ctx context.Context) (*Stream, error
 		s.mx.Unlock()
 		return nil, s.closeErr
 	}
-	if err := s.waitForStreamLimit(ctx, &s.bidiLimit); err != nil {
+	if err := s.waitForStreamLimit(ctx, &s.bidiLimit, true); err != nil {
 		s.mx.Unlock()
 		return nil, err
 	}
@@ -151,13 +170,25 @@ func (s *outgoingStreamsMap) OpenStreamSync(ctx context.Context) (*Stream, error
 
 func (s *outgoingStreamsMap) OpenUniStream() (*SendStream, error) {
 	s.mx.Lock()
-	defer s.mx.Unlock()
 
 	if s.closeErr != nil {
+		s.mx.Unlock()
 		return nil, s.closeErr
 	}
-	// if there are OpenUniStreamSync calls waiting, return an error here
-	if len(s.uniLimit.OpenQueue) > 0 || s.uniLimit.NumStreams >= s.uniLimit.MaxStreams {
+	if len(s.uniLimit.OpenQueue) > 0 {
+		s.mx.Unlock()
+		return nil, &StreamLimitReachedError{}
+	}
+	if s.uniLimit.NumStreams >= s.uniLimit.MaxStreams {
+		sendBlocked := !s.uniLimit.BlockedSent
+		maxStreams := s.uniLimit.MaxStreams
+		if sendBlocked {
+			s.uniLimit.BlockedSent = true
+		}
+		s.mx.Unlock()
+		if sendBlocked {
+			s.queueCapsule(streamsBlockedUniCapsule{MaximumStreams: maxStreams})
+		}
 		return nil, &StreamLimitReachedError{}
 	}
 	s.uniLimit.NumStreams++
@@ -165,9 +196,12 @@ func (s *outgoingStreamsMap) OpenUniStream() (*SendStream, error) {
 	if err != nil {
 		s.uniLimit.NumStreams--
 		s.maybeUnblockOpenSync(&s.uniLimit)
+		s.mx.Unlock()
 		return nil, err
 	}
-	return s.addSendStream(qstr), nil
+	str := s.addSendStream(qstr)
+	s.mx.Unlock()
+	return str, nil
 }
 
 func (s *outgoingStreamsMap) OpenUniStreamSync(ctx context.Context) (str *SendStream, err error) {
@@ -176,7 +210,7 @@ func (s *outgoingStreamsMap) OpenUniStreamSync(ctx context.Context) (str *SendSt
 		s.mx.Unlock()
 		return nil, s.closeErr
 	}
-	if err := s.waitForStreamLimit(ctx, &s.uniLimit); err != nil {
+	if err := s.waitForStreamLimit(ctx, &s.uniLimit, false); err != nil {
 		s.mx.Unlock()
 		return nil, err
 	}
@@ -208,7 +242,7 @@ func (s *outgoingStreamsMap) OpenUniStreamSync(ctx context.Context) (str *SendSt
 	return s.addSendStream(qstr), nil
 }
 
-func (s *outgoingStreamsMap) waitForStreamLimit(ctx context.Context, streamLimit *outgoingStreamLimit) error {
+func (s *outgoingStreamsMap) waitForStreamLimit(ctx context.Context, streamLimit *outgoingStreamLimit, bidirectional bool) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -220,41 +254,68 @@ func (s *outgoingStreamsMap) waitForStreamLimit(ctx context.Context, streamLimit
 	waitChan := make(chan struct{}, 1)
 	streamLimit.OpenQueue = append(streamLimit.OpenQueue, waitChan)
 
-	for {
+	if streamLimit.NumStreams >= streamLimit.MaxStreams && !streamLimit.BlockedSent {
+		streamLimit.BlockedSent = true
+		maxStreams := streamLimit.MaxStreams
 		s.mx.Unlock()
-		select {
-		case <-ctx.Done():
-			s.mx.Lock()
-			streamLimit.OpenQueue = slices.DeleteFunc(streamLimit.OpenQueue, func(c chan struct{}) bool {
-				return c == waitChan
-			})
-			// If we just received a WT_MAX_STREAMS capsule, this might have been the next stream
-			// that could be opened. Make sure we unblock the next OpenStreamSync call.
-			s.maybeUnblockOpenSync(streamLimit)
-			return ctx.Err()
-		case <-waitChan:
+		if bidirectional {
+			s.queueCapsule(streamsBlockedBidiCapsule{MaximumStreams: maxStreams})
+		} else {
+			s.queueCapsule(streamsBlockedUniCapsule{MaximumStreams: maxStreams})
 		}
-
 		s.mx.Lock()
 		if s.closeErr != nil {
 			return s.closeErr
 		}
-		if err := ctx.Err(); err != nil {
-			streamLimit.OpenQueue = slices.DeleteFunc(streamLimit.OpenQueue, func(c chan struct{}) bool {
-				return c == waitChan
-			})
-			s.maybeUnblockOpenSync(streamLimit)
-			return err
-		}
-		if streamLimit.NumStreams >= streamLimit.MaxStreams {
-			// no stream available. Continue waiting.
-			continue
-		}
-		streamLimit.NumStreams++
-		streamLimit.OpenQueue = streamLimit.OpenQueue[1:]
-		s.maybeUnblockOpenSync(streamLimit)
-		return nil
 	}
+
+	s.mx.Unlock()
+	select {
+	case <-ctx.Done():
+		s.mx.Lock()
+		streamLimit.OpenQueue = slices.DeleteFunc(streamLimit.OpenQueue, func(c chan struct{}) bool {
+			return c == waitChan
+		})
+		// If we just received a WT_MAX_STREAMS capsule, this might have been the next stream
+		// that could be opened. Make sure we unblock the next OpenStreamSync call.
+		s.maybeUnblockOpenSync(streamLimit)
+		return ctx.Err()
+	case <-waitChan:
+	}
+
+	s.mx.Lock()
+	if s.closeErr != nil {
+		return s.closeErr
+	}
+	if err := ctx.Err(); err != nil {
+		streamLimit.OpenQueue = slices.DeleteFunc(streamLimit.OpenQueue, func(c chan struct{}) bool {
+			return c == waitChan
+		})
+		s.maybeUnblockOpenSync(streamLimit)
+		return err
+	}
+
+	streamLimit.NumStreams++
+	streamLimit.OpenQueue = streamLimit.OpenQueue[1:]
+	if len(streamLimit.OpenQueue) > 0 && streamLimit.NumStreams >= streamLimit.MaxStreams {
+		if !streamLimit.BlockedSent {
+			streamLimit.BlockedSent = true
+			maxStreams := streamLimit.MaxStreams
+			s.mx.Unlock()
+			if bidirectional {
+				s.queueCapsule(streamsBlockedBidiCapsule{MaximumStreams: maxStreams})
+			} else {
+				s.queueCapsule(streamsBlockedUniCapsule{MaximumStreams: maxStreams})
+			}
+			s.mx.Lock()
+			if s.closeErr != nil {
+				return s.closeErr
+			}
+		}
+	} else {
+		s.maybeUnblockOpenSync(streamLimit)
+	}
+	return nil
 }
 
 func (s *outgoingStreamsMap) UpdateBidiStreamLimit(limit uint64) {
@@ -273,6 +334,7 @@ func (s *outgoingStreamsMap) updateStreamLimit(streamLimit *outgoingStreamLimit,
 		return
 	}
 	streamLimit.MaxStreams = limit
+	streamLimit.BlockedSent = false
 	s.maybeUnblockOpenSync(streamLimit)
 }
 
