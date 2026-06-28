@@ -202,6 +202,44 @@ func TestCapsuleParseErrorClosesSessionWithDatagramError(t *testing.T) {
 	require.ErrorContains(t, err, "trailing data")
 }
 
+func TestForbiddenStreamDataFlowControlCapsulesCloseSession(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		typ  http3.CapsuleType
+		msg  string
+	}{
+		{
+			name: "WT_MAX_STREAM_DATA",
+			typ:  maxStreamDataCapsuleType,
+			msg:  "WT_MAX_STREAM_DATA capsule received",
+		},
+		{
+			name: "WT_STREAM_DATA_BLOCKED",
+			typ:  streamDataBlockedCapsuleType,
+			msg:  "WT_STREAM_DATA_BLOCKED capsule received",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			b := quicvarint.Append(nil, uint64(tc.typ))
+			b = quicvarint.Append(b, 0)
+
+			sess := newSession(context.Background(), 42, nil, mockHTTP3Stream{bytes.NewReader(b)}, "")
+			select {
+			case <-sess.Context().Done():
+			case <-time.After(time.Second):
+				t.Fatal("timeout")
+			}
+
+			sess.closeMx.Lock()
+			err := sess.closeErr
+			sess.closeMx.Unlock()
+
+			require.ErrorIs(t, err, &http3.Error{ErrorCode: http3.ErrCodeDatagramError})
+			require.ErrorContains(t, err, tc.msg)
+		})
+	}
+}
+
 func TestSessionSendsQueuedCapsules(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
