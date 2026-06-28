@@ -12,8 +12,8 @@ import (
 func TestIncomingStreamsMapAddStreamAfterCloseSession(t *testing.T) {
 	ctx := context.Background()
 	clientConn, serverConn := newConnPair(t, newUDPConnLocalhost(t), newUDPConnLocalhost(t))
-	streams := newIncomingStreamsMap[*Stream](ctx)
-	uniStreams := newIncomingStreamsMap[*ReceiveStream](ctx)
+	streams := newIncomingStreamsMap[*Stream]()
+	uniStreams := newIncomingStreamsMap[*ReceiveStream]()
 
 	serverStr, err := serverConn.OpenStream()
 	require.NoError(t, err)
@@ -68,6 +68,25 @@ func TestIncomingStreamsMapAddStreamAfterCloseSession(t *testing.T) {
 			context.Cause(serverUniStr.Context()),
 			&quic.StreamError{Remote: true, StreamID: serverUniStr.StreamID(), ErrorCode: WTSessionGoneErrorCode},
 		)
+	case <-time.After(time.Second):
+		t.Fatal("timeout")
+	}
+}
+
+func TestIncomingStreamsMapCloseSessionUnblocksAcceptStream(t *testing.T) {
+	streams := newIncomingStreamsMap[*Stream]()
+	sessionErr := &SessionError{ErrorCode: 42, Message: "bye"}
+
+	errChan := make(chan error, 1)
+	go func() {
+		_, err := streams.AcceptStream(context.Background())
+		errChan <- err
+	}()
+
+	streams.CloseSession(sessionErr)
+	select {
+	case err := <-errChan:
+		require.ErrorIs(t, err, sessionErr)
 	case <-time.After(time.Second):
 		t.Fatal("timeout")
 	}

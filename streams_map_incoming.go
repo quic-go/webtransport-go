@@ -53,18 +53,20 @@ type incomingStream interface {
 }
 
 type incomingStreamsMap[T incomingStream] struct {
-	ctx context.Context
+	ctx    context.Context
+	cancel context.CancelCauseFunc
 
 	acceptQueue acceptQueue[T]
 
-	mx       sync.Mutex
-	closeErr error
-	m        map[quic.StreamID]T
+	mx sync.Mutex
+	m  map[quic.StreamID]T
 }
 
-func newIncomingStreamsMap[T incomingStream](ctx context.Context) *incomingStreamsMap[T] {
+func newIncomingStreamsMap[T incomingStream]() *incomingStreamsMap[T] {
+	ctx, cancel := context.WithCancelCause(context.Background())
 	return &incomingStreamsMap[T]{
 		ctx:         ctx,
+		cancel:      cancel,
 		acceptQueue: *newAcceptQueue[T](),
 		m:           make(map[quic.StreamID]T),
 	}
@@ -72,8 +74,7 @@ func newIncomingStreamsMap[T incomingStream](ctx context.Context) *incomingStrea
 
 func (s *incomingStreamsMap[T]) addStream(id quic.StreamID, str T) {
 	s.mx.Lock()
-	if s.closeErr != nil {
-		closeErr := s.closeErr
+	if closeErr := context.Cause(s.ctx); closeErr != nil {
 		s.mx.Unlock()
 		str.closeWithSession(closeErr)
 		return
@@ -91,11 +92,8 @@ func (s *incomingStreamsMap[T]) removeStream(id quic.StreamID) {
 }
 
 func (s *incomingStreamsMap[T]) AcceptStream(ctx context.Context) (T, error) {
-	s.mx.Lock()
-	closeErr := s.closeErr
-	s.mx.Unlock()
 	var zero T
-	if closeErr != nil {
+	if closeErr := context.Cause(s.ctx); closeErr != nil {
 		return zero, closeErr
 	}
 
@@ -107,10 +105,7 @@ func (s *incomingStreamsMap[T]) AcceptStream(ctx context.Context) (T, error) {
 		// No stream in the accept queue. Wait until we accept one.
 		select {
 		case <-s.ctx.Done():
-			s.mx.Lock()
-			closeErr := s.closeErr
-			s.mx.Unlock()
-			return zero, closeErr
+			return zero, context.Cause(s.ctx)
 		case <-ctx.Done():
 			return zero, ctx.Err()
 		case <-s.acceptQueue.c:
@@ -122,10 +117,10 @@ func (s *incomingStreamsMap[T]) CloseSession(err error) {
 	s.mx.Lock()
 	defer s.mx.Unlock()
 
-	if s.closeErr != nil {
+	if context.Cause(s.ctx) != nil {
 		return
 	}
-	s.closeErr = err
+	s.cancel(err)
 
 	for _, str := range s.m {
 		str.closeWithSession(err)

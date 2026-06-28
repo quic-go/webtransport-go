@@ -206,7 +206,7 @@ func TestReceiveStreamSessionGone(t *testing.T) {
 func TestReceiveStreamReadDuringSessionGoneAndCloseSession(t *testing.T) {
 	sendStr, recvStr := newUniStreamPair(t)
 
-	sm := newIncomingStreamsMap[*ReceiveStream](context.Background())
+	sm := newIncomingStreamsMap[*ReceiveStream]()
 	str := newReceiveStream(recvStr, func() { sm.removeStream(recvStr.StreamID()) })
 	sm.addStream(recvStr.StreamID(), str)
 

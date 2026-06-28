@@ -76,8 +76,8 @@ func newSession(ctx context.Context, sessionID sessionID, conn *quic.Conn, str h
 		applicationProtocol: applicationProtocol,
 		ctx:                 ctx,
 		capsuleQueueUpdated: make(chan struct{}, 1),
-		incomingStreams:     newIncomingStreamsMap[*Stream](ctx),
-		incomingUniStreams:  newIncomingStreamsMap[*ReceiveStream](ctx),
+		incomingStreams:     newIncomingStreamsMap[*Stream](),
+		incomingUniStreams:  newIncomingStreamsMap[*ReceiveStream](),
 	}
 	c.outgoingStreams = newOutgoingBidiStreamsMap(conn, sessionID, c.queueCapsule)
 	c.outgoingUniStreams = newOutgoingUniStreamsMap(conn, sessionID, c.queueCapsule)
