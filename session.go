@@ -53,7 +53,8 @@ type Session struct {
 	pendingCloseCapsule *closeSessionCapsule
 	capsuleQueueUpdated chan struct{}
 
-	incomingStreams    incomingStreamsMap
+	incomingStreams    *incomingStreamsMap[*Stream]
+	incomingUniStreams *incomingStreamsMap[*ReceiveStream]
 	outgoingStreams    *outgoingStreamsMap[*Stream]
 	outgoingUniStreams *outgoingStreamsMap[*SendStream]
 }
@@ -75,7 +76,8 @@ func newSession(ctx context.Context, sessionID sessionID, conn *quic.Conn, str h
 		applicationProtocol: applicationProtocol,
 		ctx:                 ctx,
 		capsuleQueueUpdated: make(chan struct{}, 1),
-		incomingStreams:     *newIncomingStreamsMap(ctx),
+		incomingStreams:     newIncomingStreamsMap[*Stream](ctx),
+		incomingUniStreams:  newIncomingStreamsMap[*ReceiveStream](ctx),
 	}
 	c.outgoingStreams = newOutgoingBidiStreamsMap(conn, sessionID, c.queueCapsule)
 	c.outgoingUniStreams = newOutgoingUniStreamsMap(conn, sessionID, c.queueCapsule)
@@ -189,12 +191,14 @@ func (s *Session) queueCapsule(c capsule) {
 
 // addIncomingStream adds a bidirectional stream that the remote peer opened
 func (s *Session) addIncomingStream(qstr *quic.Stream) {
-	s.incomingStreams.AddStream(qstr)
+	id := qstr.StreamID()
+	s.incomingStreams.addStream(id, newStream(qstr, nil, func() { s.incomingStreams.removeStream(id) }))
 }
 
 // addIncomingUniStream adds a unidirectional stream that the remote peer opened
 func (s *Session) addIncomingUniStream(qstr *quic.ReceiveStream) {
-	s.incomingStreams.AddUniStream(qstr)
+	id := qstr.StreamID()
+	s.incomingUniStreams.addStream(id, newReceiveStream(qstr, func() { s.incomingUniStreams.removeStream(id) }))
 }
 
 // Context returns a context that is closed when the session is closed.
@@ -207,7 +211,7 @@ func (s *Session) AcceptStream(ctx context.Context) (*Stream, error) {
 }
 
 func (s *Session) AcceptUniStream(ctx context.Context) (*ReceiveStream, error) {
-	return s.incomingStreams.AcceptUniStream(ctx)
+	return s.incomingUniStreams.AcceptStream(ctx)
 }
 
 func (s *Session) OpenStream() (*Stream, error) {
@@ -320,6 +324,7 @@ func (s *Session) closeWithError(closeErr error, closeCapsule *closeSessionCapsu
 	s.outgoingStreams.CloseSession(closeErr)
 	s.outgoingUniStreams.CloseSession(closeErr)
 	s.incomingStreams.CloseSession(closeErr)
+	s.incomingUniStreams.CloseSession(closeErr)
 
 	if closeCapsule != nil {
 		s.capsuleQueueMx.Lock()

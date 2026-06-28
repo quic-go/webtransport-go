@@ -12,7 +12,8 @@ import (
 func TestIncomingStreamsMapAddStreamAfterCloseSession(t *testing.T) {
 	ctx := context.Background()
 	clientConn, serverConn := newConnPair(t, newUDPConnLocalhost(t), newUDPConnLocalhost(t))
-	streams := newIncomingStreamsMap(ctx)
+	streams := newIncomingStreamsMap[*Stream](ctx)
+	uniStreams := newIncomingStreamsMap[*ReceiveStream](ctx)
 
 	serverStr, err := serverConn.OpenStream()
 	require.NoError(t, err)
@@ -20,7 +21,8 @@ func TestIncomingStreamsMapAddStreamAfterCloseSession(t *testing.T) {
 	require.NoError(t, err)
 	clientStr, err := clientConn.AcceptStream(ctx)
 	require.NoError(t, err)
-	streams.AddStream(clientStr)
+	streamID := clientStr.StreamID()
+	streams.addStream(streamID, newStream(clientStr, nil, func() { streams.removeStream(streamID) }))
 
 	str, err := streams.AcceptStream(ctx)
 	require.NoError(t, err)
@@ -28,6 +30,7 @@ func TestIncomingStreamsMapAddStreamAfterCloseSession(t *testing.T) {
 
 	sessionErr := &SessionError{ErrorCode: 42, Message: "bye"}
 	streams.CloseSession(sessionErr)
+	uniStreams.CloseSession(sessionErr)
 	_, err = streams.AcceptStream(ctx)
 	require.ErrorIs(t, err, sessionErr)
 
@@ -37,7 +40,8 @@ func TestIncomingStreamsMapAddStreamAfterCloseSession(t *testing.T) {
 	require.NoError(t, err)
 	clientStr, err = clientConn.AcceptStream(ctx)
 	require.NoError(t, err)
-	streams.AddStream(clientStr)
+	streamID = clientStr.StreamID()
+	streams.addStream(streamID, newStream(clientStr, nil, func() { streams.removeStream(streamID) }))
 
 	select {
 	case <-serverStr.Context().Done():
@@ -55,7 +59,8 @@ func TestIncomingStreamsMapAddStreamAfterCloseSession(t *testing.T) {
 	require.NoError(t, err)
 	clientUniStr, err := clientConn.AcceptUniStream(ctx)
 	require.NoError(t, err)
-	streams.AddUniStream(clientUniStr)
+	uniStreamID := clientUniStr.StreamID()
+	uniStreams.addStream(uniStreamID, newReceiveStream(clientUniStr, func() { uniStreams.removeStream(uniStreamID) }))
 
 	select {
 	case <-serverUniStr.Context().Done():
