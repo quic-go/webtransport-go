@@ -76,7 +76,7 @@ func newSession(ctx context.Context, sessionID sessionID, conn *quic.Conn, str h
 		capsuleQueueUpdated: make(chan struct{}, 1),
 		incomingStreams:     *newIncomingStreamsMap(ctx),
 	}
-	c.outgoingStreams = *newOutgoingStreamsMap(conn, sessionID)
+	c.outgoingStreams = *newOutgoingStreamsMap(conn, sessionID, c.queueCapsule)
 
 	go func() {
 		defer ctxCancel()
