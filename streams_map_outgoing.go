@@ -16,10 +16,12 @@ type StreamLimitReachedError struct{}
 
 func (e StreamLimitReachedError) Error() string { return "too many open streams" }
 
-const maxOutgoingStreams = 1 << 60
+const (
+	maxOutgoingStreams = 1 << 60
+	invalidStreamID    = quic.StreamID(-1)
+)
 
 type outgoingStream interface {
-	*Stream | *SendStream
 	closeWithSession(error)
 }
 
@@ -69,11 +71,11 @@ func newOutgoingBidiStreamsMap(conn *quic.Conn, sessionID sessionID, queueCapsul
 		},
 		func(ctx context.Context) (*Stream, quic.StreamID, error) {
 			qstr, err := conn.OpenStreamSync(ctx)
-			if qstr == nil {
-				return nil, 0, err
+			if err != nil {
+				return nil, invalidStreamID, err
 			}
 			id := qstr.StreamID()
-			return newStream(qstr, streamHdr, func() { streams.removeStream(id) }), id, err
+			return newStream(qstr, streamHdr, func() { streams.removeStream(id) }), id, nil
 		},
 		func(limit uint64) { queueCapsule(streamsBlockedBidiCapsule{MaximumStreams: limit}) },
 	)
@@ -94,11 +96,11 @@ func newOutgoingUniStreamsMap(conn *quic.Conn, sessionID sessionID, queueCapsule
 		},
 		func(ctx context.Context) (*SendStream, quic.StreamID, error) {
 			qstr, err := conn.OpenUniStreamSync(ctx)
-			if qstr == nil {
-				return nil, 0, err
+			if err != nil {
+				return nil, invalidStreamID, err
 			}
 			id := qstr.StreamID()
-			return newSendStream(qstr, streamHdr, func() { streams.removeStream(id) }), id, err
+			return newSendStream(qstr, streamHdr, func() { streams.removeStream(id) }), id, nil
 		},
 		func(limit uint64) { queueCapsule(streamsBlockedUniCapsule{MaximumStreams: limit}) },
 	)
@@ -188,12 +190,12 @@ func (s *outgoingStreamsMap[T]) OpenStreamSync(ctx context.Context) (T, error) {
 	defer s.mx.Unlock()
 	delete(s.streamCtxs, id)
 
-	if str != nil && s.closeErr != nil {
+	if streamID != invalidStreamID && s.closeErr != nil {
 		str.closeWithSession(s.closeErr)
 		return zero, s.closeErr
 	}
 	if err != nil {
-		if str == nil && s.closeErr == nil {
+		if s.closeErr == nil {
 			s.numStreams--
 			s.maybeUnblockOpenSync()
 		}
