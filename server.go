@@ -347,18 +347,10 @@ func (s *Server) isClosed() bool {
 }
 
 func (s *Server) Close() error {
-	// Ensure the server is initialized so s.ctx and s.ctxCancel are defined before they are used below.
-	// This covers Close being called without Serve/ListenAndServe, and also Close racing ListenAndServe's
-	// initialize(): firing the Once with an empty function (as this previously did) would mark initialization
-	// "done" without running init(), leaving s.ctx nil and crashing serve()'s ln.Accept(s.ctx).
 	_ = s.initialize()
 
 	// Close the established connections first, while the listener's socket is still
 	// open, so each CONNECTION_CLOSE frame is actually transmitted to the peer.
-	// This must happen before canceling s.ctx: canceling it makes serve() return,
-	// and its deferred listener teardown closes the socket. If the socket is torn
-	// down first, the queued CONNECTION_CLOSE frames are never sent and the peers
-	// only learn the connections are gone at their idle timeout.
 	s.connsMx.Lock()
 	s.closed = true
 	if s.conns != nil {
