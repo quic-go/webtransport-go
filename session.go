@@ -106,6 +106,19 @@ func (s *Session) readFromConnectStream() {
 		}
 		switch c := c.(type) {
 		case closeSessionCapsule:
+			// Per draft-ietf-webtrans-http3-15 §6, an endpoint that sends a
+			// WT_CLOSE_SESSION capsule MUST immediately send a FIN, so a
+			// conformant peer produces EOF here. Any additional stream data is a
+			// protocol violation and MUST be answered by resetting the CONNECT
+			// stream with H3_MESSAGE_ERROR.
+			var b [1]byte
+			if n, _ := s.str.Read(b[:]); n > 0 {
+				s.closeWithError(&http3.Error{
+					ErrorCode:    http3.ErrCodeMessageError,
+					ErrorMessage: "webtransport: received data after WT_CLOSE_SESSION capsule",
+				}, nil)
+				return
+			}
 			s.closeWithError(c.ToSessionError(), nil)
 			return
 		case maxStreamsBidiCapsule:

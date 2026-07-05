@@ -32,6 +32,26 @@ func (s mockHTTP3Stream) CancelRead(quic.StreamErrorCode)                 {}
 func (s mockHTTP3Stream) CancelWrite(quic.StreamErrorCode)                {}
 func (s mockHTTP3Stream) SetWriteDeadline(time.Time) error                { return nil }
 
+// recordingHTTP3Stream is a mockHTTP3Stream that records the error codes passed
+// to CancelRead / CancelWrite, so tests can assert the stream reset code.
+type recordingHTTP3Stream struct {
+	*bytes.Reader
+	canceled  bool
+	readCode  quic.StreamErrorCode
+	writeCode quic.StreamErrorCode
+}
+
+func (s *recordingHTTP3Stream) Write(p []byte) (int, error)                     { return len(p), nil }
+func (s *recordingHTTP3Stream) Close() error                                    { return nil }
+func (s *recordingHTTP3Stream) ReceiveDatagram(context.Context) ([]byte, error) { return nil, io.EOF }
+func (s *recordingHTTP3Stream) SendDatagram([]byte) error                       { return nil }
+func (s *recordingHTTP3Stream) CancelRead(code quic.StreamErrorCode) {
+	s.canceled = true
+	s.readCode = code
+}
+func (s *recordingHTTP3Stream) CancelWrite(code quic.StreamErrorCode) { s.writeCode = code }
+func (s *recordingHTTP3Stream) SetWriteDeadline(time.Time) error      { return nil }
+
 type quicHTTP3Stream struct{ *quic.Stream }
 
 func (s quicHTTP3Stream) ReceiveDatagram(context.Context) ([]byte, error) { return nil, io.EOF }
@@ -273,6 +293,100 @@ func TestMaxStreamsCapsuleDecreaseClosesSession(t *testing.T) {
 
 	require.ErrorIs(t, err, &http3.Error{ErrorCode: http3.ErrCode(WTFlowControlErrorCode)})
 	require.ErrorContains(t, err, errMaxStreamsDecreased.Error())
+}
+
+// TestTrailingDataAfterCloseSessionResetsWithMessageError verifies that stream
+// data received after a WT_CLOSE_SESSION capsule resets the CONNECT stream with
+// H3_MESSAGE_ERROR, per draft-ietf-webtrans-http3-15 §6.
+func TestTrailingDataAfterCloseSessionResetsWithMessageError(t *testing.T) {
+	b := (closeSessionCapsule{ErrorCode: 42, Message: "bye"}).Append(nil)
+	b = append(b, []byte("unexpected trailing data")...)
+
+	str := &recordingHTTP3Stream{Reader: bytes.NewReader(b)}
+	sess := newSession(context.Background(), 42, nil, str, "")
+	select {
+	case <-sess.Context().Done():
+	case <-time.After(time.Second):
+		t.Fatal("timeout")
+	}
+
+	sess.closeMx.Lock()
+	err := sess.closeErr
+	sess.closeMx.Unlock()
+
+	require.ErrorIs(t, err, &http3.Error{ErrorCode: http3.ErrCodeMessageError})
+	require.ErrorContains(t, err, "received data after WT_CLOSE_SESSION")
+	require.True(t, str.canceled)
+	require.Equal(t, quic.StreamErrorCode(http3.ErrCodeMessageError), str.readCode)
+	require.Equal(t, quic.StreamErrorCode(http3.ErrCodeMessageError), str.writeCode)
+}
+
+// TestCleanCloseSessionCancelsWithSessionGone locks in the behavior for a
+// conformant peer that sends a WT_CLOSE_SESSION capsule followed by a FIN: the
+// session surfaces the peer's SessionError and cancels with WT_SESSION_GONE.
+func TestCleanCloseSessionCancelsWithSessionGone(t *testing.T) {
+	b := (closeSessionCapsule{ErrorCode: 1234, Message: "graceful"}).Append(nil)
+
+	str := &recordingHTTP3Stream{Reader: bytes.NewReader(b)}
+	sess := newSession(context.Background(), 42, nil, str, "")
+	select {
+	case <-sess.Context().Done():
+	case <-time.After(time.Second):
+		t.Fatal("timeout")
+	}
+
+	sess.closeMx.Lock()
+	err := sess.closeErr
+	sess.closeMx.Unlock()
+
+	require.ErrorIs(t, err, &SessionError{Remote: true, ErrorCode: 1234})
+	require.True(t, str.canceled)
+	require.Equal(t, WTSessionGoneErrorCode, str.readCode)
+	require.Equal(t, WTSessionGoneErrorCode, str.writeCode)
+}
+
+// TestTrailingDataAfterCloseSessionResetsConnectStream is the end-to-end variant
+// over a real QUIC connection: the peer writes a WT_CLOSE_SESSION capsule plus
+// illegal trailing data (no FIN), and observes the CONNECT stream reset with
+// H3_MESSAGE_ERROR.
+func TestTrailingDataAfterCloseSessionResetsConnectStream(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	clientConn, serverConn := newConnPair(t, newUDPConnLocalhost(t), newUDPConnLocalhost(t))
+
+	// The peer opens the stream and writes the capsule + illegal trailing data
+	// (no FIN). Writing makes the stream visible to the client's AcceptStream.
+	serverStr, err := serverConn.OpenStreamSync(ctx)
+	require.NoError(t, err)
+	b := (closeSessionCapsule{ErrorCode: 7, Message: "done"}).Append(nil)
+	b = append(b, []byte("trailing")...)
+	_, err = serverStr.Write(b)
+	require.NoError(t, err)
+
+	clientStr, err := clientConn.AcceptStream(ctx)
+	require.NoError(t, err)
+	sess := newSession(context.Background(), 0, clientConn, quicHTTP3Stream{clientStr}, "")
+
+	select {
+	case <-sess.Context().Done():
+	case <-time.After(time.Second):
+		t.Fatal("timeout")
+	}
+	sess.closeMx.Lock()
+	closeErr := sess.closeErr
+	sess.closeMx.Unlock()
+	require.ErrorIs(t, closeErr, &http3.Error{ErrorCode: http3.ErrCodeMessageError})
+
+	require.NoError(t, serverStr.SetReadDeadline(time.Now().Add(time.Second)))
+	buf := make([]byte, 16)
+	for err == nil {
+		_, err = serverStr.Read(buf)
+	}
+	require.ErrorIs(t, err, &quic.StreamError{
+		StreamID:  serverStr.StreamID(),
+		ErrorCode: quic.StreamErrorCode(http3.ErrCodeMessageError),
+		Remote:    true,
+	})
 }
 
 func TestSessionSendsQueuedCapsules(t *testing.T) {
