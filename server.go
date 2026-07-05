@@ -160,7 +160,7 @@ func (s *Server) serve(conn net.PacketConn) error {
 
 		s.refCount.Go(func() {
 			err := s.ServeQUICConn(qconn)
-			if errors.Is(err, context.Canceled) {
+			if errors.Is(err, http.ErrServerClosed) {
 				return
 			} else if err != nil {
 				log.Printf("http3: error serving QUIC connection: %v", err)
@@ -188,7 +188,7 @@ func (s *Server) ServeQUICConn(conn *quic.Conn) error {
 		// Shutting down, do not accept new connections
 		s.connsMx.Unlock()
 		conn.CloseWithError(0, "")
-		return context.Canceled
+		return http.ErrServerClosed
 	}
 
 	sessMgr, ok := s.conns[conn]

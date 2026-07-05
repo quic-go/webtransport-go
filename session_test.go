@@ -118,7 +118,7 @@ func TestServerRejectsQUICConnAfterClose(t *testing.T) {
 	require.NoError(t, s.initialize())
 	require.NoError(t, s.Close())
 
-	require.ErrorIs(t, s.ServeQUICConn(serverConn), context.Canceled)
+	require.ErrorIs(t, s.ServeQUICConn(serverConn), http.ErrServerClosed)
 	select {
 	case <-clientConn.Context().Done():
 	case <-time.After(time.Second):
