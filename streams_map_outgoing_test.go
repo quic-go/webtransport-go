@@ -246,9 +246,11 @@ func TestOutgoingStreamsMapUpdateStreamLimitDuplicateAndDecrease(t *testing.T) {
 	)
 	streams.maxStreams = 5
 
-	require.NoError(t, streams.UpdateStreamLimit(5))
-	err := streams.UpdateStreamLimit(4)
-	require.ErrorIs(t, err, errMaxStreamsDecreased)
+	err := streams.UpdateStreamLimit(5)
+	require.ErrorIs(t, err, errMaxStreamsNotIncreased)
+	require.ErrorContains(t, err, "current limit: 5, received limit: 5")
+	err = streams.UpdateStreamLimit(4)
+	require.ErrorIs(t, err, errMaxStreamsNotIncreased)
 	require.ErrorContains(t, err, "current limit: 5, received limit: 4")
 	require.Equal(t, uint64(5), streams.maxStreams)
 }
