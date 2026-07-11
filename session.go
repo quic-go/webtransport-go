@@ -113,8 +113,9 @@ func newSession(
 }
 
 func (s *Session) readFromConnectStream() {
+	parser := http3.NewCapsuleParser(s.str)
 	for {
-		c, err := parseNextCapsule(s.str)
+		c, err := parseNextCapsule(parser)
 		if err != nil {
 			s.closeWithError(&http3.Error{ErrorCode: http3.ErrCodeDatagramError, ErrorMessage: err.Error()}, nil)
 			return
