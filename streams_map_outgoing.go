@@ -18,7 +18,7 @@ type StreamLimitReachedError struct{}
 
 func (e StreamLimitReachedError) Error() string { return "too many open streams" }
 
-var errMaxStreamsDecreased = errors.New("webtransport: WT_MAX_STREAMS capsule decreased stream limit")
+var errMaxStreamsNotIncreased = errors.New("webtransport: WT_MAX_STREAMS capsule didn't increase stream limit")
 
 const (
 	maxOutgoingStreams = 1 << 60
@@ -284,11 +284,11 @@ func (s *outgoingStreamsMap[T]) UpdateStreamLimit(limit uint64) error {
 	s.mx.Lock()
 	defer s.mx.Unlock()
 
-	if s.closeErr != nil || limit == s.maxStreams {
+	if s.closeErr != nil {
 		return nil
 	}
-	if limit < s.maxStreams {
-		return fmt.Errorf("%w: current limit: %d, received limit: %d", errMaxStreamsDecreased, s.maxStreams, limit)
+	if limit <= s.maxStreams {
+		return fmt.Errorf("%w: current limit: %d, received limit: %d", errMaxStreamsNotIncreased, s.maxStreams, limit)
 	}
 	s.maxStreams = limit
 	s.blockedSent = false

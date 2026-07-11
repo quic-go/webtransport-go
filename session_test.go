@@ -272,7 +272,7 @@ func TestMaxStreamsCapsuleDecreaseClosesSession(t *testing.T) {
 	sess.closeMx.Unlock()
 
 	require.ErrorIs(t, err, &http3.Error{ErrorCode: http3.ErrCode(WTFlowControlErrorCode)})
-	require.ErrorContains(t, err, errMaxStreamsDecreased.Error())
+	require.ErrorContains(t, err, errMaxStreamsNotIncreased.Error())
 }
 
 func TestSessionSendsQueuedCapsules(t *testing.T) {
