@@ -183,7 +183,7 @@ func TestCloseWithErrorTruncatesSendMessage(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, http.StatusOK, rsp.StatusCode)
 
-	sess := newSession(context.Background(), 42, clientConn, reqStr, "")
+	sess := newSession(context.Background(), 42, clientConn, reqStr, "", sessionFlowControl{})
 	require.NoError(t, sess.CloseWithError(42, strings.Repeat("a", maxCloseCapsuleErrorMsgLen+500)))
 
 	select {
@@ -203,7 +203,14 @@ func TestCapsuleParseErrorClosesSessionWithDatagramError(t *testing.T) {
 	b = quicvarint.Append(b, 42)
 	b = append(b, 0)
 
-	sess := newSession(context.Background(), 42, nil, mockHTTP3Stream{bytes.NewReader(b)}, "")
+	sess := newSession(
+		context.Background(),
+		42,
+		nil,
+		mockHTTP3Stream{bytes.NewReader(b)},
+		"",
+		sessionFlowControl{Enabled: true},
+	)
 	select {
 	case <-sess.Context().Done():
 	case <-time.After(time.Second):
@@ -239,7 +246,14 @@ func TestForbiddenStreamDataFlowControlCapsulesCloseSession(t *testing.T) {
 			b := quicvarint.Append(nil, uint64(tc.typ))
 			b = quicvarint.Append(b, 0)
 
-			sess := newSession(context.Background(), 42, nil, mockHTTP3Stream{bytes.NewReader(b)}, "")
+			sess := newSession(
+				context.Background(),
+				42,
+				nil,
+				mockHTTP3Stream{bytes.NewReader(b)},
+				"",
+				sessionFlowControl{},
+			)
 			select {
 			case <-sess.Context().Done():
 			case <-time.After(time.Second):
@@ -260,7 +274,14 @@ func TestMaxStreamsCapsuleDecreaseClosesSession(t *testing.T) {
 	b := (maxStreamsBidiCapsule{MaximumStreams: maxOutgoingStreams}).Append(nil)
 	b = (maxStreamsBidiCapsule{MaximumStreams: maxOutgoingStreams - 1}).Append(b)
 
-	sess := newSession(context.Background(), 42, nil, mockHTTP3Stream{bytes.NewReader(b)}, "")
+	sess := newSession(
+		context.Background(),
+		42,
+		nil,
+		mockHTTP3Stream{bytes.NewReader(b)},
+		"",
+		sessionFlowControl{Enabled: true, MaxOutgoingStreams: 0},
+	)
 	select {
 	case <-sess.Context().Done():
 	case <-time.After(time.Second):
@@ -282,7 +303,7 @@ func TestSessionSendsQueuedCapsules(t *testing.T) {
 
 	clientStr, err := clientConn.OpenStreamSync(ctx)
 	require.NoError(t, err)
-	sess := newSession(context.Background(), 42, clientConn, quicHTTP3Stream{clientStr}, "")
+	sess := newSession(context.Background(), 42, clientConn, quicHTTP3Stream{clientStr}, "", sessionFlowControl{})
 	sess.queueCapsule(streamsBlockedBidiCapsule{MaximumStreams: 42})
 	sess.queueCapsule(streamsBlockedUniCapsule{MaximumStreams: 1337})
 
@@ -333,7 +354,14 @@ func TestSessionClosesWhenOutgoingCapsuleQueueFull(t *testing.T) {
 	_, err = clientStr.Write(make([]byte, 1450))
 	require.NoError(t, err)
 
-	sess := newSession(context.Background(), 0, clientConn, quicHTTP3Stream{clientStr}, "")
+	sess := newSession(
+		context.Background(),
+		0,
+		clientConn,
+		quicHTTP3Stream{clientStr},
+		"",
+		sessionFlowControl{},
+	)
 	for range maxQueuedOutgoingCapsules {
 		sess.queueCapsule(streamsBlockedBidiCapsule{})
 	}
@@ -389,7 +417,14 @@ func TestCloseWithErrorDropsQueuedCapsulesWhenConnectStreamBlocked(t *testing.T)
 	_, err = clientStr.Write(make([]byte, 1450))
 	require.NoError(t, err)
 
-	sess := newSession(context.Background(), 0, clientConn, quicHTTP3Stream{clientStr}, "")
+	sess := newSession(
+		context.Background(),
+		0,
+		clientConn,
+		quicHTTP3Stream{clientStr},
+		"",
+		sessionFlowControl{},
+	)
 	sess.queueCapsule(streamsBlockedBidiCapsule{})
 
 	done := make(chan error, 1)

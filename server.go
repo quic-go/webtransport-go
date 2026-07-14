@@ -37,7 +37,7 @@ var quicConnKey = quicConnKeyType{}
 
 func ConfigureHTTP3Server(s *http3.Server) {
 	if s.AdditionalSettings == nil {
-		s.AdditionalSettings = make(map[uint64]uint64, 6)
+		s.AdditionalSettings = make(map[uint64]uint64, 3)
 	}
 	// send the old setting for backwards compatibility with older clients
 	s.AdditionalSettings[settingsEnableWebtransportDraft06] = 1
@@ -45,11 +45,6 @@ func ConfigureHTTP3Server(s *http3.Server) {
 
 	// Safari requires SETTINGS_WT_MAX_SESSIONS >= 1 (draft-ietf-webtrans-http3-14)
 	s.AdditionalSettings[settingsWebTransportMaxSessions] = 1<<62 - 1
-
-	// Required when SETTINGS_WT_MAX_SESSIONS > 1
-	s.AdditionalSettings[settingsWebTransportInitialMaxStreamsUni] = 1 << 60
-	s.AdditionalSettings[settingsWebTransportInitialMaxStreamsBidi] = 1 << 60
-	s.AdditionalSettings[settingsWebTransportInitialMaxData] = 1 << 60
 
 	s.EnableDatagrams = true
 	origConnContext := s.ConnContext
@@ -64,6 +59,10 @@ func ConfigureHTTP3Server(s *http3.Server) {
 
 type Server struct {
 	H3 *http3.Server
+
+	// Config is the WebTransport configuration used for new sessions.
+	// If nil, the zero value is used.
+	Config *Config
 
 	// ApplicationProtocols is a list of application protocols that can be negotiated,
 	// see section 3.3 of https://www.ietf.org/archive/id/draft-ietf-webtrans-http3-15 for details.
@@ -89,6 +88,7 @@ type Server struct {
 
 	initOnce sync.Once
 	initErr  error
+	config   Config
 
 	connsMx sync.Mutex
 	conns   map[*quic.Conn]*sessionManager
@@ -111,6 +111,14 @@ func (s *Server) timeout() time.Duration {
 }
 
 func (s *Server) init() error {
+	if s.Config != nil {
+		s.config = *s.Config
+	}
+	if s.H3 != nil {
+		ConfigureHTTP3Server(s.H3)
+		s.config.addSettings(s.H3.AdditionalSettings)
+	}
+
 	s.ctx, s.ctxCancel = context.WithCancel(context.Background())
 
 	s.conns = make(map[*quic.Conn]*sessionManager)
@@ -430,7 +438,14 @@ func (s *Server) Upgrade(w http.ResponseWriter, r *http.Request) (*Session, erro
 		return nil, errors.New("webtransport: connection session manager not found")
 	}
 
-	sess := newSession(context.WithoutCancel(r.Context()), sessID, conn, str, selectedProtocol)
+	sess := newSession(
+		context.WithoutCancel(r.Context()),
+		sessID,
+		conn,
+		str,
+		selectedProtocol,
+		s.config.sessionFlowControl(settings),
+	)
 	sessMgr.AddSession(sessID, sess)
 	return sess, nil
 }

@@ -208,7 +208,7 @@ func TestReceiveStreamReadDuringSessionGoneAndCloseSession(t *testing.T) {
 
 	sm := newIncomingStreamsMap[*ReceiveStream](maxStreamsLimit, nil)
 	str := newReceiveStream(recvStr, func() { sm.RemoveStream(recvStr.StreamID()) })
-	sm.AddStream(recvStr.StreamID(), str)
+	require.NoError(t, sm.AddStream(recvStr.StreamID(), str))
 
 	// start reading
 	errChan := make(chan error, 1)
@@ -330,7 +330,7 @@ func TestSendStreamHeaderRetryAfterDeadlineError(t *testing.T) {
 func TestSendStreamWriteDuringSessionGoneAndCloseSession(t *testing.T) {
 	sendStr, recvStr := newUniStreamPair(t)
 
-	sm := newOutgoingUniStreamsMap(nil, 0, func(c capsule) {
+	sm := newOutgoingUniStreamsMap(nil, 0, maxOutgoingStreams, func(c capsule) {
 		t.Fatalf("unexpected capsule: %#v", c)
 	})
 	str := newSendStream(sendStr, nil, func() { sm.removeStream(sendStr.StreamID()) })

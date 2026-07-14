@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"github.com/quic-go/quic-go"
+	"github.com/quic-go/quic-go/http3"
+
 	"github.com/stretchr/testify/require"
 )
 
@@ -22,7 +24,7 @@ func TestIncomingStreamsMapAddStreamAfterCloseSession(t *testing.T) {
 	clientStr, err := clientConn.AcceptStream(ctx)
 	require.NoError(t, err)
 	streamID := clientStr.StreamID()
-	streams.AddStream(streamID, newStream(clientStr, nil, func() { streams.RemoveStream(streamID) }))
+	require.NoError(t, streams.AddStream(streamID, newStream(clientStr, nil, func() { streams.RemoveStream(streamID) })))
 
 	str, err := streams.AcceptStream(ctx)
 	require.NoError(t, err)
@@ -41,7 +43,7 @@ func TestIncomingStreamsMapAddStreamAfterCloseSession(t *testing.T) {
 	clientStr, err = clientConn.AcceptStream(ctx)
 	require.NoError(t, err)
 	streamID = clientStr.StreamID()
-	streams.AddStream(streamID, newStream(clientStr, nil, func() { streams.RemoveStream(streamID) }))
+	require.NoError(t, streams.AddStream(streamID, newStream(clientStr, nil, func() { streams.RemoveStream(streamID) })))
 
 	select {
 	case <-serverStr.Context().Done():
@@ -60,7 +62,12 @@ func TestIncomingStreamsMapAddStreamAfterCloseSession(t *testing.T) {
 	clientUniStr, err := clientConn.AcceptUniStream(ctx)
 	require.NoError(t, err)
 	uniStreamID := clientUniStr.StreamID()
-	uniStreams.AddStream(uniStreamID, newReceiveStream(clientUniStr, func() { uniStreams.RemoveStream(uniStreamID) }))
+	require.NoError(t,
+		uniStreams.AddStream(
+			uniStreamID,
+			newReceiveStream(clientUniStr, func() { uniStreams.RemoveStream(uniStreamID) }),
+		),
+	)
 
 	select {
 	case <-serverUniStr.Context().Done():
@@ -98,8 +105,8 @@ func TestIncomingStreamsMapQueuesMaxStreamsOnRemove(t *testing.T) {
 		capsules = append(capsules, limit)
 	})
 
-	streams.AddStream(1, newReceiveStream(nil, nil))
-	streams.AddStream(2, newReceiveStream(nil, nil))
+	require.NoError(t, streams.AddStream(1, newReceiveStream(nil, nil)))
+	require.NoError(t, streams.AddStream(2, newReceiveStream(nil, nil)))
 
 	streams.RemoveStream(1)
 	require.Equal(t, []uint64{4}, capsules)
@@ -114,12 +121,20 @@ func TestIncomingStreamsMapMaxStreamsLimit(t *testing.T) {
 		capsules = append(capsules, limit)
 	})
 
-	streams.AddStream(1, newReceiveStream(nil, nil))
-	streams.AddStream(2, newReceiveStream(nil, nil))
+	require.NoError(t, streams.AddStream(1, newReceiveStream(nil, nil)))
+	require.NoError(t, streams.AddStream(2, newReceiveStream(nil, nil)))
 
 	streams.RemoveStream(1)
 	require.Equal(t, []uint64{maxStreamsLimit}, capsules)
 
 	streams.RemoveStream(2)
 	require.Equal(t, []uint64{maxStreamsLimit}, capsules)
+}
+
+func TestIncomingStreamsMapRejectsStreamOverLimit(t *testing.T) {
+	streams := newIncomingStreamsMap[*ReceiveStream](1, nil)
+	require.NoError(t, streams.AddStream(1, newReceiveStream(nil, nil)))
+	err := streams.AddStream(2, newReceiveStream(nil, nil))
+	require.ErrorIs(t, err, &http3.Error{ErrorCode: http3.ErrCode(WTFlowControlErrorCode)})
+	require.ErrorContains(t, err, "peer opened more than 1 streams")
 }

@@ -43,6 +43,7 @@ type Session struct {
 	conn                *quic.Conn
 	str                 http3Stream
 	applicationProtocol string
+	flowControlEnabled  bool
 
 	ctx      context.Context
 	closeMx  sync.Mutex
@@ -67,24 +68,38 @@ const (
 	closeSessionTimeout       = 10 * time.Millisecond
 )
 
-func newSession(ctx context.Context, sessionID sessionID, conn *quic.Conn, str http3Stream, applicationProtocol string) *Session {
+func newSession(
+	ctx context.Context,
+	sessionID sessionID,
+	conn *quic.Conn,
+	str http3Stream,
+	applicationProtocol string,
+	fc sessionFlowControl,
+) *Session {
 	ctx, ctxCancel := context.WithCancel(ctx)
 	c := &Session{
 		sessionID:           sessionID,
 		conn:                conn,
 		str:                 str,
 		applicationProtocol: applicationProtocol,
+		flowControlEnabled:  fc.Enabled,
 		ctx:                 ctx,
 		capsuleQueueUpdated: make(chan struct{}, 1),
 	}
-	c.incomingStreams = newIncomingStreamsMap[*Stream](maxStreamsLimit, func(limit uint64) {
+	if !fc.Enabled {
+		fc.MaxIncomingStreams = maxStreamsLimit
+		fc.MaxIncomingUniStreams = maxStreamsLimit
+		fc.MaxOutgoingStreams = maxStreamsLimit
+		fc.MaxOutgoingUniStreams = maxStreamsLimit
+	}
+	c.incomingStreams = newIncomingStreamsMap[*Stream](fc.MaxIncomingStreams, func(limit uint64) {
 		c.queueCapsule(maxStreamsBidiCapsule{MaximumStreams: limit})
 	})
-	c.incomingUniStreams = newIncomingStreamsMap[*ReceiveStream](maxStreamsLimit, func(limit uint64) {
+	c.incomingUniStreams = newIncomingStreamsMap[*ReceiveStream](fc.MaxIncomingUniStreams, func(limit uint64) {
 		c.queueCapsule(maxStreamsUniCapsule{MaximumStreams: limit})
 	})
-	c.outgoingStreams = newOutgoingBidiStreamsMap(conn, sessionID, c.queueCapsule)
-	c.outgoingUniStreams = newOutgoingUniStreamsMap(conn, sessionID, c.queueCapsule)
+	c.outgoingStreams = newOutgoingBidiStreamsMap(conn, sessionID, fc.MaxOutgoingStreams, c.queueCapsule)
+	c.outgoingUniStreams = newOutgoingUniStreamsMap(conn, sessionID, fc.MaxOutgoingUniStreams, c.queueCapsule)
 
 	go func() {
 		defer ctxCancel()
@@ -109,6 +124,9 @@ func (s *Session) readFromConnectStream() {
 			s.closeWithError(c.ToSessionError(), nil)
 			return
 		case maxStreamsBidiCapsule:
+			if !s.flowControlEnabled {
+				continue
+			}
 			if err := s.outgoingStreams.UpdateStreamLimit(c.MaximumStreams); err != nil {
 				s.closeWithError(&http3.Error{
 					ErrorCode:    http3.ErrCode(WTFlowControlErrorCode),
@@ -117,6 +135,9 @@ func (s *Session) readFromConnectStream() {
 				return
 			}
 		case maxStreamsUniCapsule:
+			if !s.flowControlEnabled {
+				continue
+			}
 			if err := s.outgoingUniStreams.UpdateStreamLimit(c.MaximumStreams); err != nil {
 				s.closeWithError(&http3.Error{
 					ErrorCode:    http3.ErrCode(WTFlowControlErrorCode),
@@ -125,6 +146,9 @@ func (s *Session) readFromConnectStream() {
 				return
 			}
 		case streamsBlockedBidiCapsule, streamsBlockedUniCapsule:
+			if !s.flowControlEnabled {
+				continue
+			}
 			// TODO: log blocked capsules
 		}
 	}
@@ -210,13 +234,21 @@ func (s *Session) queueCapsule(c capsule) {
 // addIncomingStream adds a bidirectional stream that the remote peer opened
 func (s *Session) addIncomingStream(qstr *quic.Stream) {
 	id := qstr.StreamID()
-	s.incomingStreams.AddStream(id, newStream(qstr, nil, func() { s.incomingStreams.RemoveStream(id) }))
+	str := newStream(qstr, nil, func() { s.incomingStreams.RemoveStream(id) })
+	if err := s.incomingStreams.AddStream(id, str); err != nil {
+		str.closeWithSession(err)
+		s.closeWithError(err, nil)
+	}
 }
 
 // addIncomingUniStream adds a unidirectional stream that the remote peer opened
 func (s *Session) addIncomingUniStream(qstr *quic.ReceiveStream) {
 	id := qstr.StreamID()
-	s.incomingUniStreams.AddStream(id, newReceiveStream(qstr, func() { s.incomingUniStreams.RemoveStream(id) }))
+	str := newReceiveStream(qstr, func() { s.incomingUniStreams.RemoveStream(id) })
+	if err := s.incomingUniStreams.AddStream(id, str); err != nil {
+		str.closeWithSession(err)
+		s.closeWithError(err, nil)
+	}
 }
 
 // Context returns a context that is closed when the session is closed.

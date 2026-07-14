@@ -2,9 +2,11 @@ package webtransport
 
 import (
 	"context"
+	"fmt"
 	"sync"
 
 	"github.com/quic-go/quic-go"
+	"github.com/quic-go/quic-go/http3"
 )
 
 type acceptQueue[T any] struct {
@@ -88,18 +90,26 @@ func newIncomingStreamsMap[T incomingStream](maxOpenStreams uint64, queueMaxStre
 	}
 }
 
-func (s *incomingStreamsMap[T]) AddStream(id quic.StreamID, str T) {
+func (s *incomingStreamsMap[T]) AddStream(id quic.StreamID, str T) error {
 	s.mx.Lock()
 	if closeErr := context.Cause(s.ctx); closeErr != nil {
 		s.mx.Unlock()
 		str.closeWithSession(closeErr)
-		return
+		return nil
+	}
+	if s.numStreams >= s.maxStreams {
+		s.mx.Unlock()
+		return &http3.Error{
+			ErrorCode:    http3.ErrCode(WTFlowControlErrorCode),
+			ErrorMessage: fmt.Sprintf("webtransport: peer opened more than %d streams", s.maxStreams),
+		}
 	}
 	s.numStreams++
 	s.m[id] = str
 	s.mx.Unlock()
 
 	s.acceptQueue.add(str)
+	return nil
 }
 
 func (s *incomingStreamsMap[T]) RemoveStream(id quic.StreamID) {
