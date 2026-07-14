@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/quic-go/quic-go"
+
 	"github.com/stretchr/testify/require"
 )
 
@@ -21,6 +22,7 @@ func TestOutgoingStreamsMapOpenStreamSyncClose(t *testing.T) {
 	}
 	openStreamSyncCalled := make(chan struct{}, 1)
 	streams := newOutgoingStreamsMap(
+		1,
 		openStream,
 		func(ctx context.Context) (*outgoingStreamForTests, quic.StreamID, error) {
 			openStreamSyncCalled <- struct{}{}
@@ -29,7 +31,6 @@ func TestOutgoingStreamsMapOpenStreamSyncClose(t *testing.T) {
 		},
 		func(uint64) {},
 	)
-	streams.maxStreams = 1
 
 	errChan := make(chan error, 1)
 	go func() {
@@ -62,6 +63,7 @@ func TestOutgoingStreamsMapOpenStreamSyncBlocksAtLimit(t *testing.T) {
 	blocked := make(chan uint64, 10)
 	openStreamSyncCalled := make(chan struct{}, 1)
 	streams := newOutgoingStreamsMap(
+		0,
 		openStream,
 		func(context.Context) (*outgoingStreamForTests, quic.StreamID, error) {
 			openStreamSyncCalled <- struct{}{}
@@ -69,7 +71,6 @@ func TestOutgoingStreamsMapOpenStreamSyncBlocksAtLimit(t *testing.T) {
 		},
 		func(limit uint64) { blocked <- limit },
 	)
-	streams.maxStreams = 0
 
 	ctx, cancel := context.WithCancel(context.Background())
 	errChan := make(chan error, 1)
@@ -122,6 +123,7 @@ func TestOutgoingStreamsMapBlockedCapsules(t *testing.T) {
 	openStreamSyncCalled := make(chan quic.StreamID, 10)
 	releaseOpenStreamSync := make(chan struct{})
 	streams := newOutgoingStreamsMap(
+		3,
 		openStream,
 		func(ctx context.Context) (*outgoingStreamForTests, quic.StreamID, error) {
 			str, id, err := openStream()
@@ -138,7 +140,6 @@ func TestOutgoingStreamsMapBlockedCapsules(t *testing.T) {
 		},
 		func(limit uint64) { blocked <- limit },
 	)
-	streams.maxStreams = 3
 	for range 3 {
 		_, err := streams.OpenStream()
 		require.NoError(t, err)
@@ -238,13 +239,13 @@ func TestOutgoingStreamsMapBlockedCapsules(t *testing.T) {
 
 func TestOutgoingStreamsMapUpdateStreamLimitDuplicateAndDecrease(t *testing.T) {
 	streams := newOutgoingStreamsMap(
+		5,
 		func() (*outgoingStreamForTests, quic.StreamID, error) { return &outgoingStreamForTests{}, 0, nil },
 		func(context.Context) (*outgoingStreamForTests, quic.StreamID, error) {
 			return &outgoingStreamForTests{}, 0, nil
 		},
 		func(uint64) {},
 	)
-	streams.maxStreams = 5
 
 	err := streams.UpdateStreamLimit(5)
 	require.ErrorIs(t, err, errMaxStreamsNotIncreased)
@@ -264,11 +265,11 @@ func TestOutgoingStreamsMapQueueBlockedCanCloseSession(t *testing.T) {
 	sessionErr := &SessionError{ErrorCode: 1337, Message: "closing"}
 	var streams *outgoingStreamsMap[*outgoingStreamForTests]
 	streams = newOutgoingStreamsMap(
+		0,
 		openStream,
 		func(context.Context) (*outgoingStreamForTests, quic.StreamID, error) { return openStream() },
 		func(uint64) { streams.CloseSession(sessionErr) },
 	)
-	streams.maxStreams = 0
 
 	errChan := make(chan error, 1)
 	go func() {

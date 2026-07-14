@@ -97,7 +97,7 @@ func TestSessionManagerAddingStreams(t *testing.T) {
 	sessMgr := newSessionManager(time.Hour)
 	require.Zero(t, sessMgr.NumSessions())
 	// first add the streams...
-	sess := newSession(context.Background(), sessionID, clientConn, reqStr, "")
+	sess := newSession(context.Background(), sessionID, clientConn, reqStr, "", sessionFlowControl{})
 	// ...then add the session
 	sessMgr.AddStream(clientStr, sessionID)
 	require.Equal(t, 1, sessMgr.NumSessions())
@@ -217,7 +217,7 @@ func TestSessionManagerStreamReordering(t *testing.T) {
 		require.Equal(t, 1, sessMgr.NumSessions())
 
 		// now add the session
-		sess := newSession(context.Background(), sessionID, clientConn, reqStr, "")
+		sess := newSession(context.Background(), sessionID, clientConn, reqStr, "", sessionFlowControl{})
 		sessMgr.AddSession(sessionID, sess)
 		require.Equal(t, 1, sessMgr.NumSessions())
 
@@ -305,7 +305,7 @@ func TestSessionManagerSessionClose(t *testing.T) {
 			require.NoError(t, err)
 			sessID := sessionID(rand.Int64N(quicvarint.Max))
 			reqStrs[sessID] = reqStr
-			sess := newSession(context.Background(), sessID, clientConn, reqStr, "")
+			sess := newSession(context.Background(), sessID, clientConn, reqStr, "", sessionFlowControl{})
 			sessMgr.AddSession(sessID, sess)
 			synctest.Wait()
 		}

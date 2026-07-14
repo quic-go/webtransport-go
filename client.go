@@ -19,6 +19,9 @@ import (
 )
 
 type Dialer struct {
+	// Config is the WebTransport configuration used for new sessions.
+	Config *Config
+
 	// TLSClientConfig is the TLS client config used when dialing the QUIC connection.
 	// It must set the h3 ALPN.
 	TLSClientConfig *tls.Config
@@ -53,6 +56,10 @@ func (d *Dialer) init() {
 
 func (d *Dialer) Dial(ctx context.Context, urlStr string, reqHdr http.Header) (*http.Response, *Session, error) {
 	d.initOnce.Do(func() { d.init() })
+	var config Config
+	if d.Config != nil {
+		config = *d.Config
+	}
 
 	quicConf := d.QUICConfig
 	if quicConf == nil {
@@ -119,11 +126,10 @@ func (d *Dialer) Dial(ctx context.Context, urlStr string, reqHdr http.Header) (*
 	// Per draft-ietf-webtrans-http3-15 sections 3.1 and 7.1, for draft versions of
 	// WebTransport the client MUST send SETTINGS_WT_ENABLED using the codepoint
 	// for its supported draft version, so the server can negotiate the version.
-	tr := &http3.Transport{
-		EnableDatagrams:    true,
-		AdditionalSettings: map[uint64]uint64{settingsWebTransportEnabled: 1},
-	}
-	rsp, sess, err := d.handleConn(ctx, tr, qconn, req)
+	additionalSettings := map[uint64]uint64{settingsWebTransportEnabled: 1}
+	config.addSettings(additionalSettings)
+	tr := &http3.Transport{EnableDatagrams: true, AdditionalSettings: additionalSettings}
+	rsp, sess, err := d.handleConn(ctx, tr, qconn, req, config)
 	if err != nil {
 		var msg string
 		code := quic.ApplicationErrorCode(http3.ErrCodeNoError)
@@ -143,7 +149,7 @@ func (d *Dialer) Dial(ctx context.Context, urlStr string, reqHdr http.Header) (*
 	return rsp, sess, nil
 }
 
-func (d *Dialer) handleConn(ctx context.Context, tr *http3.Transport, qconn *quic.Conn, req *http.Request) (*http.Response, *Session, error) {
+func (d *Dialer) handleConn(ctx context.Context, tr *http3.Transport, qconn *quic.Conn, req *http.Request, config Config) (*http.Response, *Session, error) {
 	timeout := d.StreamReorderingTimeout
 	if timeout == 0 {
 		timeout = 5 * time.Second
@@ -276,7 +282,7 @@ func (d *Dialer) handleConn(ctx context.Context, tr *http3.Transport, qconn *qui
 			return rsp, nil, sessErr
 		}
 	}
-	sess := newSession(context.WithoutCancel(ctx), sessID, qconn, requestStr, protocol)
+	sess := newSession(context.WithoutCancel(ctx), sessID, qconn, requestStr, protocol, config.sessionFlowControl(settings))
 	sessMgr.AddSession(sessID, sess)
 	return rsp, sess, nil
 }

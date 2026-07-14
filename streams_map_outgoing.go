@@ -47,6 +47,7 @@ type outgoingStreamsMap[T outgoingStream] struct {
 }
 
 func newOutgoingStreamsMap[T outgoingStream](
+	maxStreams uint64,
 	openStream func() (T, quic.StreamID, error),
 	openStreamSync func(context.Context) (T, quic.StreamID, error),
 	queueBlocked func(uint64),
@@ -56,15 +57,16 @@ func newOutgoingStreamsMap[T outgoingStream](
 		openStreamSync: openStreamSync,
 		queueBlocked:   queueBlocked,
 		streamCtxs:     make(map[int]context.CancelFunc),
-		maxStreams:     maxOutgoingStreams,
+		maxStreams:     maxStreams,
 		m:              make(map[quic.StreamID]T),
 	}
 }
 
-func newOutgoingBidiStreamsMap(conn *quic.Conn, sessionID sessionID, queueCapsule func(capsule)) *outgoingStreamsMap[*Stream] {
+func newOutgoingBidiStreamsMap(conn *quic.Conn, sessionID sessionID, maxStreams uint64, queueCapsule func(capsule)) *outgoingStreamsMap[*Stream] {
 	streamHdr := newOutgoingStreamHeader(webTransportFrameType, sessionID)
 	var streams *outgoingStreamsMap[*Stream]
 	streams = newOutgoingStreamsMap(
+		maxStreams,
 		func() (*Stream, quic.StreamID, error) {
 			qstr, err := conn.OpenStream()
 			if err != nil {
@@ -86,10 +88,16 @@ func newOutgoingBidiStreamsMap(conn *quic.Conn, sessionID sessionID, queueCapsul
 	return streams
 }
 
-func newOutgoingUniStreamsMap(conn *quic.Conn, sessionID sessionID, queueCapsule func(capsule)) *outgoingStreamsMap[*SendStream] {
+func newOutgoingUniStreamsMap(
+	conn *quic.Conn,
+	sessionID sessionID,
+	maxStreams uint64,
+	queueCapsule func(capsule),
+) *outgoingStreamsMap[*SendStream] {
 	streamHdr := newOutgoingStreamHeader(webTransportUniStreamType, sessionID)
 	var streams *outgoingStreamsMap[*SendStream]
 	streams = newOutgoingStreamsMap(
+		maxStreams,
 		func() (*SendStream, quic.StreamID, error) {
 			qstr, err := conn.OpenUniStream()
 			if err != nil {
