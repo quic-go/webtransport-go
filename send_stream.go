@@ -27,14 +27,15 @@ var (
 // A SendStream is a unidirectional WebTransport send stream.
 type SendStream struct {
 	str quicSendStream
+
+	streamHdrMu sync.Mutex
 	// WebTransport stream header.
 	// Set by the constructor, set to nil once sent out.
 	// Might be initialized to nil if this sendStream is part of an incoming bidirectional stream.
-	streamHdr   []byte
-	streamHdrMu sync.Mutex
-	// Set to true when a goroutine is spawned to send the header asynchronously.
-	// This only happens if the stream is closed / reset immediately after creation.
-	sendingHdrAsync bool
+	streamHdr []byte
+	// Set by Close or CancelWrite before sending a pending stream header asynchronously.
+	// Prevents Write from sending payload before the header.
+	writeErr error
 
 	onClose func() // to remove the stream from the streamsMap
 
@@ -108,6 +109,11 @@ func (s *SendStream) handleSessionGoneError() error {
 
 func (s *SendStream) write(b []byte) (int, error) {
 	s.streamHdrMu.Lock()
+	if s.writeErr != nil {
+		err := s.writeErr
+		s.streamHdrMu.Unlock()
+		return 0, err
+	}
 	err := s.maybeSendStreamHeader()
 	s.streamHdrMu.Unlock()
 	if err != nil {
@@ -139,7 +145,7 @@ func (s *SendStream) maybeSendStreamHeader() error {
 func (s *SendStream) CancelWrite(e StreamErrorCode) {
 	// if a Goroutine is already sending the header, return immediately
 	s.streamHdrMu.Lock()
-	if s.sendingHdrAsync {
+	if s.writeErr != nil {
 		s.streamHdrMu.Unlock()
 		return
 	}
@@ -147,7 +153,7 @@ func (s *SendStream) CancelWrite(e StreamErrorCode) {
 	if len(s.streamHdr) > 0 {
 		// Sending the stream header might block if we are blocked by flow control.
 		// Send a stream header async so that CancelWrite can return immediately.
-		s.sendingHdrAsync = true
+		s.writeErr = &StreamError{ErrorCode: e}
 		streamHdr := s.streamHdr
 		s.streamHdr = nil
 		s.streamHdrMu.Unlock()
@@ -180,7 +186,7 @@ func (s *SendStream) closeWithSession(err error) {
 func (s *SendStream) Close() error {
 	// if a Goroutine is already sending the header, return immediately
 	s.streamHdrMu.Lock()
-	if s.sendingHdrAsync {
+	if s.writeErr != nil {
 		s.streamHdrMu.Unlock()
 		return nil
 	}
@@ -188,7 +194,7 @@ func (s *SendStream) Close() error {
 	if len(s.streamHdr) > 0 {
 		// Sending the stream header might block if we are blocked by flow control.
 		// Send a stream header async so that CancelWrite can return immediately.
-		s.sendingHdrAsync = true
+		s.writeErr = errors.New("write on closed stream")
 		streamHdr := s.streamHdr
 		s.streamHdr = nil
 		s.streamHdrMu.Unlock()
