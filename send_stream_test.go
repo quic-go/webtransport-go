@@ -2,6 +2,7 @@ package webtransport
 
 import (
 	"context"
+	"errors"
 	"io"
 	"testing"
 	"time"
@@ -226,5 +227,56 @@ func TestSendStreamWriteDuringSessionGoneAndCloseSession(t *testing.T) {
 		require.ErrorIs(t, err, sessionErr)
 	case <-time.After(scaleDuration(time.Second)):
 		t.Fatal("Write() should not hang after CloseSession()")
+	}
+}
+
+type blockingHeaderStream struct {
+	unblock chan struct{}
+}
+
+func (s *blockingHeaderStream) Write(b []byte) (int, error) {
+	if string(b) == "hdr" {
+		<-s.unblock
+	}
+	return len(b), nil
+}
+
+func (*blockingHeaderStream) Close() error                     { return nil }
+func (*blockingHeaderStream) CancelWrite(quic.StreamErrorCode) {}
+func (*blockingHeaderStream) Context() context.Context         { return context.Background() }
+func (*blockingHeaderStream) SetWriteDeadline(time.Time) error { return nil }
+func (*blockingHeaderStream) SetReliableBoundary()             {}
+
+func TestSendStreamWriteWhileSendingHeaderAsync(t *testing.T) {
+	const errorCode StreamErrorCode = 42
+
+	testCases := []struct {
+		name        string
+		stop        func(*SendStream) error
+		expectedErr error
+	}{
+		{
+			name:        "cancel",
+			stop:        func(s *SendStream) error { s.CancelWrite(errorCode); return nil },
+			expectedErr: &StreamError{ErrorCode: errorCode},
+		},
+		{
+			name:        "close",
+			stop:        (*SendStream).Close,
+			expectedErr: errors.New("write on closed stream"),
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			qstr := &blockingHeaderStream{unblock: make(chan struct{})}
+			str := newSendStream(qstr, []byte("hdr"), func() {})
+
+			require.NoError(t, tc.stop(str))
+			n, err := str.Write([]byte("payload"))
+			close(qstr.unblock)
+			require.Zero(t, n)
+			require.Equal(t, tc.expectedErr, err)
+		})
 	}
 }
