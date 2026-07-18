@@ -27,8 +27,9 @@ var (
 
 // A SendStream is a unidirectional WebTransport send stream.
 type SendStream struct {
-	str quicSendStream
-	fc  *outgoingDataFlowController
+	str          quicSendStream
+	fc           *outgoingDataFlowController
+	queueCapsule func(capsule)
 
 	streamHdrMu sync.Mutex
 	// WebTransport stream header.
@@ -50,12 +51,13 @@ type SendStream struct {
 	deadlineNotifyCh chan struct{} // receives a value when deadline changes
 }
 
-func newSendStream(str quicSendStream, hdr []byte, onClose func()) *SendStream {
+func newSendStream(str quicSendStream, hdr []byte, queueCapsule func(capsule), onClose func()) *SendStream {
 	return &SendStream{
-		str:       str,
-		closed:    make(chan struct{}),
-		streamHdr: hdr,
-		onClose:   onClose,
+		str:          str,
+		queueCapsule: queueCapsule,
+		closed:       make(chan struct{}),
+		streamHdr:    hdr,
+		onClose:      onClose,
 	}
 }
 
@@ -143,7 +145,9 @@ func (s *SendStream) writeData(b []byte) (int, error) {
 		if !errors.Is(err, quic.ErrWriteLimitReached) {
 			return written, err
 		}
-		// TODO: Send a WT_DATA_BLOCKED capsule.
+		if blocked, maxData := s.fc.IsNewlyBlocked(); blocked {
+			s.queueCapsule(dataBlockedCapsule{MaximumData: maxData})
+		}
 		if err := s.waitForUpdate(updated); err != nil {
 			return written, err
 		}

@@ -40,7 +40,8 @@ func (s *fakeQuicSendStream) WriteWithLimit(p []byte, limiter func(int) int) (in
 func TestSendStreamDataFlowControl(t *testing.T) {
 	fc := newOutgoingDataFlowController(5)
 	qstr := newFakeQuicSendStream()
-	str := newSendStream(qstr, []byte("hdr"), func() {})
+	var capsules []capsule
+	str := newSendStream(qstr, []byte("hdr"), func(c capsule) { capsules = append(capsules, c) }, func() {})
 	str.fc = fc
 
 	n, err := str.Write([]byte("abcde"))
@@ -52,6 +53,7 @@ func TestSendStreamDataFlowControl(t *testing.T) {
 	require.Zero(t, n)
 	require.ErrorIs(t, err, os.ErrDeadlineExceeded)
 	require.Equal(t, "hdrabcde", qstr.String())
+	require.Equal(t, []capsule{dataBlockedCapsule{MaximumData: 5}}, capsules)
 }
 
 func TestOutgoingDataFlowControlAddsBytesSent(t *testing.T) {
@@ -60,4 +62,15 @@ func TestOutgoingDataFlowControlAddsBytesSent(t *testing.T) {
 	require.Equal(t, uint64(5), added)
 	added = fc.AddBytesSent(1)
 	require.Zero(t, added)
+}
+
+func TestOutgoingDataFlowControlReportsBlockedOnce(t *testing.T) {
+	fc := newOutgoingDataFlowController(5)
+	require.Equal(t, uint64(5), fc.AddBytesSent(5))
+
+	blocked, maxData := fc.IsNewlyBlocked()
+	require.True(t, blocked)
+	require.Equal(t, uint64(5), maxData)
+	blocked, _ = fc.IsNewlyBlocked()
+	require.False(t, blocked)
 }
