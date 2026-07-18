@@ -246,6 +246,9 @@ func (*blockingHeaderStream) CancelWrite(quic.StreamErrorCode) {}
 func (*blockingHeaderStream) Context() context.Context         { return context.Background() }
 func (*blockingHeaderStream) SetWriteDeadline(time.Time) error { return nil }
 func (*blockingHeaderStream) SetReliableBoundary()             {}
+func (s *blockingHeaderStream) WriteWithLimit(b []byte, limit func(int) int) (int, error) {
+	return s.Write(b)
+}
 
 func TestSendStreamWriteWhileSendingHeaderAsync(t *testing.T) {
 	const errorCode StreamErrorCode = 42

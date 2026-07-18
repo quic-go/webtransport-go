@@ -13,6 +13,7 @@ import (
 
 type quicSendStream interface {
 	io.WriteCloser
+	WriteWithLimit([]byte, func(int) int) (int, error)
 	CancelWrite(quic.StreamErrorCode)
 	Context() context.Context
 	SetWriteDeadline(time.Time) error
@@ -27,6 +28,7 @@ var (
 // A SendStream is a unidirectional WebTransport send stream.
 type SendStream struct {
 	str quicSendStream
+	fc  *outgoingDataFlowController
 
 	streamHdrMu sync.Mutex
 	// WebTransport stream header.
@@ -119,7 +121,67 @@ func (s *SendStream) write(b []byte) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	return s.str.Write(b)
+	return s.writeData(b)
+}
+
+func (s *SendStream) writeData(b []byte) (int, error) {
+	if s.fc == nil || len(b) == 0 {
+		return s.str.Write(b)
+	}
+
+	var written int
+	for len(b) > 0 {
+		updated := s.fc.NextUpdate()
+		n, err := s.str.WriteWithLimit(b, func(maxBytes int) int {
+			return int(s.fc.AddBytesSent(uint64(maxBytes)))
+		})
+		b = b[n:]
+		written += n
+		if err == nil {
+			continue
+		}
+		if !errors.Is(err, quic.ErrWriteLimitReached) {
+			return written, err
+		}
+		// TODO: Send a WT_DATA_BLOCKED capsule.
+		if err := s.waitForUpdate(updated); err != nil {
+			return written, err
+		}
+	}
+	return written, nil
+}
+
+func (s *SendStream) waitForUpdate(updated <-chan struct{}) error {
+	s.deadlineMu.Lock()
+	if s.deadlineNotifyCh == nil {
+		s.deadlineNotifyCh = make(chan struct{}, 1)
+	}
+	notifyCh := s.deadlineNotifyCh
+	s.deadlineMu.Unlock()
+
+	for {
+		s.deadlineMu.Lock()
+		deadline := s.writeDeadline
+		s.deadlineMu.Unlock()
+
+		var timerCh <-chan time.Time
+		if !deadline.IsZero() {
+			if d := time.Until(deadline); d > 0 {
+				timerCh = time.After(d)
+			} else {
+				return os.ErrDeadlineExceeded
+			}
+		}
+		select {
+		case <-s.str.Context().Done():
+			return context.Cause(s.str.Context())
+		case <-updated:
+			return nil
+		case <-timerCh:
+			return os.ErrDeadlineExceeded
+		case <-notifyCh:
+		}
+	}
 }
 
 func (s *SendStream) maybeSendStreamHeader() error {
