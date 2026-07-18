@@ -13,6 +13,7 @@ import (
 type quicReceiveStream interface {
 	io.Reader
 	CancelRead(quic.StreamErrorCode)
+	SetReceiveFinalSizeCallback(func(int64))
 	SetReadDeadline(time.Time) error
 }
 
@@ -24,6 +25,12 @@ var (
 // A ReceiveStream is a unidirectional WebTransport receive stream.
 type ReceiveStream struct {
 	str quicReceiveStream
+	fc  *incomingDataFlowController
+
+	flowControlMx      sync.Mutex
+	bytesRead          uint64 // QUIC stream bytes consumed, including the WebTransport stream header
+	finalSizeKnown     bool
+	onFlowControlError func(error)
 
 	onClose func() // to remove the stream from the streamsMap
 
@@ -36,12 +43,25 @@ type ReceiveStream struct {
 	deadlineNotifyCh chan struct{} // receives a value when deadline changes
 }
 
-func newReceiveStream(str quicReceiveStream, onClose func()) *ReceiveStream {
-	return &ReceiveStream{
-		str:     str,
-		closed:  make(chan struct{}),
-		onClose: onClose,
+func newReceiveStream(
+	str quicReceiveStream,
+	onClose func(),
+	fc *incomingDataFlowController,
+	onFlowControlError func(error),
+	streamHeaderLen uint64,
+) *ReceiveStream {
+	s := &ReceiveStream{
+		str:                str,
+		fc:                 fc,
+		bytesRead:          streamHeaderLen,
+		onFlowControlError: onFlowControlError,
+		closed:             make(chan struct{}),
+		onClose:            onClose,
 	}
+	if fc != nil {
+		str.SetReceiveFinalSizeCallback(s.onReceiveFinalSize)
+	}
+	return s
 }
 
 // Read reads data from the stream.
@@ -49,6 +69,17 @@ func newReceiveStream(str quicReceiveStream, onClose func()) *ReceiveStream {
 // If the stream was canceled, the error is a [StreamError].
 func (s *ReceiveStream) Read(b []byte) (int, error) {
 	n, err := s.str.Read(b)
+	if s.fc != nil {
+		newlyRead := uint64(n)
+		s.flowControlMx.Lock()
+		if !s.finalSizeKnown {
+			s.bytesRead += newlyRead
+		} else {
+			newlyRead = 0
+		}
+		s.flowControlMx.Unlock()
+		s.addBytesRead(newlyRead)
+	}
 	var strErr *quic.StreamError
 	if errors.As(err, &strErr) && strErr.ErrorCode == WTSessionGoneErrorCode {
 		err = s.handleSessionGoneError()
@@ -57,6 +88,25 @@ func (s *ReceiveStream) Read(b []byte) (int, error) {
 		s.onClose()
 	}
 	return n, maybeConvertStreamError(err)
+}
+
+func (s *ReceiveStream) onReceiveFinalSize(size int64) {
+	s.flowControlMx.Lock()
+	n := uint64(size) - s.bytesRead
+	s.bytesRead = uint64(size)
+	s.finalSizeKnown = true
+	s.flowControlMx.Unlock()
+
+	s.addBytesRead(n)
+}
+
+func (s *ReceiveStream) addBytesRead(n uint64) {
+	if s.fc == nil || n == 0 {
+		return
+	}
+	if err := s.fc.AddBytesRead(n); err != nil && s.onFlowControlError != nil {
+		s.onFlowControlError(err)
+	}
 }
 
 // handleSessionGoneError waits for the session to be closed after receiving a WTSessionGoneErrorCode.
