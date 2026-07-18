@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"os"
 	"testing"
 	"time"
 
@@ -36,7 +37,7 @@ func TestSendStreamClose(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			sendStr, recvStr := newUniStreamPair(t)
 			recvStr.CancelRead(tc.quicErrorCode)
-			str := newSendStream(sendStr, nil, func() {})
+			str := newSendStream(sendStr, nil, nil, func() {})
 
 			// eventually, the stream reset will be received and the write will fail
 			var writeErr error
@@ -59,7 +60,7 @@ func TestSendStreamClose(t *testing.T) {
 
 func TestSendStreamSessionGone(t *testing.T) {
 	sendStr, recvStr := newUniStreamPair(t)
-	str := newSendStream(sendStr, nil, func() {})
+	str := newSendStream(sendStr, nil, nil, func() {})
 
 	// simulate remote side sending WTSessionGoneErrorCode
 	recvStr.CancelRead(WTSessionGoneErrorCode)
@@ -94,7 +95,7 @@ func TestSendStreamSessionGone(t *testing.T) {
 func TestSendStreamSessionGoneDeadline(t *testing.T) {
 	t.Run("deadline expires while waiting", func(t *testing.T) {
 		sendStr, recvStr := newUniStreamPair(t)
-		str := newSendStream(sendStr, nil, func() {})
+		str := newSendStream(sendStr, nil, nil, func() {})
 
 		require.NoError(t, str.SetWriteDeadline(time.Now().Add(scaleDuration(20*time.Millisecond))))
 		recvStr.CancelRead(WTSessionGoneErrorCode)
@@ -120,7 +121,7 @@ func TestSendStreamSessionGoneDeadline(t *testing.T) {
 
 	t.Run("deadline changed while waiting", func(t *testing.T) {
 		sendStr, recvStr := newUniStreamPair(t)
-		str := newSendStream(sendStr, nil, func() {})
+		str := newSendStream(sendStr, nil, nil, func() {})
 
 		recvStr.CancelRead(WTSessionGoneErrorCode)
 
@@ -162,7 +163,7 @@ func TestSendStreamHeaderRetryAfterDeadlineError(t *testing.T) {
 	require.NoError(t, err)
 
 	hdr := []byte("test-header")
-	str := newSendStream(clientStr, hdr, func() {})
+	str := newSendStream(clientStr, hdr, nil, func() {})
 
 	require.NoError(t, str.SetWriteDeadline(time.Now().Add(-time.Second)))
 
@@ -192,7 +193,7 @@ func TestSendStreamWriteDuringSessionGoneAndCloseSession(t *testing.T) {
 	sm := newOutgoingUniStreamsMap(nil, 0, maxOutgoingStreams, func(c capsule) {
 		t.Fatalf("unexpected capsule: %#v", c)
 	})
-	str := newSendStream(sendStr, nil, func() { sm.removeStream(sendStr.StreamID()) })
+	str := newSendStream(sendStr, nil, nil, func() { sm.removeStream(sendStr.StreamID()) })
 	sm.mx.Lock()
 	sm.m[sendStr.StreamID()] = str
 	sm.mx.Unlock()
@@ -246,6 +247,9 @@ func (*blockingHeaderStream) CancelWrite(quic.StreamErrorCode) {}
 func (*blockingHeaderStream) Context() context.Context         { return context.Background() }
 func (*blockingHeaderStream) SetWriteDeadline(time.Time) error { return nil }
 func (*blockingHeaderStream) SetReliableBoundary()             {}
+func (s *blockingHeaderStream) WriteWithLimit(b []byte, limit func(int) int) (int, error) {
+	return s.Write(b)
+}
 
 func TestSendStreamWriteWhileSendingHeaderAsync(t *testing.T) {
 	const errorCode StreamErrorCode = 42
@@ -270,7 +274,7 @@ func TestSendStreamWriteWhileSendingHeaderAsync(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			qstr := &blockingHeaderStream{unblock: make(chan struct{})}
-			str := newSendStream(qstr, []byte("hdr"), func() {})
+			str := newSendStream(qstr, []byte("hdr"), nil, func() {})
 
 			require.NoError(t, tc.stop(str))
 			n, err := str.Write([]byte("payload"))
@@ -279,4 +283,19 @@ func TestSendStreamWriteWhileSendingHeaderAsync(t *testing.T) {
 			require.Equal(t, tc.expectedErr, err)
 		})
 	}
+}
+
+func TestSendStreamDataFlowControl(t *testing.T) {
+	sendStr, recvStr := newUniStreamPair(t)
+	str := newSendStream(sendStr, []byte("hdr"), newOutgoingDataFlowController(5), func() {})
+
+	require.NoError(t, str.SetWriteDeadline(time.Now().Add(scaleDuration(20*time.Millisecond))))
+	n, err := str.Write([]byte("abcdefgh"))
+	require.Equal(t, 5, n)
+	require.ErrorIs(t, err, os.ErrDeadlineExceeded)
+
+	b := make([]byte, len("hdrabcde"))
+	_, err = io.ReadFull(recvStr, b)
+	require.NoError(t, err)
+	require.Equal(t, "hdrabcde", string(b))
 }
