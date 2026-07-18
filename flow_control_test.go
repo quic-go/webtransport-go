@@ -50,3 +50,14 @@ func TestOutgoingDataFlowControllerBlockedAtZero(t *testing.T) {
 	blocked, _ = fc.IsNewlyBlocked()
 	require.False(t, blocked)
 }
+
+func TestIncomingDataFlowController(t *testing.T) {
+	var updates []int64
+	fc := newIncomingDataFlowController(0, 8, func(maxData int64) { updates = append(updates, maxData) })
+
+	require.NoError(t, fc.AddBytesRead(1))
+	require.Empty(t, updates)
+	require.NoError(t, fc.AddBytesRead(1))
+	require.Equal(t, []int64{10}, updates)
+	require.Error(t, fc.AddBytesRead(9))
+}
