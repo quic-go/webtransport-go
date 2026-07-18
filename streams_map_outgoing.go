@@ -73,7 +73,7 @@ func newOutgoingBidiStreamsMap(conn *quic.Conn, sessionID sessionID, maxStreams 
 				return nil, 0, err
 			}
 			id := qstr.StreamID()
-			return newStream(qstr, streamHdr, func() { streams.removeStream(id) }), id, nil
+			return newStream(qstr, streamHdr, queueCapsule, func() { streams.removeStream(id) }), id, nil
 		},
 		func(ctx context.Context) (*Stream, quic.StreamID, error) {
 			qstr, err := conn.OpenStreamSync(ctx)
@@ -81,7 +81,7 @@ func newOutgoingBidiStreamsMap(conn *quic.Conn, sessionID sessionID, maxStreams 
 				return nil, invalidStreamID, err
 			}
 			id := qstr.StreamID()
-			return newStream(qstr, streamHdr, func() { streams.removeStream(id) }), id, nil
+			return newStream(qstr, streamHdr, queueCapsule, func() { streams.removeStream(id) }), id, nil
 		},
 		func(limit uint64) { queueCapsule(streamsBlockedBidiCapsule{MaximumStreams: limit}) },
 	)
@@ -104,7 +104,7 @@ func newOutgoingUniStreamsMap(
 				return nil, 0, err
 			}
 			id := qstr.StreamID()
-			return newSendStream(qstr, streamHdr, nil, func() { streams.removeStream(id) }), id, nil
+			return newSendStream(qstr, streamHdr, nil, queueCapsule, func() { streams.removeStream(id) }), id, nil
 		},
 		func(ctx context.Context) (*SendStream, quic.StreamID, error) {
 			qstr, err := conn.OpenUniStreamSync(ctx)
@@ -112,7 +112,7 @@ func newOutgoingUniStreamsMap(
 				return nil, invalidStreamID, err
 			}
 			id := qstr.StreamID()
-			return newSendStream(qstr, streamHdr, nil, func() { streams.removeStream(id) }), id, nil
+			return newSendStream(qstr, streamHdr, nil, queueCapsule, func() { streams.removeStream(id) }), id, nil
 		},
 		func(limit uint64) { queueCapsule(streamsBlockedUniCapsule{MaximumStreams: limit}) },
 	)
