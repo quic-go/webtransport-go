@@ -45,10 +45,10 @@ type ReceiveStream struct {
 
 func newReceiveStream(
 	str quicReceiveStream,
+	streamHeaderLen uint64,
 	onClose func(),
 	fc *incomingDataFlowController,
 	onFlowControlError func(error),
-	streamHeaderLen uint64,
 ) *ReceiveStream {
 	s := &ReceiveStream{
 		str:                str,

@@ -175,12 +175,13 @@ func (d *Dialer) handleConn(ctx context.Context, tr *http3.Transport, qconn *qui
 					conn.HandleBidirectionalStream(str)
 					return
 				}
+				r := &byteCountingReader{ByteReader: quicvarint.NewReader(str)}
 				// read the frame type (already peeked above)
-				if _, err := quicvarint.Read(quicvarint.NewReader(str)); err != nil {
+				if _, err := quicvarint.Read(r); err != nil {
 					return
 				}
 				// read the session ID
-				id, err := quicvarint.Read(quicvarint.NewReader(str))
+				id, err := quicvarint.Read(r)
 				if err != nil {
 					return
 				}
@@ -188,7 +189,7 @@ func (d *Dialer) handleConn(ctx context.Context, tr *http3.Transport, qconn *qui
 					qconn.CloseWithError(quic.ApplicationErrorCode(http3.ErrCodeIDError), "")
 					return
 				}
-				sessMgr.AddStream(str, sessionID(id))
+				sessMgr.AddStream(str, sessionID(id), r.BytesRead)
 			}()
 		}
 	}()
@@ -209,12 +210,13 @@ func (d *Dialer) handleConn(ctx context.Context, tr *http3.Transport, qconn *qui
 					conn.HandleUnidirectionalStream(str)
 					return
 				}
+				r := &byteCountingReader{ByteReader: quicvarint.NewReader(str)}
 				// read the stream type (already peeked above)
-				if _, err := quicvarint.Read(quicvarint.NewReader(str)); err != nil {
+				if _, err := quicvarint.Read(r); err != nil {
 					return
 				}
 				// read the session ID
-				id, err := quicvarint.Read(quicvarint.NewReader(str))
+				id, err := quicvarint.Read(r)
 				if err != nil {
 					str.CancelRead(quic.StreamErrorCode(http3.ErrCodeGeneralProtocolError))
 					return
@@ -223,7 +225,7 @@ func (d *Dialer) handleConn(ctx context.Context, tr *http3.Transport, qconn *qui
 					qconn.CloseWithError(quic.ApplicationErrorCode(http3.ErrCodeIDError), "")
 					return
 				}
-				sessMgr.AddUniStream(str, sessionID(id))
+				sessMgr.AddUniStream(str, sessionID(id), r.BytesRead)
 			}()
 		}
 	}()

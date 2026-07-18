@@ -24,7 +24,7 @@ func TestIncomingStreamsMapAddStreamAfterCloseSession(t *testing.T) {
 	clientStr, err := clientConn.AcceptStream(ctx)
 	require.NoError(t, err)
 	streamID := clientStr.StreamID()
-	require.NoError(t, streams.AddStream(streamID, newStream(clientStr, nil, nil, func() { streams.RemoveStream(streamID) })))
+	require.NoError(t, streams.AddStream(streamID, newStream(clientStr, nil, nil, func() { streams.RemoveStream(streamID) }, 0)))
 
 	str, err := streams.AcceptStream(ctx)
 	require.NoError(t, err)
@@ -43,7 +43,7 @@ func TestIncomingStreamsMapAddStreamAfterCloseSession(t *testing.T) {
 	clientStr, err = clientConn.AcceptStream(ctx)
 	require.NoError(t, err)
 	streamID = clientStr.StreamID()
-	require.NoError(t, streams.AddStream(streamID, newStream(clientStr, nil, nil, func() { streams.RemoveStream(streamID) })))
+	require.NoError(t, streams.AddStream(streamID, newStream(clientStr, nil, nil, func() { streams.RemoveStream(streamID) }, 0)))
 
 	select {
 	case <-serverStr.Context().Done():
@@ -65,7 +65,7 @@ func TestIncomingStreamsMapAddStreamAfterCloseSession(t *testing.T) {
 	require.NoError(t,
 		uniStreams.AddStream(
 			uniStreamID,
-			newReceiveStream(clientUniStr, func() { uniStreams.RemoveStream(uniStreamID) }, nil, nil, 0),
+			newReceiveStream(clientUniStr, 0, func() { uniStreams.RemoveStream(uniStreamID) }, nil, nil),
 		),
 	)
 
@@ -105,8 +105,8 @@ func TestIncomingStreamsMapQueuesMaxStreamsOnRemove(t *testing.T) {
 		capsules = append(capsules, limit)
 	})
 
-	require.NoError(t, streams.AddStream(1, newReceiveStream(nil, nil, nil, nil, 0)))
-	require.NoError(t, streams.AddStream(2, newReceiveStream(nil, nil, nil, nil, 0)))
+	require.NoError(t, streams.AddStream(1, newReceiveStream(nil, 0, nil, nil, nil)))
+	require.NoError(t, streams.AddStream(2, newReceiveStream(nil, 0, nil, nil, nil)))
 
 	streams.RemoveStream(1)
 	require.Equal(t, []uint64{4}, capsules)
@@ -121,8 +121,8 @@ func TestIncomingStreamsMapMaxStreamsLimit(t *testing.T) {
 		capsules = append(capsules, limit)
 	})
 
-	require.NoError(t, streams.AddStream(1, newReceiveStream(nil, nil, nil, nil, 0)))
-	require.NoError(t, streams.AddStream(2, newReceiveStream(nil, nil, nil, nil, 0)))
+	require.NoError(t, streams.AddStream(1, newReceiveStream(nil, 0, nil, nil, nil)))
+	require.NoError(t, streams.AddStream(2, newReceiveStream(nil, 0, nil, nil, nil)))
 
 	streams.RemoveStream(1)
 	require.Equal(t, []uint64{maxStreamsLimit}, capsules)
@@ -133,8 +133,8 @@ func TestIncomingStreamsMapMaxStreamsLimit(t *testing.T) {
 
 func TestIncomingStreamsMapRejectsStreamOverLimit(t *testing.T) {
 	streams := newIncomingStreamsMap[*ReceiveStream](1, nil)
-	require.NoError(t, streams.AddStream(1, newReceiveStream(nil, nil, nil, nil, 0)))
-	err := streams.AddStream(2, newReceiveStream(nil, nil, nil, nil, 0))
+	require.NoError(t, streams.AddStream(1, newReceiveStream(nil, 0, nil, nil, nil)))
+	err := streams.AddStream(2, newReceiveStream(nil, 0, nil, nil, nil))
 	require.ErrorIs(t, err, &http3.Error{ErrorCode: http3.ErrCode(WTFlowControlErrorCode)})
 	require.ErrorContains(t, err, "peer opened more than 1 streams")
 }

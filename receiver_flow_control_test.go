@@ -34,7 +34,7 @@ func TestIncomingDataFlowControl(t *testing.T) {
 	require.NoError(t, fc.AddBytesRead(1))
 	requireUpdate(10)
 
-	str := newReceiveStream(recvStr, func() {}, fc, func(error) {}, 3) // newUniStreamPair already consumed a 3-byte stream header
+	str := newReceiveStream(recvStr, 3, func() {}, fc, func(error) {}) // newUniStreamPair already consumed a 3-byte stream header
 
 	_, err := sendStr.Write([]byte("1"))
 	require.NoError(t, err)
