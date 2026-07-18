@@ -72,6 +72,23 @@ func TestDataBlockedCapsuleRoundTrip(t *testing.T) {
 	require.Equal(t, c, parsed)
 }
 
+func TestMaxDataCapsuleRoundTrip(t *testing.T) {
+	var b bytes.Buffer
+	c := maxDataCapsule{MaximumData: 1337}
+	b.Write(c.Append(nil))
+
+	typ, r, err := http3.NewCapsuleParser(&b).Next()
+	require.NoError(t, err)
+	require.Equal(t, maxDataCapsuleType, typ)
+	maxData, err := quicvarint.Read(r)
+	require.NoError(t, err)
+	require.Equal(t, uint64(1337), maxData)
+
+	parsed, err := parseNextCapsule(http3.NewCapsuleParser(bytes.NewReader(c.Append(nil))))
+	require.NoError(t, err)
+	require.Equal(t, c, parsed)
+}
+
 func TestMaxStreamsCapsuleRoundTrip(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -172,6 +189,16 @@ func TestParseDataBlockedCapsuleTrailingData(t *testing.T) {
 
 	_, err := parseNextCapsule(http3.NewCapsuleParser(bytes.NewReader(b)))
 	require.ErrorContains(t, err, "WT_DATA_BLOCKED capsule has trailing data")
+}
+
+func TestParseMaxDataCapsuleTrailingData(t *testing.T) {
+	b := quicvarint.Append(nil, uint64(maxDataCapsuleType))
+	b = quicvarint.Append(b, uint64(quicvarint.Len(42)+1))
+	b = quicvarint.Append(b, 42)
+	b = append(b, 0)
+
+	_, err := parseNextCapsule(http3.NewCapsuleParser(bytes.NewReader(b)))
+	require.ErrorContains(t, err, "WT_MAX_DATA capsule has trailing data")
 }
 
 func TestParseMaxStreamsCapsuleTrailingData(t *testing.T) {
