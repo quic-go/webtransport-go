@@ -257,7 +257,7 @@ func (s *Session) addIncomingStream(qstr *quic.Stream) {
 // addIncomingUniStream adds a unidirectional stream that the remote peer opened
 func (s *Session) addIncomingUniStream(qstr *quic.ReceiveStream) {
 	id := qstr.StreamID()
-	str := newReceiveStream(qstr, func() { s.incomingUniStreams.RemoveStream(id) })
+	str := newReceiveStream(qstr, func() { s.incomingUniStreams.RemoveStream(id) }, nil, nil, 0)
 	if err := s.incomingUniStreams.AddStream(id, str); err != nil {
 		str.closeWithSession(err)
 		s.closeWithError(err, nil)
