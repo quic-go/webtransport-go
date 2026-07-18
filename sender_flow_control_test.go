@@ -74,3 +74,18 @@ func TestOutgoingDataFlowControlReportsBlockedOnce(t *testing.T) {
 	blocked, _ = fc.IsNewlyBlocked()
 	require.False(t, blocked)
 }
+
+func TestOutgoingDataFlowControlUpdatesMaxData(t *testing.T) {
+	fc := newOutgoingDataFlowController(5)
+	require.Equal(t, uint64(5), fc.AddBytesSent(5))
+	updated := fc.NextUpdate()
+
+	require.NoError(t, fc.UpdateMaxData(8))
+	select {
+	case <-updated:
+	default:
+		t.Fatal("max data update didn't wake blocked writers")
+	}
+	require.Equal(t, uint64(3), fc.AddBytesSent(3))
+	require.ErrorIs(t, fc.UpdateMaxData(8), errMaxDataNotIncreased)
+}
