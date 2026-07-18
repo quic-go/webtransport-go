@@ -245,9 +245,9 @@ func (s *Session) queueCapsule(c capsule) {
 }
 
 // addIncomingStream adds a bidirectional stream that the remote peer opened
-func (s *Session) addIncomingStream(qstr *quic.Stream) {
+func (s *Session) addIncomingStream(qstr *quic.Stream, streamHeaderLen uint64) {
 	id := qstr.StreamID()
-	str := newStream(qstr, nil, s.queueCapsule, func() { s.incomingStreams.RemoveStream(id) })
+	str := newStream(qstr, nil, s.queueCapsule, func() { s.incomingStreams.RemoveStream(id) }, int64(streamHeaderLen))
 	if err := s.incomingStreams.AddStream(id, str); err != nil {
 		str.closeWithSession(err)
 		s.closeWithError(err, nil)
@@ -255,9 +255,15 @@ func (s *Session) addIncomingStream(qstr *quic.Stream) {
 }
 
 // addIncomingUniStream adds a unidirectional stream that the remote peer opened
-func (s *Session) addIncomingUniStream(qstr *quic.ReceiveStream) {
+func (s *Session) addIncomingUniStream(qstr *quic.ReceiveStream, streamHeaderLen uint64) {
 	id := qstr.StreamID()
-	str := newReceiveStream(qstr, func() { s.incomingUniStreams.RemoveStream(id) }, nil, nil, 0)
+	str := newReceiveStream(
+		qstr,
+		int64(streamHeaderLen),
+		func() { s.incomingUniStreams.RemoveStream(id) },
+		nil,
+		nil,
+	)
 	if err := s.incomingUniStreams.AddStream(id, str); err != nil {
 		str.closeWithSession(err)
 		s.closeWithError(err, nil)

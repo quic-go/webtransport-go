@@ -13,7 +13,7 @@ import (
 
 func TestReceiveStreamSessionGone(t *testing.T) {
 	sendStr, recvStr := newUniStreamPair(t)
-	str := newReceiveStream(recvStr, func() {}, nil, nil, 0)
+	str := newReceiveStream(recvStr, 0, func() {}, nil, nil)
 
 	// simulate remote side sending WTSessionGoneErrorCode
 	sendStr.CancelWrite(WTSessionGoneErrorCode)
@@ -46,7 +46,7 @@ func TestReceiveStreamReadDuringSessionGoneAndCloseSession(t *testing.T) {
 	sendStr, recvStr := newUniStreamPair(t)
 
 	sm := newIncomingStreamsMap[*ReceiveStream](maxStreamsLimit, nil)
-	str := newReceiveStream(recvStr, func() { sm.RemoveStream(recvStr.StreamID()) }, nil, nil, 0)
+	str := newReceiveStream(recvStr, 0, func() { sm.RemoveStream(recvStr.StreamID()) }, nil, nil)
 	require.NoError(t, sm.AddStream(recvStr.StreamID(), str))
 
 	// start reading
@@ -80,7 +80,7 @@ func TestReceiveStreamReadDuringSessionGoneAndCloseSession(t *testing.T) {
 func TestReceiveStreamSessionGoneDeadline(t *testing.T) {
 	t.Run("deadline expires while waiting", func(t *testing.T) {
 		sendStr, recvStr := newUniStreamPair(t)
-		str := newReceiveStream(recvStr, func() {}, nil, nil, 0)
+		str := newReceiveStream(recvStr, 0, func() {}, nil, nil)
 
 		require.NoError(t, str.SetReadDeadline(time.Now().Add(scaleDuration(20*time.Millisecond))))
 		sendStr.CancelWrite(WTSessionGoneErrorCode)
@@ -103,7 +103,7 @@ func TestReceiveStreamSessionGoneDeadline(t *testing.T) {
 
 	t.Run("deadline changed while waiting", func(t *testing.T) {
 		sendStr, recvStr := newUniStreamPair(t)
-		str := newReceiveStream(recvStr, func() {}, nil, nil, 0)
+		str := newReceiveStream(recvStr, 0, func() {}, nil, nil)
 
 		sendStr.CancelWrite(WTSessionGoneErrorCode)
 
@@ -155,7 +155,7 @@ func TestReceiveStreamClose(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			sendStr, recvStr := newUniStreamPair(t)
 			sendStr.CancelWrite(tc.quicErrorCode)
-			str := newReceiveStream(recvStr, func() {}, nil, nil, 0)
+			str := newReceiveStream(recvStr, 0, func() {}, nil, nil)
 
 			_, readErr := io.ReadFull(str, make([]byte, 100))
 
@@ -172,7 +172,7 @@ func TestReceiveStreamDataFlowControl(t *testing.T) {
 	sendStr, recvStr := newUniStreamPair(t)
 	updates := make(chan int64, 1)
 	fc := newIncomingDataFlowController(0, 8, func(maxData int64) { updates <- maxData })
-	str := newReceiveStream(recvStr, func() {}, fc, func(error) {}, 3) // newUniStreamPair already consumed a 3-byte stream header
+	str := newReceiveStream(recvStr, 3, func() {}, fc, func(error) {}) // newUniStreamPair already consumed a 3-byte stream header
 
 	_, err := sendStr.Write([]byte("1"))
 	require.NoError(t, err)
