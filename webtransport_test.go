@@ -226,9 +226,9 @@ func testApplicationProtocolNegotiation(t *testing.T, clientProtocols, serverPro
 		},
 	}
 	defer s.Close()
-	var serverProtocol string
+	serverProtocol := make(chan string, 1)
 	addHandler(t, s, func(sess *webtransport.Session) {
-		serverProtocol = sess.SessionState().ApplicationProtocol
+		serverProtocol <- sess.SessionState().ApplicationProtocol
 	})
 
 	addr, closeServer := runServer(t, s)
@@ -249,7 +249,7 @@ func testApplicationProtocolNegotiation(t *testing.T, clientProtocols, serverPro
 	defer sess.CloseWithError(0, "")
 	require.Equal(t, http.StatusOK, rsp.StatusCode)
 
-	assert.Equal(t, expected, serverProtocol)
+	assert.Equal(t, expected, <-serverProtocol)
 	assert.Equal(t, expected, sess.SessionState().ApplicationProtocol)
 }
 

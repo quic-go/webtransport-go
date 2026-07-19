@@ -24,6 +24,10 @@ jobs:
         env:
           TIMESCALE_FACTOR: 10
         run: go test -v -cover -coverprofile coverage.txt ./... 2>&1 | go-junit-report -set-exit-code -iocopy -out report.xml
+      - name: Run tests with race detector
+        env:
+          TIMESCALE_FACTOR: 10
+        run: go test -race -v -shuffle on ./...
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
         env:
