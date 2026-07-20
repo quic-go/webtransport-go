@@ -14,7 +14,7 @@ jobs:
     name: Unit tests (${{ matrix.os}}, Go ${{ matrix.go }})
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@v7
         with:
           go-version: ${{ matrix.go }}
       - run: go version
