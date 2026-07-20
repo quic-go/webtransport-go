@@ -142,7 +142,7 @@ func (s *SendStream) writeData(b []byte) (int, error) {
 	for len(b) > 0 {
 		updated := s.fc.NextUpdate()
 		n, err := s.str.WriteWithLimit(b, func(maxBytes int) int {
-			return int(s.fc.AddBytesSent(uint64(maxBytes)))
+			return int(s.fc.AddBytesSent(int64(maxBytes)))
 		})
 		b = b[n:]
 		written += n
@@ -153,7 +153,7 @@ func (s *SendStream) writeData(b []byte) (int, error) {
 			return written, err
 		}
 		if blocked, maxData := s.fc.IsNewlyBlocked(); blocked {
-			s.queueCapsule(dataBlockedCapsule{MaximumData: maxData})
+			s.queueCapsule(dataBlockedCapsule{MaximumData: uint64(maxData)})
 		}
 		if err := s.waitForUpdate(updated); err != nil {
 			return written, err
