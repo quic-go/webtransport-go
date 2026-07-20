@@ -33,6 +33,22 @@ func scaleDuration(d time.Duration) time.Duration {
 	return d
 }
 
+func addHandler(t *testing.T, s *webtransport.Server, connHandler func(*webtransport.Session)) {
+	t.Helper()
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/webtransport", func(w http.ResponseWriter, r *http.Request) {
+		conn, err := s.Upgrade(w, r)
+		if err != nil {
+			t.Logf("upgrading failed: %s", err)
+			w.WriteHeader(404)
+			return
+		}
+		connHandler(conn)
+	})
+	s.H3.Handler = mux
+}
+
 func TestUpgradeFailures(t *testing.T) {
 	var s webtransport.Server
 
