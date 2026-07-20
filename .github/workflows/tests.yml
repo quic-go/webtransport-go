@@ -20,21 +20,29 @@ jobs:
       - run: go version
       - name: Install go-junit-report
         run: go install github.com/jstemmer/go-junit-report/v2@v2.1.0
-      - name: Run tests
+      - name: Run unit tests
         env:
           TIMESCALE_FACTOR: 10
-        run: go test -v -cover -coverprofile coverage.txt ./... 2>&1 | go-junit-report -set-exit-code -iocopy -out report.xml
-      - name: Run tests with race detector
+        run: go test -v -cover -coverprofile unit-coverage.txt . ./example/... ./interop/... ./interop_chrome 2>&1 | go-junit-report -set-exit-code -iocopy -out unit-report.xml
+      - name: Run unit tests with race detector
         env:
           TIMESCALE_FACTOR: 10
-        run: go test -race -v -shuffle on ./...
+        run: go test -race -v -shuffle on . ./example/... ./interop/... ./interop_chrome
+      - name: Run integration tests
+        env:
+          TIMESCALE_FACTOR: 10
+        run: go test -v ./integrationtests 2>&1 | go-junit-report -set-exit-code -iocopy -out integration-report.xml
+      - name: Run integration tests with race detector
+        env:
+          TIMESCALE_FACTOR: 10
+        run: go test -race -v -shuffle on ./integrationtests
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
         env:
           OS: ${{ matrix.os }}
           GO: ${{ matrix.go }}
         with:
-          files: coverage.txt
+          files: unit-coverage.txt
           env_vars: OS,GO
           token: ${{ secrets.CODECOV_TOKEN }}
       - name: Upload test report to Codecov
@@ -45,7 +53,7 @@ jobs:
           GO: ${{ matrix.go }}
         with:
           report_type: test_results
-          name: Unit tests
-          files: report.xml
+          name: Tests
+          files: unit-report.xml,integration-report.xml
           env_vars: OS,GO
           token: ${{ secrets.CODECOV_TOKEN }}

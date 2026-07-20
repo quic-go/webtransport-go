@@ -1,4 +1,4 @@
-package webtransport_test
+package integrationtests
 
 import (
 	"context"
@@ -10,6 +10,7 @@ import (
 
 	"github.com/quic-go/quic-go/http3"
 	"github.com/quic-go/webtransport-go"
+	"github.com/quic-go/webtransport-go/internal/testdata"
 	"github.com/stretchr/testify/require"
 )
 
@@ -42,14 +43,14 @@ func testStreamFlowControl(t *testing.T, clientOpens, unidirectional bool) {
 
 	serverSessionChan := make(chan *webtransport.Session, 1)
 	server := &webtransport.Server{
-		H3:     &http3.Server{TLSConfig: webtransport.TLSConf},
+		H3:     &http3.Server{TLSConfig: testdata.TLSConf},
 		Config: config,
 	}
 	addHandler(t, server, func(sess *webtransport.Session) { serverSessionChan <- sess })
 	addr, closeServer := runServer(t, server)
 
 	dialer := &webtransport.Dialer{
-		TLSClientConfig: &tls.Config{RootCAs: webtransport.CertPool},
+		TLSClientConfig: &tls.Config{RootCAs: testdata.CertPool},
 		Config:          config,
 	}
 	defer func() {
