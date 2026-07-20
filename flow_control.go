@@ -5,24 +5,25 @@ import "sync"
 type outgoingDataFlowController struct {
 	mx sync.Mutex
 	// TODO: Update this and notify waiters when WT_MAX_DATA is implemented.
-	maxData       uint64
-	bytesSent     uint64
-	lastBlockedAt uint64
+	maxData       int64
+	bytesSent     int64
+	lastBlockedAt int64
 	updated       chan struct{}
 }
 
-func newOutgoingDataFlowController(maxData uint64) *outgoingDataFlowController {
+func newOutgoingDataFlowController(maxData int64) *outgoingDataFlowController {
 	return &outgoingDataFlowController{
-		maxData: maxData,
-		updated: make(chan struct{}),
+		maxData:       maxData,
+		lastBlockedAt: -1,
+		updated:       make(chan struct{}),
 	}
 }
 
-func (f *outgoingDataFlowController) AddBytesSent(n uint64) uint64 {
+func (f *outgoingDataFlowController) AddBytesSent(n int64) int64 {
 	f.mx.Lock()
 	defer f.mx.Unlock()
 
-	var added uint64
+	var added int64
 	if f.bytesSent < f.maxData {
 		added = min(n, f.maxData-f.bytesSent)
 	}
@@ -32,7 +33,7 @@ func (f *outgoingDataFlowController) AddBytesSent(n uint64) uint64 {
 	return added
 }
 
-func (f *outgoingDataFlowController) IsNewlyBlocked() (bool, uint64) {
+func (f *outgoingDataFlowController) IsNewlyBlocked() (bool, int64) {
 	f.mx.Lock()
 	defer f.mx.Unlock()
 
