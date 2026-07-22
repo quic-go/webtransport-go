@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"fmt"
 	"io"
+	"os"
 	"testing"
 	"time"
 
@@ -13,6 +14,42 @@ import (
 	"github.com/quic-go/webtransport-go/internal/testdata"
 	"github.com/stretchr/testify/require"
 )
+
+func newFlowControlSessions(
+	t *testing.T,
+	ctx context.Context,
+	config *webtransport.Config,
+) (*webtransport.Session, *webtransport.Session) {
+	t.Helper()
+	serverSessionChan := make(chan *webtransport.Session, 1)
+	server := &webtransport.Server{
+		H3:     &http3.Server{TLSConfig: testdata.TLSConf},
+		Config: config,
+	}
+	addHandler(t, server, func(sess *webtransport.Session) { serverSessionChan <- sess })
+	addr, closeServer := runServer(t, server)
+
+	dialer := &webtransport.Dialer{
+		TLSClientConfig: &tls.Config{RootCAs: testdata.CertPool},
+		Config:          config,
+	}
+	t.Cleanup(func() {
+		require.NoError(t, dialer.Close())
+		closeServer()
+	})
+
+	rsp, clientSession, err := dialer.Dial(ctx, fmt.Sprintf("https://localhost:%d/webtransport", addr.Port), nil)
+	require.NoError(t, err)
+	require.Equal(t, 200, rsp.StatusCode)
+
+	var serverSession *webtransport.Session
+	select {
+	case serverSession = <-serverSessionChan:
+	case <-ctx.Done():
+		t.Fatal("server didn't establish the WebTransport session")
+	}
+	return clientSession, serverSession
+}
 
 func TestStreamFlowControl(t *testing.T) {
 	for _, tc := range []struct {
@@ -34,42 +71,15 @@ func TestStreamFlowControl(t *testing.T) {
 func testStreamFlowControl(t *testing.T, clientOpens, unidirectional bool) {
 	const streamLimit = 2
 
-	config := &webtransport.Config{}
+	config := &webtransport.Config{MaxIncomingData: 1024}
 	if unidirectional {
 		config.MaxIncomingUniStreams = streamLimit
 	} else {
 		config.MaxIncomingStreams = streamLimit
 	}
-
-	serverSessionChan := make(chan *webtransport.Session, 1)
-	server := &webtransport.Server{
-		H3:     &http3.Server{TLSConfig: testdata.TLSConf},
-		Config: config,
-	}
-	addHandler(t, server, func(sess *webtransport.Session) { serverSessionChan <- sess })
-	addr, closeServer := runServer(t, server)
-
-	dialer := &webtransport.Dialer{
-		TLSClientConfig: &tls.Config{RootCAs: testdata.CertPool},
-		Config:          config,
-	}
-	defer func() {
-		require.NoError(t, dialer.Close())
-		closeServer()
-	}()
-
 	ctx, cancel := context.WithTimeout(context.Background(), scaleDuration(5*time.Second))
 	defer cancel()
-	rsp, clientSession, err := dialer.Dial(ctx, fmt.Sprintf("https://localhost:%d/webtransport", addr.Port), nil)
-	require.NoError(t, err)
-	require.Equal(t, 200, rsp.StatusCode)
-
-	var serverSession *webtransport.Session
-	select {
-	case serverSession = <-serverSessionChan:
-	case <-ctx.Done():
-		t.Fatal("server didn't establish the WebTransport session")
-	}
+	clientSession, serverSession := newFlowControlSessions(t, ctx, config)
 
 	opener, receiver := serverSession, clientSession
 	if clientOpens {
@@ -98,13 +108,13 @@ func testBidirectionalStreamFlowControl(t *testing.T, ctx context.Context, opene
 		_, err := opener.OpenStreamSync(ctx)
 		openResult <- err
 	}()
-	requireStreamOpeningBlocked(t, openResult, "opening a stream unexpectedly completed")
+	requireBlocked(t, openResult, "opening a stream unexpectedly completed")
 
 	const payload = "flow control"
 	_, err = io.WriteString(streams[0], payload)
 	require.NoError(t, err)
 	require.NoError(t, streams[0].Close())
-	requireStreamOpeningBlocked(t, openResult, "opening a stream completed before the peer consumed it")
+	requireBlocked(t, openResult, "opening a stream completed before the peer consumed it")
 
 	str, err := receiver.AcceptStream(ctx)
 	require.NoError(t, err)
@@ -112,7 +122,7 @@ func testBidirectionalStreamFlowControl(t *testing.T, ctx context.Context, opene
 	data, err := io.ReadAll(str)
 	require.NoError(t, err)
 	require.Equal(t, payload, string(data))
-	requireStreamOpeningBlocked(t, openResult, "opening a stream completed before both sides were closed")
+	requireBlocked(t, openResult, "opening a stream completed before both sides were closed")
 	require.NoError(t, str.Close())
 
 	select {
@@ -139,12 +149,12 @@ func testUnidirectionalStreamFlowControl(t *testing.T, ctx context.Context, open
 		_, err := opener.OpenUniStreamSync(ctx)
 		openResult <- err
 	}()
-	requireStreamOpeningBlocked(t, openResult, "opening a stream unexpectedly completed")
+	requireBlocked(t, openResult, "opening a stream unexpectedly completed")
 
 	_, err = io.WriteString(streams[0], "lorem ipsum dolor sit amet")
 	require.NoError(t, err)
 	require.NoError(t, streams[0].Close())
-	requireStreamOpeningBlocked(t, openResult, "opening a stream completed before the peer consumed it")
+	requireBlocked(t, openResult, "opening a stream completed before the peer consumed it")
 
 	str, err := receiver.AcceptUniStream(ctx)
 	require.NoError(t, err)
@@ -161,7 +171,7 @@ func testUnidirectionalStreamFlowControl(t *testing.T, ctx context.Context, open
 	}
 }
 
-func requireStreamOpeningBlocked(t *testing.T, result <-chan error, message string) {
+func requireBlocked(t *testing.T, result <-chan error, message string) {
 	t.Helper()
 
 	select {
@@ -169,4 +179,54 @@ func requireStreamOpeningBlocked(t *testing.T, result <-chan error, message stri
 		t.Fatalf("%s: %v", message, err)
 	case <-time.After(scaleDuration(20 * time.Millisecond)):
 	}
+}
+
+func TestDataFlowControl(t *testing.T) {
+	const payload = "0123456789"
+	ctx, cancel := context.WithTimeout(context.Background(), scaleDuration(time.Second))
+	defer cancel()
+
+	clientSession, serverSession := newFlowControlSessions(t, ctx, &webtransport.Config{
+		MaxIncomingUniStreams: 1,
+		MaxIncomingData:       5,
+	})
+
+	str, err := clientSession.OpenUniStream()
+	require.NoError(t, err)
+	writeResult := make(chan error, 1)
+	go func() {
+		_, err := io.WriteString(str, payload)
+		if err == nil {
+			err = str.Close()
+		}
+		writeResult <- err
+	}()
+	requireBlocked(t, writeResult, "writing unexpectedly completed before the peer consumed data")
+
+	recv, err := serverSession.AcceptUniStream(ctx)
+	require.NoError(t, err)
+	data, err := io.ReadAll(recv)
+	require.NoError(t, err)
+	require.Equal(t, payload, string(data))
+
+	select {
+	case err := <-writeResult:
+		require.NoError(t, err)
+	case <-ctx.Done():
+		t.Fatal("writing didn't unblock after the peer consumed data")
+	}
+}
+
+func TestDataFlowControlAtZero(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), scaleDuration(time.Second))
+	defer cancel()
+
+	clientSession, _ := newFlowControlSessions(t, ctx, &webtransport.Config{MaxIncomingUniStreams: 1})
+	str, err := clientSession.OpenUniStream()
+	require.NoError(t, err)
+	require.NoError(t, str.SetWriteDeadline(time.Now().Add(scaleDuration(20*time.Millisecond))))
+
+	n, err := io.WriteString(str, "x")
+	require.Zero(t, n)
+	require.ErrorIs(t, err, os.ErrDeadlineExceeded)
 }
