@@ -235,7 +235,7 @@ func (s *Session) queueCapsule(c capsule) {
 // addIncomingStream adds a bidirectional stream that the remote peer opened
 func (s *Session) addIncomingStream(qstr *quic.Stream) {
 	id := qstr.StreamID()
-	str := newStream(qstr, nil, func() { s.incomingStreams.RemoveStream(id) })
+	str := newStream(qstr, nil, s.queueCapsule, func() { s.incomingStreams.RemoveStream(id) })
 	if err := s.incomingStreams.AddStream(id, str); err != nil {
 		str.closeWithSession(err)
 		s.closeWithError(err, nil)
