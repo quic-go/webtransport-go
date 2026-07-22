@@ -24,13 +24,16 @@ type Stream struct {
 func newStream(
 	str *quic.Stream,
 	hdr []byte,
+	sendFC *outgoingDataFlowController,
+	receiveFC *incomingDataFlowController,
 	queueCapsule func(capsule),
+	onFlowControlError func(error),
 	onClose func(),
 	receiveHeaderLen int64,
 ) *Stream {
 	s := &Stream{onClose: onClose}
-	s.sendStr = newSendStream(str, hdr, nil, queueCapsule, func() { s.registerClose(true) })
-	s.recvStr = newReceiveStream(str, receiveHeaderLen, func() { s.registerClose(false) }, nil, nil)
+	s.sendStr = newSendStream(str, hdr, sendFC, queueCapsule, func() { s.registerClose(true) })
+	s.recvStr = newReceiveStream(str, receiveHeaderLen, func() { s.registerClose(false) }, receiveFC, onFlowControlError)
 	return s
 }
 

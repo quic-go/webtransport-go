@@ -24,7 +24,7 @@ func TestIncomingStreamsMapAddStreamAfterCloseSession(t *testing.T) {
 	clientStr, err := clientConn.AcceptStream(ctx)
 	require.NoError(t, err)
 	streamID := clientStr.StreamID()
-	require.NoError(t, streams.AddStream(streamID, newStream(clientStr, nil, nil, func() { streams.RemoveStream(streamID) }, 0)))
+	require.NoError(t, streams.AddStream(streamID, newStream(clientStr, nil, nil, nil, nil, nil, func() { streams.RemoveStream(streamID) }, 0)))
 
 	str, err := streams.AcceptStream(ctx)
 	require.NoError(t, err)
@@ -43,7 +43,7 @@ func TestIncomingStreamsMapAddStreamAfterCloseSession(t *testing.T) {
 	clientStr, err = clientConn.AcceptStream(ctx)
 	require.NoError(t, err)
 	streamID = clientStr.StreamID()
-	require.NoError(t, streams.AddStream(streamID, newStream(clientStr, nil, nil, func() { streams.RemoveStream(streamID) }, 0)))
+	require.NoError(t, streams.AddStream(streamID, newStream(clientStr, nil, nil, nil, nil, nil, func() { streams.RemoveStream(streamID) }, 0)))
 
 	select {
 	case <-serverStr.Context().Done():
