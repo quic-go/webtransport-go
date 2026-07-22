@@ -58,6 +58,7 @@ type Session struct {
 	incomingUniStreams *incomingStreamsMap[*ReceiveStream]
 	outgoingStreams    *outgoingStreamsMap[*Stream]
 	outgoingUniStreams *outgoingStreamsMap[*SendStream]
+	incomingDataFC     *incomingDataFlowController
 	outgoingDataFC     *outgoingDataFlowController
 }
 
@@ -87,7 +88,12 @@ func newSession(
 		ctx:                 ctx,
 		capsuleQueueUpdated: make(chan struct{}, 1),
 	}
-	if !fc.Enabled {
+	if fc.Enabled {
+		c.incomingDataFC = newIncomingDataFlowController(0, fc.MaxIncomingData, func(maxData int64) {
+			c.queueCapsule(maxDataCapsule{MaximumData: uint64(maxData)})
+		})
+		c.outgoingDataFC = newOutgoingDataFlowController(fc.MaxOutgoingData)
+	} else {
 		fc.MaxIncomingStreams = maxStreamsLimit
 		fc.MaxIncomingUniStreams = maxStreamsLimit
 		fc.MaxOutgoingStreams = maxStreamsLimit
@@ -99,8 +105,22 @@ func newSession(
 	c.incomingUniStreams = newIncomingStreamsMap[*ReceiveStream](fc.MaxIncomingUniStreams, func(limit uint64) {
 		c.queueCapsule(maxStreamsUniCapsule{MaximumStreams: limit})
 	})
-	c.outgoingStreams = newOutgoingBidiStreamsMap(conn, sessionID, fc.MaxOutgoingStreams, c.queueCapsule)
-	c.outgoingUniStreams = newOutgoingUniStreamsMap(conn, sessionID, fc.MaxOutgoingUniStreams, c.queueCapsule)
+	c.outgoingStreams = newOutgoingBidiStreamsMap(
+		conn,
+		sessionID,
+		fc.MaxOutgoingStreams,
+		c.outgoingDataFC,
+		c.incomingDataFC,
+		c.queueCapsule,
+		c.closeWithFlowControlError,
+	)
+	c.outgoingUniStreams = newOutgoingUniStreamsMap(
+		conn,
+		sessionID,
+		fc.MaxOutgoingUniStreams,
+		c.outgoingDataFC,
+		c.queueCapsule,
+	)
 
 	go func() {
 		defer ctxCancel()
@@ -129,11 +149,8 @@ func (s *Session) readFromConnectStream() {
 			if s.outgoingDataFC == nil {
 				continue
 			}
-			if err := s.outgoingDataFC.UpdateMaxData(c.MaximumData); err != nil {
-				s.closeWithError(&http3.Error{
-					ErrorCode:    http3.ErrCode(WTFlowControlErrorCode),
-					ErrorMessage: err.Error(),
-				}, nil)
+			if err := s.outgoingDataFC.UpdateMaxData(int64(c.MaximumData)); err != nil {
+				s.closeWithFlowControlError(err)
 				return
 			}
 		case maxStreamsBidiCapsule:
@@ -141,10 +158,7 @@ func (s *Session) readFromConnectStream() {
 				continue
 			}
 			if err := s.outgoingStreams.UpdateStreamLimit(c.MaximumStreams); err != nil {
-				s.closeWithError(&http3.Error{
-					ErrorCode:    http3.ErrCode(WTFlowControlErrorCode),
-					ErrorMessage: err.Error(),
-				}, nil)
+				s.closeWithFlowControlError(err)
 				return
 			}
 		case maxStreamsUniCapsule:
@@ -152,10 +166,7 @@ func (s *Session) readFromConnectStream() {
 				continue
 			}
 			if err := s.outgoingUniStreams.UpdateStreamLimit(c.MaximumStreams); err != nil {
-				s.closeWithError(&http3.Error{
-					ErrorCode:    http3.ErrCode(WTFlowControlErrorCode),
-					ErrorMessage: err.Error(),
-				}, nil)
+				s.closeWithFlowControlError(err)
 				return
 			}
 		case streamsBlockedBidiCapsule, streamsBlockedUniCapsule:
@@ -165,6 +176,13 @@ func (s *Session) readFromConnectStream() {
 			// TODO: log blocked capsules
 		}
 	}
+}
+
+func (s *Session) closeWithFlowControlError(err error) {
+	s.closeWithError(&http3.Error{
+		ErrorCode:    http3.ErrCode(WTFlowControlErrorCode),
+		ErrorMessage: err.Error(),
+	}, nil)
 }
 
 func (s *Session) writeToConnectStream() {
@@ -245,9 +263,18 @@ func (s *Session) queueCapsule(c capsule) {
 }
 
 // addIncomingStream adds a bidirectional stream that the remote peer opened
-func (s *Session) addIncomingStream(qstr *quic.Stream) {
+func (s *Session) addIncomingStream(qstr *quic.Stream, streamHeaderLen uint64) {
 	id := qstr.StreamID()
-	str := newStream(qstr, nil, s.queueCapsule, func() { s.incomingStreams.RemoveStream(id) })
+	str := newStream(
+		qstr,
+		nil,
+		s.outgoingDataFC,
+		s.incomingDataFC,
+		s.queueCapsule,
+		s.closeWithFlowControlError,
+		func() { s.incomingStreams.RemoveStream(id) },
+		int64(streamHeaderLen),
+	)
 	if err := s.incomingStreams.AddStream(id, str); err != nil {
 		str.closeWithSession(err)
 		s.closeWithError(err, nil)
@@ -255,9 +282,15 @@ func (s *Session) addIncomingStream(qstr *quic.Stream) {
 }
 
 // addIncomingUniStream adds a unidirectional stream that the remote peer opened
-func (s *Session) addIncomingUniStream(qstr *quic.ReceiveStream) {
+func (s *Session) addIncomingUniStream(qstr *quic.ReceiveStream, streamHeaderLen uint64) {
 	id := qstr.StreamID()
-	str := newReceiveStream(qstr, func() { s.incomingUniStreams.RemoveStream(id) }, nil, nil, 0)
+	str := newReceiveStream(
+		qstr,
+		int64(streamHeaderLen),
+		func() { s.incomingUniStreams.RemoveStream(id) },
+		s.incomingDataFC,
+		s.closeWithFlowControlError,
+	)
 	if err := s.incomingUniStreams.AddStream(id, str); err != nil {
 		str.closeWithSession(err)
 		s.closeWithError(err, nil)

@@ -62,9 +62,30 @@ func newOutgoingStreamsMap[T outgoingStream](
 	}
 }
 
-func newOutgoingBidiStreamsMap(conn *quic.Conn, sessionID sessionID, maxStreams uint64, queueCapsule func(capsule)) *outgoingStreamsMap[*Stream] {
+func newOutgoingBidiStreamsMap(
+	conn *quic.Conn,
+	sessionID sessionID,
+	maxStreams uint64,
+	sendFC *outgoingDataFlowController,
+	receiveFC *incomingDataFlowController,
+	queueCapsule func(capsule),
+	onFlowControlError func(error),
+) *outgoingStreamsMap[*Stream] {
 	streamHdr := newOutgoingStreamHeader(webTransportFrameType, sessionID)
 	var streams *outgoingStreamsMap[*Stream]
+	wrapStream := func(qstr *quic.Stream) *Stream {
+		id := qstr.StreamID()
+		return newStream(
+			qstr,
+			streamHdr,
+			sendFC,
+			receiveFC,
+			queueCapsule,
+			onFlowControlError,
+			func() { streams.removeStream(id) },
+			0,
+		)
+	}
 	streams = newOutgoingStreamsMap(
 		maxStreams,
 		func() (*Stream, quic.StreamID, error) {
@@ -72,16 +93,14 @@ func newOutgoingBidiStreamsMap(conn *quic.Conn, sessionID sessionID, maxStreams 
 			if err != nil {
 				return nil, 0, err
 			}
-			id := qstr.StreamID()
-			return newStream(qstr, streamHdr, queueCapsule, func() { streams.removeStream(id) }), id, nil
+			return wrapStream(qstr), qstr.StreamID(), nil
 		},
 		func(ctx context.Context) (*Stream, quic.StreamID, error) {
 			qstr, err := conn.OpenStreamSync(ctx)
 			if err != nil {
 				return nil, invalidStreamID, err
 			}
-			id := qstr.StreamID()
-			return newStream(qstr, streamHdr, queueCapsule, func() { streams.removeStream(id) }), id, nil
+			return wrapStream(qstr), qstr.StreamID(), nil
 		},
 		func(limit uint64) { queueCapsule(streamsBlockedBidiCapsule{MaximumStreams: limit}) },
 	)
@@ -92,10 +111,15 @@ func newOutgoingUniStreamsMap(
 	conn *quic.Conn,
 	sessionID sessionID,
 	maxStreams uint64,
+	fc *outgoingDataFlowController,
 	queueCapsule func(capsule),
 ) *outgoingStreamsMap[*SendStream] {
 	streamHdr := newOutgoingStreamHeader(webTransportUniStreamType, sessionID)
 	var streams *outgoingStreamsMap[*SendStream]
+	wrapStream := func(qstr *quic.SendStream) *SendStream {
+		id := qstr.StreamID()
+		return newSendStream(qstr, streamHdr, fc, queueCapsule, func() { streams.removeStream(id) })
+	}
 	streams = newOutgoingStreamsMap(
 		maxStreams,
 		func() (*SendStream, quic.StreamID, error) {
@@ -103,16 +127,14 @@ func newOutgoingUniStreamsMap(
 			if err != nil {
 				return nil, 0, err
 			}
-			id := qstr.StreamID()
-			return newSendStream(qstr, streamHdr, nil, queueCapsule, func() { streams.removeStream(id) }), id, nil
+			return wrapStream(qstr), qstr.StreamID(), nil
 		},
 		func(ctx context.Context) (*SendStream, quic.StreamID, error) {
 			qstr, err := conn.OpenUniStreamSync(ctx)
 			if err != nil {
 				return nil, invalidStreamID, err
 			}
-			id := qstr.StreamID()
-			return newSendStream(qstr, streamHdr, nil, queueCapsule, func() { streams.removeStream(id) }), id, nil
+			return wrapStream(qstr), qstr.StreamID(), nil
 		},
 		func(limit uint64) { queueCapsule(streamsBlockedUniCapsule{MaximumStreams: limit}) },
 	)

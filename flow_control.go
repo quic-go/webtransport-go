@@ -11,8 +11,7 @@ import (
 var errMaxDataNotIncreased = errors.New("webtransport: WT_MAX_DATA capsule didn't increase data limit")
 
 type outgoingDataFlowController struct {
-	mx sync.Mutex
-	// TODO: Update this and notify waiters when WT_MAX_DATA is implemented.
+	mx            sync.Mutex
 	maxData       int64
 	bytesSent     int64
 	lastBlockedAt int64
@@ -35,9 +34,7 @@ func (f *outgoingDataFlowController) AddBytesSent(n int64) int64 {
 	if f.bytesSent < f.maxData {
 		added = min(n, f.maxData-f.bytesSent)
 	}
-	if added > 0 {
-		f.bytesSent += added
-	}
+	f.bytesSent += added
 	return added
 }
 
@@ -52,11 +49,10 @@ func (f *outgoingDataFlowController) IsNewlyBlocked() (bool, int64) {
 	return true, f.maxData
 }
 
-func (f *outgoingDataFlowController) UpdateMaxData(n uint64) error {
+func (f *outgoingDataFlowController) UpdateMaxData(maxData int64) error {
 	f.mx.Lock()
 	defer f.mx.Unlock()
 
-	maxData := int64(n)
 	if maxData <= f.maxData {
 		return fmt.Errorf("%w: current limit: %d, received limit: %d", errMaxDataNotIncreased, f.maxData, maxData)
 	}

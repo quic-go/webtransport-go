@@ -99,9 +99,9 @@ func TestSessionManagerAddingStreams(t *testing.T) {
 	// first add the streams...
 	sess := newSession(context.Background(), sessionID, clientConn, reqStr, "", sessionFlowControl{})
 	// ...then add the session
-	sessMgr.AddStream(clientStr, sessionID)
+	sessMgr.AddStream(clientStr, sessionID, 0)
 	require.Equal(t, 1, sessMgr.NumSessions())
-	sessMgr.AddUniStream(clientUniStr, sessionID)
+	sessMgr.AddUniStream(clientUniStr, sessionID, 0)
 	sessMgr.AddSession(sessionID, sess)
 	require.Equal(t, 1, sessMgr.NumSessions())
 
@@ -199,7 +199,7 @@ func TestSessionManagerStreamReordering(t *testing.T) {
 		sessMgr := newSessionManager(timeout)
 		require.Zero(t, sessMgr.NumSessions())
 		// add the first stream
-		sessMgr.AddStream(clientStr1, sessionID)
+		sessMgr.AddStream(clientStr1, sessionID, 0)
 		require.Equal(t, 1, sessMgr.NumSessions())
 		time.Sleep(timeout + time.Second)
 		// the stream should have been reset and the session manager should have no sessions
@@ -207,12 +207,12 @@ func TestSessionManagerStreamReordering(t *testing.T) {
 		_, err = serverStr1.Read([]byte{0})
 		require.ErrorIs(t, err, &quic.StreamError{Remote: true, StreamID: serverStr1.StreamID(), ErrorCode: WTBufferedStreamRejectedErrorCode})
 
-		sessMgr.AddUniStream(clientUniStr1, sessionID)
-		sessMgr.AddUniStream(clientUniStr2, sessionID)
+		sessMgr.AddUniStream(clientUniStr1, sessionID, 0)
+		sessMgr.AddUniStream(clientUniStr2, sessionID, 0)
 		require.Equal(t, 1, sessMgr.NumSessions())
 		time.Sleep(timeout - time.Second)
 		// adding another stream resets the timer
-		sessMgr.AddStream(clientStr2, sessionID)
+		sessMgr.AddStream(clientStr2, sessionID, 0)
 		time.Sleep(timeout - time.Second)
 		require.Equal(t, 1, sessMgr.NumSessions())
 
@@ -224,7 +224,7 @@ func TestSessionManagerStreamReordering(t *testing.T) {
 		// wait for a long time, then add another stream
 		time.Sleep(timeout + time.Second)
 		require.Equal(t, 1, sessMgr.NumSessions())
-		sessMgr.AddUniStream(clientUniStr3, sessionID)
+		sessMgr.AddUniStream(clientUniStr3, sessionID, 0)
 		time.Sleep(timeout + time.Second)
 
 		// the "lorem" stream should have been reset and the "dolor" stream should have been returned
@@ -334,7 +334,7 @@ func TestSessionManagerSessionClose(t *testing.T) {
 			require.NoError(t, err)
 			clientStr, err := clientConn.AcceptStream(context.Background())
 			require.NoError(t, err)
-			sessMgr.AddStream(clientStr, sessID)
+			sessMgr.AddStream(clientStr, sessID, 0)
 			synctest.Wait()
 			// make sure the stream is not rejected
 			select {
@@ -352,7 +352,7 @@ func TestSessionManagerSessionClose(t *testing.T) {
 			require.NoError(t, err)
 			clientUniStr, err := clientConn.AcceptUniStream(context.Background())
 			require.NoError(t, err)
-			sessMgr.AddUniStream(clientUniStr, sessID)
+			sessMgr.AddUniStream(clientUniStr, sessID, 0)
 			synctest.Wait()
 			// make sure the stream is not rejected
 			select {
@@ -371,7 +371,7 @@ func TestSessionManagerSessionClose(t *testing.T) {
 		require.NoError(t, err)
 		clientStrClosed, err := clientConn.AcceptStream(context.Background())
 		require.NoError(t, err)
-		sessMgr.AddStream(clientStrClosed, sessID)
+		sessMgr.AddStream(clientStrClosed, sessID, 0)
 		synctest.Wait()
 		// make sure the stream is immediately rejected
 		_, err = serverStr.Read([]byte{0})
@@ -387,7 +387,7 @@ func TestSessionManagerSessionClose(t *testing.T) {
 		synctest.Wait()
 		clientUniStr, err := clientConn.AcceptUniStream(context.Background())
 		require.NoError(t, err)
-		sessMgr.AddUniStream(clientUniStr, sessID)
+		sessMgr.AddUniStream(clientUniStr, sessID, 0)
 		synctest.Wait()
 		_, err = clientUniStr.Read([]byte{0})
 		require.ErrorIs(t, err, &quic.StreamError{Remote: false, StreamID: clientUniStr.StreamID(), ErrorCode: WTBufferedStreamRejectedErrorCode})
