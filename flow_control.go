@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+
+	"github.com/quic-go/quic-go/quicvarint"
 )
 
 var errMaxDataNotIncreased = errors.New("webtransport: WT_MAX_DATA capsule didn't increase data limit")
@@ -69,4 +71,43 @@ func (f *outgoingDataFlowController) NextUpdate() <-chan struct{} {
 	updated := f.updated
 	f.mx.Unlock()
 	return updated
+}
+
+type incomingDataFlowController struct {
+	mx sync.Mutex
+
+	bytesRead         int64
+	maxData           int64
+	receiveWindow     int64
+	queueWindowUpdate func(int64)
+}
+
+func newIncomingDataFlowController(bytesRead, maxData int64, queueWindowUpdate func(int64)) *incomingDataFlowController {
+	return &incomingDataFlowController{
+		bytesRead:         bytesRead,
+		maxData:           maxData,
+		receiveWindow:     maxData - bytesRead,
+		queueWindowUpdate: queueWindowUpdate,
+	}
+}
+
+func (f *incomingDataFlowController) AddBytesRead(n int64) error {
+	f.mx.Lock()
+	defer f.mx.Unlock()
+
+	if n > f.maxData-f.bytesRead {
+		return fmt.Errorf("webtransport: received more than %d bytes of stream data", f.maxData)
+	}
+	f.bytesRead += n
+	if f.maxData-f.bytesRead > 3*f.receiveWindow/4 {
+		return nil
+	}
+
+	maxData := min(f.bytesRead+f.receiveWindow, int64(quicvarint.Max))
+	if maxData == f.maxData {
+		return nil
+	}
+	f.maxData = maxData
+	f.queueWindowUpdate(maxData)
+	return nil
 }
