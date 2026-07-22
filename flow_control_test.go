@@ -22,6 +22,22 @@ func TestOutgoingDataFlowController(t *testing.T) {
 	blocked, maxData = fc.IsNewlyBlocked()
 	require.False(t, blocked)
 	require.Zero(t, maxData)
+
+	updated := fc.NextUpdate()
+	require.ErrorIs(t, fc.UpdateMaxData(10), errMaxDataNotIncreased)
+	select {
+	case <-updated:
+		t.Fatal("rejected update notified waiter")
+	default:
+	}
+
+	require.NoError(t, fc.UpdateMaxData(20))
+	select {
+	case <-updated:
+	default:
+		t.Fatal("increased limit didn't notify waiter")
+	}
+	require.Equal(t, int64(10), fc.AddBytesSent(20))
 }
 
 func TestOutgoingDataFlowControllerBlockedAtZero(t *testing.T) {
