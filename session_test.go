@@ -145,8 +145,7 @@ func TestCloseWithErrorTruncatesSendMessage(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 		w.(http.Flusher).Flush()
 
-		reader := quicvarint.NewReader(r.Body)
-		typ, capsuleReader, err := http3.ParseCapsule(reader)
+		typ, capsuleReader, err := http3.NewCapsuleParser(r.Body).Next()
 		if err != nil {
 			return
 		}
@@ -311,10 +310,11 @@ func TestSessionSendsQueuedCapsules(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, serverStr.SetReadDeadline(time.Now().Add(time.Second)))
 
-	c, err := parseNextCapsule(serverStr)
+	parser := http3.NewCapsuleParser(serverStr)
+	c, err := parseNextCapsule(parser)
 	require.NoError(t, err)
 	require.Equal(t, streamsBlockedBidiCapsule{MaximumStreams: 42}, c)
-	c, err = parseNextCapsule(serverStr)
+	c, err = parseNextCapsule(parser)
 	require.NoError(t, err)
 	require.Equal(t, streamsBlockedUniCapsule{MaximumStreams: 1337}, c)
 }
