@@ -12,6 +12,7 @@ import (
 
 const (
 	closeSessionCapsuleType       http3.CapsuleType = 0x2843
+	maxDataCapsuleType            http3.CapsuleType = 0x190b4d3d
 	maxStreamDataCapsuleType      http3.CapsuleType = 0x190b4d3e // only used on WebTransport over HTTP/2
 	maxStreamsBidiCapsuleType     http3.CapsuleType = 0x190b4d3f
 	maxStreamsUniCapsuleType      http3.CapsuleType = 0x190b4d40
@@ -44,6 +45,12 @@ func parseNextCapsule(parser *http3.CapsuleParser) (capsule, error) {
 				return nil, err
 			}
 			return capsule, nil
+		case maxDataCapsuleType:
+			maxData, err := parseMaxDataCapsule(capsuleReader)
+			if err != nil {
+				return nil, err
+			}
+			return maxDataCapsule{MaximumData: maxData}, nil
 		case maxStreamDataCapsuleType:
 			return nil, errors.New("WT_MAX_STREAM_DATA capsule received")
 		case maxStreamsBidiCapsuleType:
@@ -132,6 +139,16 @@ func (c closeSessionCapsule) ToSessionError() *SessionError {
 	}
 }
 
+type maxDataCapsule struct {
+	MaximumData uint64
+}
+
+func (c maxDataCapsule) Append(b []byte) []byte {
+	b = quicvarint.Append(b, uint64(maxDataCapsuleType))
+	b = quicvarint.Append(b, uint64(quicvarint.Len(c.MaximumData)))
+	return quicvarint.Append(b, c.MaximumData)
+}
+
 type maxStreamsBidiCapsule struct {
 	MaximumStreams uint64
 }
@@ -189,6 +206,17 @@ func parseDataBlockedCapsule(r http3.CapsuleReader) (uint64, error) {
 	}
 	if r.Remaining() != 0 {
 		return 0, errors.New("WT_DATA_BLOCKED capsule has trailing data")
+	}
+	return maxData, nil
+}
+
+func parseMaxDataCapsule(r http3.CapsuleReader) (uint64, error) {
+	maxData, err := quicvarint.Read(r)
+	if err != nil {
+		return 0, err
+	}
+	if r.Remaining() != 0 {
+		return 0, errors.New("WT_MAX_DATA capsule has trailing data")
 	}
 	return maxData, nil
 }

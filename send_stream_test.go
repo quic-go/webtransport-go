@@ -311,3 +311,46 @@ func TestSendStreamDataFlowControl(t *testing.T) {
 	require.ErrorIs(t, err, os.ErrDeadlineExceeded)
 	require.Equal(t, []capsule{dataBlockedCapsule{MaximumData: 5}}, capsules)
 }
+
+func TestSendStreamDataFlowControlUpdate(t *testing.T) {
+	sendStr, recvStr := newUniStreamPair(t)
+	fc := newOutgoingDataFlowController(5)
+	blocked := make(chan capsule, 1)
+	str := newSendStream(sendStr, []byte("hdr"), fc, func(c capsule) { blocked <- c }, func() {})
+
+	type writeResult struct {
+		n   int
+		err error
+	}
+	written := make(chan writeResult, 1)
+	go func() {
+		n, err := str.Write([]byte("abcdefgh"))
+		written <- writeResult{n: n, err: err}
+	}()
+
+	select {
+	case c := <-blocked:
+		require.Equal(t, dataBlockedCapsule{MaximumData: 5}, c)
+	case <-time.After(scaleDuration(time.Second)):
+		t.Fatal("write didn't become flow control blocked")
+	}
+	select {
+	case result := <-written:
+		t.Fatalf("write completed while flow control blocked: %d bytes, %v", result.n, result.err)
+	default:
+	}
+
+	require.NoError(t, fc.UpdateMaxData(8))
+	select {
+	case result := <-written:
+		require.Equal(t, 8, result.n)
+		require.NoError(t, result.err)
+	case <-time.After(scaleDuration(time.Second)):
+		t.Fatal("write wasn't unblocked by flow control update")
+	}
+
+	b := make([]byte, len("hdrabcdefgh"))
+	_, err := io.ReadFull(recvStr, b)
+	require.NoError(t, err)
+	require.Equal(t, "hdrabcdefgh", string(b))
+}

@@ -58,6 +58,7 @@ type Session struct {
 	incomingUniStreams *incomingStreamsMap[*ReceiveStream]
 	outgoingStreams    *outgoingStreamsMap[*Stream]
 	outgoingUniStreams *outgoingStreamsMap[*SendStream]
+	outgoingDataFC     *outgoingDataFlowController
 }
 
 const (
@@ -124,6 +125,17 @@ func (s *Session) readFromConnectStream() {
 		case closeSessionCapsule:
 			s.closeWithError(c.ToSessionError(), nil)
 			return
+		case maxDataCapsule:
+			if s.outgoingDataFC == nil {
+				continue
+			}
+			if err := s.outgoingDataFC.UpdateMaxData(c.MaximumData); err != nil {
+				s.closeWithError(&http3.Error{
+					ErrorCode:    http3.ErrCode(WTFlowControlErrorCode),
+					ErrorMessage: err.Error(),
+				}, nil)
+				return
+			}
 		case maxStreamsBidiCapsule:
 			if !s.flowControlEnabled {
 				continue
