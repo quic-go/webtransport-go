@@ -97,7 +97,7 @@ func (f *incomingDataFlowController) AddBytesRead(n int64) error {
 		return fmt.Errorf("webtransport: received more than %d bytes of stream data", f.maxData)
 	}
 	f.bytesRead += n
-	if f.maxData-f.bytesRead > 3*f.receiveWindow/4 {
+	if f.maxData-f.bytesRead > f.receiveWindow-f.receiveWindow/4 {
 		return nil
 	}
 
