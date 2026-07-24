@@ -15,6 +15,7 @@ const (
 	maxStreamDataCapsuleType      http3.CapsuleType = 0x190b4d3e // only used on WebTransport over HTTP/2
 	maxStreamsBidiCapsuleType     http3.CapsuleType = 0x190b4d3f
 	maxStreamsUniCapsuleType      http3.CapsuleType = 0x190b4d40
+	dataBlockedCapsuleType        http3.CapsuleType = 0x190b4d41
 	streamDataBlockedCapsuleType  http3.CapsuleType = 0x190b4d42 // only used on WebTransport over HTTP/2
 	streamsBlockedBidiCapsuleType http3.CapsuleType = 0x190b4d43
 	streamsBlockedUniCapsuleType  http3.CapsuleType = 0x190b4d44
@@ -57,6 +58,12 @@ func parseNextCapsule(parser *http3.CapsuleParser) (capsule, error) {
 				return nil, err
 			}
 			return maxStreamsUniCapsule{MaximumStreams: maxStreams}, nil
+		case dataBlockedCapsuleType:
+			maxData, err := parseDataBlockedCapsule(capsuleReader)
+			if err != nil {
+				return nil, err
+			}
+			return dataBlockedCapsule{MaximumData: maxData}, nil
 		case streamDataBlockedCapsuleType:
 			return nil, errors.New("WT_STREAM_DATA_BLOCKED capsule received")
 		case streamsBlockedBidiCapsuleType:
@@ -145,6 +152,16 @@ func (c maxStreamsUniCapsule) Append(b []byte) []byte {
 	return quicvarint.Append(b, c.MaximumStreams)
 }
 
+type dataBlockedCapsule struct {
+	MaximumData uint64
+}
+
+func (c dataBlockedCapsule) Append(b []byte) []byte {
+	b = quicvarint.Append(b, uint64(dataBlockedCapsuleType))
+	b = quicvarint.Append(b, uint64(quicvarint.Len(c.MaximumData)))
+	return quicvarint.Append(b, c.MaximumData)
+}
+
 type streamsBlockedBidiCapsule struct {
 	MaximumStreams uint64
 }
@@ -163,6 +180,17 @@ func (c streamsBlockedUniCapsule) Append(b []byte) []byte {
 	b = quicvarint.Append(b, uint64(streamsBlockedUniCapsuleType))
 	b = quicvarint.Append(b, uint64(quicvarint.Len(c.MaximumStreams)))
 	return quicvarint.Append(b, c.MaximumStreams)
+}
+
+func parseDataBlockedCapsule(r http3.CapsuleReader) (uint64, error) {
+	maxData, err := quicvarint.Read(r)
+	if err != nil {
+		return 0, err
+	}
+	if r.Remaining() != 0 {
+		return 0, errors.New("WT_DATA_BLOCKED capsule has trailing data")
+	}
+	return maxData, nil
 }
 
 func parseMaxStreamsCapsule(r http3.CapsuleReader) (uint64, error) {
