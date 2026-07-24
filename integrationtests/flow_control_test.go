@@ -163,6 +163,7 @@ func testUnidirectionalStreamFlowControl(t *testing.T, ctx context.Context, open
 
 func requireStreamOpeningBlocked(t *testing.T, result <-chan error, message string) {
 	t.Helper()
+
 	select {
 	case err := <-result:
 		t.Fatalf("%s: %v", message, err)

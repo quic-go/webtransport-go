@@ -23,7 +23,7 @@ type Stream struct {
 
 func newStream(str *quic.Stream, hdr []byte, onClose func()) *Stream {
 	s := &Stream{onClose: onClose}
-	s.sendStr = newSendStream(str, hdr, func() { s.registerClose(true) })
+	s.sendStr = newSendStream(str, hdr, nil, func() { s.registerClose(true) })
 	s.recvStr = newReceiveStream(str, func() { s.registerClose(false) })
 	return s
 }
