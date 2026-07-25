@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestConfigAddsStreamLimitSettings(t *testing.T) {
+func TestConfigAddsFlowControlSettings(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
 		config Config
@@ -20,26 +20,29 @@ func TestConfigAddsStreamLimitSettings(t *testing.T) {
 		},
 		{
 			name:   "explicit zero",
-			config: Config{MaxIncomingStreams: -1, MaxIncomingUniStreams: -1},
+			config: Config{MaxIncomingStreams: -1, MaxIncomingUniStreams: -1, MaxIncomingData: -1},
 			want: map[uint64]uint64{
 				settingsWebTransportInitialMaxStreamsBidi: 0,
 				settingsWebTransportInitialMaxStreamsUni:  0,
+				settingsWebTransportInitialMaxData:        0,
 			},
 		},
 		{
 			name:   "positive",
-			config: Config{MaxIncomingStreams: 10, MaxIncomingUniStreams: 20},
+			config: Config{MaxIncomingStreams: 10, MaxIncomingUniStreams: 20, MaxIncomingData: 30},
 			want: map[uint64]uint64{
 				settingsWebTransportInitialMaxStreamsBidi: 10,
 				settingsWebTransportInitialMaxStreamsUni:  20,
+				settingsWebTransportInitialMaxData:        30,
 			},
 		},
 		{
 			name:   "clipped",
-			config: Config{MaxIncomingStreams: 1<<60 + 1, MaxIncomingUniStreams: 1<<60 + 2},
+			config: Config{MaxIncomingStreams: 1<<60 + 1, MaxIncomingUniStreams: 1<<60 + 2, MaxIncomingData: 1 << 62},
 			want: map[uint64]uint64{
 				settingsWebTransportInitialMaxStreamsBidi: maxStreamsLimit,
 				settingsWebTransportInitialMaxStreamsUni:  maxStreamsLimit,
+				settingsWebTransportInitialMaxData:        1<<62 - 1,
 			},
 		},
 	} {
@@ -47,6 +50,7 @@ func TestConfigAddsStreamLimitSettings(t *testing.T) {
 			settings := map[uint64]uint64{
 				settingsWebTransportInitialMaxStreamsBidi: 42,
 				settingsWebTransportInitialMaxStreamsUni:  42,
+				settingsWebTransportInitialMaxData:        42,
 			}
 			tc.config.addSettings(settings)
 			require.Equal(t, tc.want, settings)
@@ -54,11 +58,12 @@ func TestConfigAddsStreamLimitSettings(t *testing.T) {
 	}
 }
 
-func TestConfigNegotiatesStreamFlowControl(t *testing.T) {
-	config := Config{MaxIncomingStreams: 10, MaxIncomingUniStreams: -1}
+func TestConfigNegotiatesFlowControl(t *testing.T) {
+	config := Config{MaxIncomingStreams: 10, MaxIncomingUniStreams: -1, MaxIncomingData: 20}
 	remote := &http3.Settings{Other: map[uint64]uint64{
 		settingsWebTransportInitialMaxStreamsBidi: 3,
 		settingsWebTransportInitialMaxStreamsUni:  4,
+		settingsWebTransportInitialMaxData:        5,
 	}}
 	require.Equal(t, sessionFlowControl{
 		Enabled:               true,
@@ -66,6 +71,8 @@ func TestConfigNegotiatesStreamFlowControl(t *testing.T) {
 		MaxIncomingUniStreams: 0,
 		MaxOutgoingStreams:    3,
 		MaxOutgoingUniStreams: 4,
+		MaxIncomingData:       20,
+		MaxOutgoingData:       5,
 	}, config.sessionFlowControl(remote))
 
 	for _, tc := range []struct {

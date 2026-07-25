@@ -249,12 +249,13 @@ func (s *Server) ServeQUICConn(conn *quic.Conn) error {
 					http3Conn.HandleRequestStream(str)
 					return
 				}
+				r := &byteCountingReader{ByteReader: quicvarint.NewReader(str)}
 				// read the frame type (already peeked)
-				if _, err := quicvarint.Read(quicvarint.NewReader(str)); err != nil {
+				if _, err := quicvarint.Read(r); err != nil {
 					return
 				}
 				// read the session ID
-				id, err := quicvarint.Read(quicvarint.NewReader(str))
+				id, err := quicvarint.Read(r)
 				if err != nil {
 					str.CancelRead(quic.StreamErrorCode(http3.ErrCodeGeneralProtocolError))
 					str.CancelWrite(quic.StreamErrorCode(http3.ErrCodeGeneralProtocolError))
@@ -264,7 +265,7 @@ func (s *Server) ServeQUICConn(conn *quic.Conn) error {
 					conn.CloseWithError(quic.ApplicationErrorCode(http3.ErrCodeIDError), "")
 					return
 				}
-				sessMgr.AddStream(str, sessionID(id))
+				sessMgr.AddStream(str, sessionID(id), r.BytesRead)
 			})
 		}
 	}()
@@ -288,7 +289,7 @@ func (s *Server) ServeQUICConn(conn *quic.Conn) error {
 					return
 				}
 				// read the stream type (already peeked) before passing to AddUniStream
-				r := quicvarint.NewReader(str)
+				r := &byteCountingReader{ByteReader: quicvarint.NewReader(str)}
 				if _, err := quicvarint.Read(r); err != nil {
 					return
 				}
@@ -302,7 +303,7 @@ func (s *Server) ServeQUICConn(conn *quic.Conn) error {
 					conn.CloseWithError(quic.ApplicationErrorCode(http3.ErrCodeIDError), "")
 					return
 				}
-				sessMgr.AddUniStream(str, sessionID(id))
+				sessMgr.AddUniStream(str, sessionID(id), r.BytesRead)
 			})
 		}
 	}()
