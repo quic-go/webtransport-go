@@ -18,6 +18,7 @@ import (
 	"github.com/dunglas/httpsfv"
 )
 
+// A Transport configures WebTransport clients.
 type Transport struct {
 	// Config is the WebTransport configuration used for new sessions.
 	Config *Config
@@ -54,6 +55,8 @@ func (d *Transport) init() {
 	d.ctx, d.ctxCancel = context.WithCancel(context.Background())
 }
 
+// Dial establishes a WebTransport session on a new QUIC connection.
+// The QUIC connection is closed when the returned session is closed.
 func (d *Transport) Dial(ctx context.Context, urlStr string, reqHdr http.Header) (*http.Response, *Session, error) {
 	d.initOnce.Do(func() { d.init() })
 	var config Config
@@ -304,6 +307,7 @@ func (d *Transport) negotiateProtocol(theirs []string) (string, error) {
 	return negotiatedProtocol, nil
 }
 
+// Close cancels session establishment waiting for peer HTTP/3 settings.
 func (d *Transport) Close() error {
 	d.ctxCancel()
 	return nil
