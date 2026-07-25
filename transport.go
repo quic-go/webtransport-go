@@ -4,21 +4,18 @@ import (
 	"context"
 	"crypto/tls"
 	"errors"
-	"fmt"
 	"net/http"
 	"net/url"
-	"slices"
 	"sync"
 	"time"
 
 	"github.com/quic-go/quic-go"
 	"github.com/quic-go/quic-go/http3"
-	"github.com/quic-go/quic-go/quicvarint"
-
-	"github.com/dunglas/httpsfv"
 )
 
 // A Transport configures WebTransport clients.
+// Dial creates a new QUIC connection for each session. To establish multiple
+// sessions on one QUIC connection, use NewClientConn.
 type Transport struct {
 	// Config is the WebTransport configuration used for new sessions.
 	Config *Config
@@ -59,11 +56,6 @@ func (d *Transport) init() {
 // The QUIC connection is closed when the returned session is closed.
 func (d *Transport) Dial(ctx context.Context, urlStr string, reqHdr http.Header) (*http.Response, *Session, error) {
 	d.initOnce.Do(func() { d.init() })
-	var config Config
-	if d.Config != nil {
-		config = *d.Config
-	}
-
 	quicConf := d.QUICConfig
 	if quicConf == nil {
 		quicConf = &quic.Config{
@@ -93,29 +85,6 @@ func (d *Transport) Dial(ctx context.Context, urlStr string, reqHdr http.Header)
 	if err != nil {
 		return nil, nil, err
 	}
-	if reqHdr == nil {
-		reqHdr = http.Header{}
-	}
-	if len(d.ApplicationProtocols) > 0 && reqHdr.Get(wtAvailableProtocolsHeader) == "" {
-		list := httpsfv.List{}
-		for _, protocol := range d.ApplicationProtocols {
-			list = append(list, httpsfv.NewItem(protocol))
-		}
-		protocols, err := httpsfv.Marshal(list)
-		if err != nil {
-			return nil, nil, fmt.Errorf("failed to marshal application protocols: %w", err)
-		}
-		reqHdr.Set(wtAvailableProtocolsHeader, protocols)
-	}
-
-	req := &http.Request{
-		Method: http.MethodConnect,
-		Header: reqHdr,
-		Proto:  protocolHeader,
-		Host:   u.Host,
-		URL:    u,
-	}
-	req = req.WithContext(ctx)
 
 	dialAddr := d.DialAddr
 	if dialAddr == nil {
@@ -126,13 +95,12 @@ func (d *Transport) Dial(ctx context.Context, urlStr string, reqHdr http.Header)
 		return nil, nil, err
 	}
 
-	// Per draft-ietf-webtrans-http3-15 sections 3.1 and 7.1, for draft versions of
-	// WebTransport the client MUST send SETTINGS_WT_ENABLED using the codepoint
-	// for its supported draft version, so the server can negotiate the version.
-	additionalSettings := map[uint64]uint64{settingsWebTransportEnabled: 1}
-	config.addSettings(additionalSettings)
-	tr := &http3.Transport{EnableDatagrams: true, AdditionalSettings: additionalSettings}
-	rsp, sess, err := d.handleConn(ctx, tr, qconn, req, config)
+	clientConn, err := d.NewClientConn(qconn)
+	if err != nil {
+		qconn.CloseWithError(quic.ApplicationErrorCode(http3.ErrCodeNoError), "")
+		return nil, nil, err
+	}
+	rsp, sess, err := clientConn.dial(ctx, u, reqHdr)
 	if err != nil {
 		var msg string
 		code := quic.ApplicationErrorCode(http3.ErrCodeNoError)
@@ -142,172 +110,16 @@ func (d *Transport) Dial(ctx context.Context, urlStr string, reqHdr http.Header)
 			msg = reqErr.Message
 		}
 		qconn.CloseWithError(code, msg)
-		tr.Close()
 		return rsp, nil, err
 	}
 	context.AfterFunc(sess.Context(), func() {
 		qconn.CloseWithError(quic.ApplicationErrorCode(http3.ErrCodeNoError), "")
-		tr.Close()
 	})
 	return rsp, sess, nil
 }
 
-func (d *Transport) handleConn(ctx context.Context, tr *http3.Transport, qconn *quic.Conn, req *http.Request, config Config) (*http.Response, *Session, error) {
-	timeout := d.StreamReorderingTimeout
-	if timeout == 0 {
-		timeout = 5 * time.Second
-	}
-	sessMgr := newSessionManager(timeout)
-	context.AfterFunc(qconn.Context(), sessMgr.Close)
-
-	conn := tr.NewRawClientConn(qconn)
-
-	go func() {
-		for {
-			str, err := qconn.AcceptStream(context.Background())
-			if err != nil {
-				return
-			}
-
-			go func() {
-				typ, err := quicvarint.Peek(str)
-				if err != nil {
-					return
-				}
-				if typ != webTransportFrameType {
-					conn.HandleBidirectionalStream(str)
-					return
-				}
-				r := &byteCountingReader{ByteReader: quicvarint.NewReader(str)}
-				// read the frame type (already peeked above)
-				if _, err := quicvarint.Read(r); err != nil {
-					return
-				}
-				// read the session ID
-				id, err := quicvarint.Read(r)
-				if err != nil {
-					return
-				}
-				if !isValidSessionID(id) {
-					qconn.CloseWithError(quic.ApplicationErrorCode(http3.ErrCodeIDError), "")
-					return
-				}
-				sessMgr.AddStream(str, sessionID(id), r.BytesRead)
-			}()
-		}
-	}()
-
-	go func() {
-		for {
-			str, err := qconn.AcceptUniStream(context.Background())
-			if err != nil {
-				return
-			}
-
-			go func() {
-				typ, err := quicvarint.Peek(str)
-				if err != nil {
-					return
-				}
-				if typ != webTransportUniStreamType {
-					conn.HandleUnidirectionalStream(str)
-					return
-				}
-				r := &byteCountingReader{ByteReader: quicvarint.NewReader(str)}
-				// read the stream type (already peeked above)
-				if _, err := quicvarint.Read(r); err != nil {
-					return
-				}
-				// read the session ID
-				id, err := quicvarint.Read(r)
-				if err != nil {
-					str.CancelRead(quic.StreamErrorCode(http3.ErrCodeGeneralProtocolError))
-					return
-				}
-				if !isValidSessionID(id) {
-					qconn.CloseWithError(quic.ApplicationErrorCode(http3.ErrCodeIDError), "")
-					return
-				}
-				sessMgr.AddUniStream(str, sessionID(id), r.BytesRead)
-			}()
-		}
-	}()
-
-	select {
-	case <-conn.ReceivedSettings():
-	case <-ctx.Done():
-		return nil, nil, fmt.Errorf("error waiting for HTTP/3 settings: %w", context.Cause(ctx))
-	case <-d.ctx.Done():
-		return nil, nil, context.Cause(d.ctx)
-	}
-	settings := conn.Settings()
-	if !settings.EnableExtendedConnect {
-		return nil, nil, &RequirementsNotMetError{Message: "server didn't enable Extended CONNECT"}
-	}
-	if !settings.EnableDatagrams {
-		return nil, nil, &RequirementsNotMetError{Message: "server didn't enable HTTP/3 datagram support"}
-	}
-	if settings.Other == nil {
-		return nil, nil, &RequirementsNotMetError{Message: "server didn't enable WebTransport"}
-	}
-	// any non-zero value for SETTINGS_WT_ENABLED means that WebTransport is enabled
-	s, ok := settings.Other[settingsWebTransportEnabled]
-	if !ok || s == 0 {
-		return nil, nil, &RequirementsNotMetError{Message: "server didn't enable WebTransport"}
-	}
-
-	requestStr, err := conn.OpenRequestStream(ctx)
-	if err != nil {
-		return nil, nil, err
-	}
-	if err := requestStr.SendRequestHeader(req); err != nil {
-		return nil, nil, err
-	}
-	// TODO(#136): create the session to allow optimistic opening of streams and sending of datagrams
-	rsp, err := requestStr.ReadResponse()
-	if err != nil {
-		return nil, nil, err
-	}
-	if rsp.StatusCode < 200 || rsp.StatusCode >= 300 {
-		return rsp, nil, fmt.Errorf("received status %d", rsp.StatusCode)
-	}
-	sessID := sessionID(requestStr.StreamID())
-	var protocol string
-	// Don't send WT_ALPN_ERROR if WT-Protocol is absent: the server didn't
-	// negotiate a protocol. Send it only when WT-Protocol is present but invalid.
-	if protocolHeader, ok := rsp.Header[http.CanonicalHeaderKey(wtProtocolHeader)]; ok {
-		var err error
-		protocol, err = d.negotiateProtocol(protocolHeader)
-		if err != nil {
-			sessErr := &SessionError{ErrorCode: WTALPNErrorCode, Message: err.Error()}
-			_ = closeSessionStream(
-				requestStr,
-				closeSessionCapsule{ErrorCode: sessErr.ErrorCode, Message: sessErr.Message},
-			)
-			return rsp, nil, sessErr
-		}
-	}
-	sess := newSession(context.WithoutCancel(ctx), sessID, qconn, requestStr, protocol, config.sessionFlowControl(settings))
-	sessMgr.AddSession(sessID, sess)
-	return rsp, sess, nil
-}
-
-func (d *Transport) negotiateProtocol(theirs []string) (string, error) {
-	negotiatedProtocolItem, err := httpsfv.UnmarshalItem(theirs)
-	if err != nil {
-		return "", fmt.Errorf("webtransport: invalid WT-Protocol header: %w", err)
-	}
-	negotiatedProtocol, ok := negotiatedProtocolItem.Value.(string)
-	if !ok {
-		return "", errors.New("webtransport: invalid WT-Protocol header: value is not a string")
-	}
-	if !slices.Contains(d.ApplicationProtocols, negotiatedProtocol) {
-		return "", fmt.Errorf("webtransport: server selected application protocol %q that wasn't offered", negotiatedProtocol)
-	}
-	return negotiatedProtocol, nil
-}
-
 // Close cancels session establishment waiting for peer HTTP/3 settings.
+// It doesn't close established sessions or QUIC connections passed to NewClientConn.
 func (d *Transport) Close() error {
 	d.ctxCancel()
 	return nil
