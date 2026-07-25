@@ -75,7 +75,7 @@ func RunInteropClient() error {
 		defer keyLog.Close()
 	}
 
-	cl := &webtransport.Dialer{
+	cl := &webtransport.Transport{
 		TLSClientConfig: &tls.Config{
 			InsecureSkipVerify: true,
 			KeyLogWriter:       keyLog,

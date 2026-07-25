@@ -92,7 +92,7 @@ func TestClientInvalidResponseHandling(t *testing.T) {
 		}
 	}()
 
-	d := webtransport.Dialer{TLSClientConfig: &tls.Config{RootCAs: webtransport.CertPool}}
+	d := webtransport.Transport{TLSClientConfig: &tls.Config{RootCAs: webtransport.CertPool}}
 	_, _, err = d.Dial(context.Background(), fmt.Sprintf("https://localhost:%d", ln.Addr().(*net.UDPAddr).Port), nil)
 	require.Error(t, err)
 	var sErr error
@@ -119,7 +119,7 @@ func TestClientClosesConnectionForInvalidSessionID(t *testing.T) {
 	}{{"bidirectional", webTransportFrameType}, {"unidirectional", webTransportUniStreamType}} {
 		t.Run(tt.name, func(t *testing.T) {
 			go func() {
-				d := webtransport.Dialer{TLSClientConfig: &tls.Config{RootCAs: webtransport.CertPool}}
+				d := webtransport.Transport{TLSClientConfig: &tls.Config{RootCAs: webtransport.CertPool}}
 				_, _, _ = d.Dial(context.Background(), addr, nil)
 			}()
 
@@ -179,7 +179,7 @@ func TestClientWaitForSettingsTimeout(t *testing.T) {
 	ctx, cancel := context.WithCancelCause(context.Background())
 	errChan := make(chan error)
 	go func() {
-		d := webtransport.Dialer{TLSClientConfig: &tls.Config{RootCAs: webtransport.CertPool}}
+		d := webtransport.Transport{TLSClientConfig: &tls.Config{RootCAs: webtransport.CertPool}}
 		_, _, err := d.Dial(ctx, fmt.Sprintf("https://localhost:%d", ln.Addr().(*net.UDPAddr).Port), nil)
 		errChan <- err
 	}()
@@ -273,7 +273,7 @@ func TestClientInvalidSettingsHandling(t *testing.T) {
 				connChan <- conn
 			}()
 
-			d := webtransport.Dialer{TLSClientConfig: &tls.Config{RootCAs: webtransport.CertPool}}
+			d := webtransport.Transport{TLSClientConfig: &tls.Config{RootCAs: webtransport.CertPool}}
 			_, _, err = d.Dial(context.Background(), fmt.Sprintf("https://localhost:%d", ln.Addr().(*net.UDPAddr).Port), nil)
 			require.Error(t, err)
 			require.ErrorContains(t, err, tc.errorStr)

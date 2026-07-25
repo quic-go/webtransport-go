@@ -18,7 +18,8 @@ import (
 	"github.com/dunglas/httpsfv"
 )
 
-type Dialer struct {
+// A Transport configures WebTransport clients.
+type Transport struct {
 	// Config is the WebTransport configuration used for new sessions.
 	Config *Config
 
@@ -50,11 +51,13 @@ type Dialer struct {
 	initOnce sync.Once
 }
 
-func (d *Dialer) init() {
+func (d *Transport) init() {
 	d.ctx, d.ctxCancel = context.WithCancel(context.Background())
 }
 
-func (d *Dialer) Dial(ctx context.Context, urlStr string, reqHdr http.Header) (*http.Response, *Session, error) {
+// Dial establishes a WebTransport session on a new QUIC connection.
+// The QUIC connection is closed when the returned session is closed.
+func (d *Transport) Dial(ctx context.Context, urlStr string, reqHdr http.Header) (*http.Response, *Session, error) {
 	d.initOnce.Do(func() { d.init() })
 	var config Config
 	if d.Config != nil {
@@ -149,7 +152,7 @@ func (d *Dialer) Dial(ctx context.Context, urlStr string, reqHdr http.Header) (*
 	return rsp, sess, nil
 }
 
-func (d *Dialer) handleConn(ctx context.Context, tr *http3.Transport, qconn *quic.Conn, req *http.Request, config Config) (*http.Response, *Session, error) {
+func (d *Transport) handleConn(ctx context.Context, tr *http3.Transport, qconn *quic.Conn, req *http.Request, config Config) (*http.Response, *Session, error) {
 	timeout := d.StreamReorderingTimeout
 	if timeout == 0 {
 		timeout = 5 * time.Second
@@ -289,7 +292,7 @@ func (d *Dialer) handleConn(ctx context.Context, tr *http3.Transport, qconn *qui
 	return rsp, sess, nil
 }
 
-func (d *Dialer) negotiateProtocol(theirs []string) (string, error) {
+func (d *Transport) negotiateProtocol(theirs []string) (string, error) {
 	negotiatedProtocolItem, err := httpsfv.UnmarshalItem(theirs)
 	if err != nil {
 		return "", fmt.Errorf("webtransport: invalid WT-Protocol header: %w", err)
@@ -304,7 +307,8 @@ func (d *Dialer) negotiateProtocol(theirs []string) (string, error) {
 	return negotiatedProtocol, nil
 }
 
-func (d *Dialer) Close() error {
+// Close cancels session establishment waiting for peer HTTP/3 settings.
+func (d *Transport) Close() error {
 	d.ctxCancel()
 	return nil
 }

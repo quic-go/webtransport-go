@@ -31,7 +31,7 @@ func newFlowControlSessions(
 	addHandler(t, server, func(sess *webtransport.Session) { serverSessionChan <- sess })
 	addr, closeServer := runServer(t, server)
 
-	dialer := &webtransport.Dialer{
+	dialer := &webtransport.Transport{
 		TLSClientConfig: &tls.Config{RootCAs: testdata.CertPool},
 		Config:          config,
 	}
