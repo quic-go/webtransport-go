@@ -423,20 +423,32 @@ func (s *Server) Upgrade(w http.ResponseWriter, r *http.Request) (*Session, erro
 		}
 		w.Header().Add(wtProtocolHeader, v)
 	}
-	w.WriteHeader(http.StatusOK)
-	w.(http.Flusher).Flush()
 
 	str := w.(http3.HTTPStreamer).HTTPStream()
 	sessID := sessionID(str.StreamID())
+	fc := s.config.sessionFlowControl(settings)
 
 	// The session manager should already exist because ServeQUICConn creates it
 	// before any HTTP requests can be processed on this connection.
 	s.connsMx.Lock()
-	defer s.connsMx.Unlock()
-
 	sessMgr, ok := s.conns[conn]
 	if !ok {
+		s.connsMx.Unlock()
 		return nil, errors.New("webtransport: connection session manager not found")
+	}
+	// Multiple sessions on one HTTP/3 connection require WebTransport flow control.
+	if !fc.Enabled {
+		sessMgr.mx.Lock()
+		for _, entry := range sessMgr.sessions {
+			if entry.Session != nil {
+				sessMgr.mx.Unlock()
+				s.connsMx.Unlock()
+				str.CancelRead(quic.StreamErrorCode(http3.ErrCodeRequestRejected))
+				str.CancelWrite(quic.StreamErrorCode(http3.ErrCodeRequestRejected))
+				return nil, errors.New("webtransport: multiple sessions require flow control")
+			}
+		}
+		sessMgr.mx.Unlock()
 	}
 
 	sess := newSession(
@@ -445,9 +457,13 @@ func (s *Server) Upgrade(w http.ResponseWriter, r *http.Request) (*Session, erro
 		conn,
 		str,
 		selectedProtocol,
-		s.config.sessionFlowControl(settings),
+		fc,
 	)
 	sessMgr.AddSession(sessID, sess)
+	s.connsMx.Unlock()
+
+	w.WriteHeader(http.StatusOK)
+	w.(http.Flusher).Flush()
 	return sess, nil
 }
 
