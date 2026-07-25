@@ -68,7 +68,7 @@ func establishSession(t *testing.T, handler func(*webtransport.Session)) (sess *
 	addHandler(t, s, handler)
 
 	addr, closeServer := runServer(t, s)
-	d := webtransport.Dialer{
+	d := webtransport.Transport{
 		TLSClientConfig: &tls.Config{RootCAs: testdata.CertPool},
 		QUICConfig: &quic.Config{
 			EnableDatagrams:                  true,
@@ -197,7 +197,7 @@ func TestApplicationProtocolNegotiationErrors(t *testing.T) {
 			addr, closeServer := runServer(t, s)
 			defer closeServer()
 
-			d := webtransport.Dialer{
+			d := webtransport.Transport{
 				TLSClientConfig: &tls.Config{RootCAs: testdata.CertPool},
 				QUICConfig: &quic.Config{
 					EnableDatagrams:                  true,
@@ -242,7 +242,7 @@ func testApplicationProtocolNegotiation(t *testing.T, clientProtocols, serverPro
 
 	addr, closeServer := runServer(t, s)
 	defer closeServer()
-	d := webtransport.Dialer{
+	d := webtransport.Transport{
 		TLSClientConfig: &tls.Config{RootCAs: testdata.CertPool},
 		QUICConfig: &quic.Config{
 			EnableDatagrams:                  true,
@@ -417,7 +417,7 @@ func TestMultipleClients(t *testing.T) {
 	for range numClients {
 		go func() {
 			defer wg.Done()
-			d := webtransport.Dialer{
+			d := webtransport.Transport{
 				TLSClientConfig: &tls.Config{RootCAs: testdata.CertPool},
 				QUICConfig: &quic.Config{
 					EnableDatagrams:                  true,
@@ -610,7 +610,7 @@ func TestCheckOrigin(t *testing.T) {
 			addr, closeServer := runServer(t, s)
 			defer closeServer()
 
-			d := webtransport.Dialer{
+			d := webtransport.Transport{
 				TLSClientConfig: &tls.Config{RootCAs: testdata.CertPool},
 				QUICConfig:      &quic.Config{Tracer: qlog.DefaultConnectionTracer, EnableDatagrams: true, EnableStreamResetPartialDelivery: true},
 			}
@@ -829,7 +829,7 @@ func TestSessionContextValues(t *testing.T) {
 	addr, closeServer := runServer(t, s)
 	defer closeServer()
 
-	d := webtransport.Dialer{
+	d := webtransport.Transport{
 		TLSClientConfig: &tls.Config{RootCAs: testdata.CertPool},
 		QUICConfig:      &quic.Config{Tracer: qlog.DefaultConnectionTracer, EnableDatagrams: true, EnableStreamResetPartialDelivery: true},
 	}

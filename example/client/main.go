@@ -52,7 +52,7 @@ func runClient() error {
 		}
 	}
 
-	cl := &webtransport.Dialer{
+	cl := &webtransport.Transport{
 		ApplicationProtocols: protocols,
 		TLSClientConfig:      tlsConf,
 		QUICConfig: &quic.Config{
