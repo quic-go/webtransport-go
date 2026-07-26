@@ -1,3 +1,2 @@
 packaging
 selenium
-webdriver-manager

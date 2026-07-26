@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 
+import shutil
 import sys
 
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
-from webdriver_manager.chrome import ChromeDriverManager
 from selenium.webdriver.common.desired_capabilities import DesiredCapabilities
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions
@@ -26,7 +26,7 @@ options.add_argument("--host-resolver-rules='MAP localhost:12345 127.0.0.1:12345
 options.set_capability("goog:loggingPrefs", {"browser": "ALL"})
 
 driver = webdriver.Chrome(
-    service=Service(ChromeDriverManager().install()),
+    service=Service(shutil.which("chromedriver")),
     options=options,
 )
 
