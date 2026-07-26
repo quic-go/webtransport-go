@@ -6,6 +6,8 @@ on: [push, pull_request]
 jobs:
   interop:
     runs-on: "ubuntu-latest"
+    env:
+      CHROME_VERSION: '151.0.7922.47'
     strategy:
       fail-fast: false
       matrix:
@@ -15,10 +17,10 @@ jobs:
     - uses: browser-actions/setup-chrome@2e1d749697dd1612b833dba4a722266286fbefcd # v2.1.2
       id: setup-chrome
       with:
-        chrome-version: '142.0.7444.162'
+        chrome-version: ${{ env.CHROME_VERSION }}
     - uses: nanasess/setup-chromedriver@e913548694400f275b4070efcd90f47dbbc8914c # v3.0.0
       with:
-        chromedriver-version: '142.0.7444.162'
+        chromedriver-version: ${{ env.CHROME_VERSION }}
     - uses: actions/setup-go@v7
       with:
         go-version: ${{ matrix.go }}
