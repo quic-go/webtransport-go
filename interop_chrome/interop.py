@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+import os
 import shutil
 import sys
 
@@ -11,8 +12,8 @@ from selenium.webdriver.support import expected_conditions
 from selenium.webdriver.common.by import By
 from selenium.common.exceptions import TimeoutException
 
-chrome_loc = "/usr/bin/google-chrome"
-if sys.platform == "darwin":
+chrome_loc = os.environ.get("CHROME_PATH", "/usr/bin/google-chrome")
+if sys.platform == "darwin" and "CHROME_PATH" not in os.environ:
     chrome_loc = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 
 options = webdriver.ChromeOptions()
