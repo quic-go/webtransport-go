@@ -180,6 +180,8 @@ func (c *ClientConn) dial(ctx context.Context, u *url.URL, reqHdr http.Header) (
 	case <-c.clientConn.ReceivedSettings():
 	case <-ctx.Done():
 		return nil, nil, fmt.Errorf("error waiting for HTTP/3 settings: %w", context.Cause(ctx))
+	case <-c.conn.Context().Done():
+		return nil, nil, context.Cause(c.conn.Context())
 	case <-c.transportCtx.Done():
 		return nil, nil, context.Cause(c.transportCtx)
 	}
