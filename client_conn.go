@@ -30,7 +30,7 @@ type ClientConn struct {
 var _ http.RoundTripper = &ClientConn{}
 
 // NewClientConn creates a WebTransport client connection on an existing QUIC connection.
-// The QUIC connection must have datagrams and stream reset partial delivery enabled.
+// The QUIC connection must have datagrams and stream reset partial delivery enabled on both endpoints.
 // It must only be called once per QUIC connection.
 // The caller owns the QUIC connection and closes it when done.
 func (d *Transport) NewClientConn(qconn *quic.Conn) (*ClientConn, error) {
@@ -175,6 +175,25 @@ func (c *ClientConn) dial(ctx context.Context, u *url.URL, reqHdr http.Header) (
 		Host:   u.Host,
 		URL:    u,
 	}).WithContext(ctx)
+
+	// wait for the QUIC handshake to complete
+	select {
+	case <-c.conn.HandshakeComplete():
+	case <-ctx.Done():
+		return nil, nil, fmt.Errorf("error waiting for QUIC handshake: %w", context.Cause(ctx))
+	case <-c.conn.Context().Done():
+		return nil, nil, context.Cause(c.conn.Context())
+	case <-c.transportCtx.Done():
+		return nil, nil, context.Cause(c.transportCtx)
+	}
+
+	state := c.conn.ConnectionState()
+	if !state.SupportsDatagrams.Remote {
+		return nil, nil, &RequirementsNotMetError{Message: "server didn't enable QUIC datagram support"}
+	}
+	if !state.SupportsStreamResetPartialDelivery.Remote {
+		return nil, nil, &RequirementsNotMetError{Message: "server didn't enable QUIC stream reset partial delivery"}
+	}
 
 	select {
 	case <-c.clientConn.ReceivedSettings():
