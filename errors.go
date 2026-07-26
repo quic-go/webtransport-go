@@ -86,7 +86,7 @@ func (e *SessionError) Is(target error) bool {
 }
 
 // RequirementsNotMetError is returned when the peer doesn't advertise
-// the required HTTP/3 or WebTransport capabilities.
+// the required QUIC, HTTP/3 or WebTransport capabilities.
 type RequirementsNotMetError struct {
 	Message string
 }

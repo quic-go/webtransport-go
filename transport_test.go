@@ -46,7 +46,11 @@ func appendSettingsFrame(b []byte, values map[uint64]uint64) []byte {
 }
 
 func TestClientInvalidResponseHandling(t *testing.T) {
-	ln, err := quic.ListenAddr("localhost:0", webtransport.TLSConf, &quic.Config{EnableDatagrams: true})
+	ln, err := quic.ListenAddr(
+		"localhost:0",
+		webtransport.TLSConf,
+		&quic.Config{EnableDatagrams: true, EnableStreamResetPartialDelivery: true},
+	)
 	require.NoError(t, err)
 	defer ln.Close()
 
@@ -107,6 +111,53 @@ func TestClientInvalidResponseHandling(t *testing.T) {
 	require.Equal(t, http3.ErrCodeFrameUnexpected, http3.ErrCode(appErr.ErrorCode))
 }
 
+func TestClientConnChecksServerQUICSupportOnDial(t *testing.T) {
+	for _, tt := range []struct {
+		name       string
+		config     *quic.Config
+		wantErrMsg string
+	}{
+		{
+			name:       "datagrams",
+			config:     &quic.Config{EnableStreamResetPartialDelivery: true},
+			wantErrMsg: "server didn't enable QUIC datagram support",
+		},
+		{
+			name:       "stream reset partial delivery",
+			config:     &quic.Config{EnableDatagrams: true},
+			wantErrMsg: "server didn't enable QUIC stream reset partial delivery",
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			ln, err := quic.ListenAddr("localhost:0", webtransport.TLSConf, tt.config)
+			require.NoError(t, err)
+			defer ln.Close()
+
+			qconn, err := quic.DialAddr(
+				t.Context(),
+				ln.Addr().String(),
+				&tls.Config{
+					RootCAs:    webtransport.CertPool,
+					ServerName: "localhost",
+					NextProtos: []string{http3.NextProtoH3},
+				},
+				&quic.Config{EnableDatagrams: true, EnableStreamResetPartialDelivery: true},
+			)
+			require.NoError(t, err)
+			defer qconn.CloseWithError(0, "")
+
+			tr := &webtransport.Transport{}
+			defer tr.Close()
+			conn, err := tr.NewClientConn(qconn)
+			require.NoError(t, err)
+			_, _, err = conn.Dial(t.Context(), "https://localhost", nil)
+			require.ErrorContains(t, err, tt.wantErrMsg)
+			var reqErr *webtransport.RequirementsNotMetError
+			require.ErrorAs(t, err, &reqErr)
+		})
+	}
+}
+
 func TestClientClosesConnectionForInvalidSessionID(t *testing.T) {
 	ln, err := quic.ListenAddr("localhost:0", webtransport.TLSConf, &quic.Config{EnableDatagrams: true, EnableStreamResetPartialDelivery: true})
 	require.NoError(t, err)
@@ -163,7 +214,7 @@ func TestClientClosesConnectionForInvalidSessionID(t *testing.T) {
 }
 
 func TestClientWaitForSettingsTimeout(t *testing.T) {
-	ln, err := quic.ListenAddr("localhost:0", webtransport.TLSConf, &quic.Config{EnableDatagrams: true})
+	ln, err := quic.ListenAddr("localhost:0", webtransport.TLSConf, &quic.Config{EnableDatagrams: true, EnableStreamResetPartialDelivery: true})
 	require.NoError(t, err)
 	defer ln.Close()
 
@@ -249,7 +300,7 @@ func TestClientInvalidSettingsHandling(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			ln, err := quic.ListenAddr("localhost:0", webtransport.TLSConf, &quic.Config{EnableDatagrams: true})
+			ln, err := quic.ListenAddr("localhost:0", webtransport.TLSConf, &quic.Config{EnableDatagrams: true, EnableStreamResetPartialDelivery: true})
 			require.NoError(t, err)
 			defer ln.Close()
 
