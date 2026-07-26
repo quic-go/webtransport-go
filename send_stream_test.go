@@ -243,6 +243,7 @@ func (s *blockingHeaderStream) Write(b []byte) (int, error) {
 }
 
 func (*blockingHeaderStream) Close() error                     { return nil }
+func (*blockingHeaderStream) StreamID() quic.StreamID          { return 0 }
 func (*blockingHeaderStream) CancelWrite(quic.StreamErrorCode) {}
 func (*blockingHeaderStream) Context() context.Context         { return context.Background() }
 func (*blockingHeaderStream) SetWriteDeadline(time.Time) error { return nil }

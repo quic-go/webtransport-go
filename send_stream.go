@@ -14,6 +14,7 @@ import (
 type quicSendStream interface {
 	io.WriteCloser
 	WriteWithLimit([]byte, func(int) int) (int, error)
+	StreamID() quic.StreamID
 	CancelWrite(quic.StreamErrorCode)
 	Context() context.Context
 	SetWriteDeadline(time.Time) error
@@ -66,6 +67,11 @@ func newSendStream(
 		streamHdr:    hdr,
 		onClose:      onClose,
 	}
+}
+
+// StreamID returns the ID of the underlying QUIC stream.
+func (s *SendStream) StreamID() quic.StreamID {
+	return s.str.StreamID()
 }
 
 // Write writes data to the stream.

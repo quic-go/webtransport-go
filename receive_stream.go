@@ -12,6 +12,7 @@ import (
 
 type quicReceiveStream interface {
 	io.Reader
+	StreamID() quic.StreamID
 	CancelRead(quic.StreamErrorCode)
 	SetReceiveFinalSizeCallback(func(int64))
 	SetReadDeadline(time.Time) error
@@ -62,6 +63,11 @@ func newReceiveStream(
 		str.SetReceiveFinalSizeCallback(s.onReceiveFinalSize)
 	}
 	return s
+}
+
+// StreamID returns the ID of the underlying QUIC stream.
+func (s *ReceiveStream) StreamID() quic.StreamID {
+	return s.str.StreamID()
 }
 
 // Read reads data from the stream.

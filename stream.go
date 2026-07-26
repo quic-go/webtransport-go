@@ -37,6 +37,11 @@ func newStream(
 	return s
 }
 
+// StreamID returns the ID of the underlying QUIC stream.
+func (s *Stream) StreamID() quic.StreamID {
+	return s.recvStr.StreamID()
+}
+
 // Write writes data to the stream.
 // Write can be made to time out using [Stream.SetWriteDeadline] or [Stream.SetDeadline].
 // If the stream was canceled, the error is a [StreamError].
