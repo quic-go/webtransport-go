@@ -4,7 +4,7 @@ go 1.25.0
 
 require (
 	github.com/dunglas/httpsfv v1.1.0
-	github.com/quic-go/quic-go v0.61.0
+	github.com/quic-go/quic-go v0.61.1-0.20260726092802-47961f39aaeb
 	github.com/stretchr/testify v1.11.1
 	golang.org/x/sync v0.22.0
 )

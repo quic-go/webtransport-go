@@ -31,6 +31,7 @@ func (s mockHTTP3Stream) SendDatagram([]byte) error                       { retu
 func (s mockHTTP3Stream) CancelRead(quic.StreamErrorCode)                 {}
 func (s mockHTTP3Stream) CancelWrite(quic.StreamErrorCode)                {}
 func (s mockHTTP3Stream) SetWriteDeadline(time.Time) error                { return nil }
+func (s mockHTTP3Stream) TryWriteAll([]byte) error                        { return nil }
 
 type quicHTTP3Stream struct{ *quic.Stream }
 
