@@ -1,18 +1,19 @@
 #!/usr/bin/env python3
 
+import os
+import shutil
 import sys
 
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
-from webdriver_manager.chrome import ChromeDriverManager
 from selenium.webdriver.common.desired_capabilities import DesiredCapabilities
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions
 from selenium.webdriver.common.by import By
 from selenium.common.exceptions import TimeoutException
 
-chrome_loc = "/usr/bin/google-chrome"
-if sys.platform == "darwin":
+chrome_loc = os.environ.get("CHROME_PATH", "/usr/bin/google-chrome")
+if sys.platform == "darwin" and "CHROME_PATH" not in os.environ:
     chrome_loc = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 
 options = webdriver.ChromeOptions()
@@ -25,8 +26,12 @@ options.add_argument("--origin-to-force-quic-on=localhost:12345")
 options.add_argument("--host-resolver-rules='MAP localhost:12345 127.0.0.1:12345'")
 options.set_capability("goog:loggingPrefs", {"browser": "ALL"})
 
+chromedriver_path = shutil.which("chromedriver")
+if chromedriver_path is None:
+    raise RuntimeError("chromedriver not found on PATH; install chromedriver or use an environment that provides it")
+
 driver = webdriver.Chrome(
-    service=Service(ChromeDriverManager().install()),
+    service=Service(chromedriver_path),
     options=options,
 )
 
