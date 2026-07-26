@@ -408,6 +408,8 @@ func (s *Server) Upgrade(w http.ResponseWriter, r *http.Request) (*Session, erro
 	defer timer.Stop()
 	select {
 	case <-settingser.ReceivedSettings():
+	case <-conn.Context().Done():
+		return nil, context.Cause(conn.Context())
 	case <-timer.C:
 		return nil, errors.New("webtransport: didn't receive the client's SETTINGS on time")
 	}
