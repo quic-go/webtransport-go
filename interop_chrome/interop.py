@@ -26,8 +26,12 @@ options.add_argument("--origin-to-force-quic-on=localhost:12345")
 options.add_argument("--host-resolver-rules='MAP localhost:12345 127.0.0.1:12345'")
 options.set_capability("goog:loggingPrefs", {"browser": "ALL"})
 
+chromedriver_path = shutil.which("chromedriver")
+if chromedriver_path is None:
+    raise RuntimeError("chromedriver not found on PATH; install chromedriver or use an environment that provides it")
+
 driver = webdriver.Chrome(
-    service=Service(shutil.which("chromedriver")),
+    service=Service(chromedriver_path),
     options=options,
 )
 
