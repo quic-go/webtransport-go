@@ -22,6 +22,7 @@ type http3Stream interface {
 	CancelRead(quic.StreamErrorCode)
 	CancelWrite(quic.StreamErrorCode)
 	SetWriteDeadline(time.Time) error
+	TryWriteAll([]byte) error
 }
 
 var (
@@ -387,11 +388,7 @@ func (s *Session) CloseWithError(code SessionErrorCode, msg string) error {
 }
 
 func closeSessionStream(str http3Stream, closeCapsule closeSessionCapsule) error {
-	// Optimistically send the WT_CLOSE_SESSION Capsule:
-	// If we're flow-control limited, we don't want to wait for the receiver to issue new flow control credits.
-	// There's no idiomatic way to do a non-blocking write in Go, so we set a short deadline.
-	str.SetWriteDeadline(time.Now().Add(closeSessionTimeout))
-	if _, err := str.Write(closeCapsule.Append(nil)); err != nil {
+	if err := str.TryWriteAll(closeCapsule.Append(nil)); err != nil {
 		str.CancelWrite(WTSessionGoneErrorCode)
 	}
 
