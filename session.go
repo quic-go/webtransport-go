@@ -67,7 +67,13 @@ const (
 	// We bound the queue to avoid unbounded memory growth.
 	// 4096 should be more than enough slack for normal loss / reordering.
 	maxQueuedOutgoingCapsules = 4096
-	closeSessionTimeout       = 10 * time.Millisecond
+	// LASA patch (2026-08-21): raised from 10ms — a missed deadline
+	// turns the close into a reset and destroys the close code.
+	closeSessionTimeout = 250 * time.Millisecond
+	// How long after the clean close to wait before cancelling the
+	// CONNECT stream's read side as a backstop against peers that
+	// never close their half.
+	closeReadCancelDelay = 1 * time.Second
 )
 
 func newSession(
@@ -78,7 +84,10 @@ func newSession(
 	applicationProtocol string,
 	fc sessionFlowControl,
 ) *Session {
-	ctx, ctxCancel := context.WithCancel(ctx)
+	// LASA patch (2026-08-21): cancel with cause, so the session's close
+	// reason (in particular a received or sent *SessionError) is
+	// retrievable via context.Cause(sess.Context()) after teardown.
+	ctx, ctxCancelCause := context.WithCancelCause(ctx)
 	c := &Session{
 		sessionID:           sessionID,
 		conn:                conn,
@@ -122,6 +131,10 @@ func newSession(
 		c.queueCapsule,
 	)
 
+	// The cause is the session's recorded close error at goroutine
+	// exit; nil falls back to context.Canceled, preserving the old
+	// behaviour for teardown without a close reason.
+	ctxCancel := func() { ctxCancelCause(c.sessionCloseErr()) }
 	go func() {
 		defer ctxCancel()
 		c.readFromConnectStream()
@@ -131,6 +144,13 @@ func newSession(
 		c.writeToConnectStream()
 	}()
 	return c
+}
+
+// sessionCloseErr returns the recorded close error, or nil before close.
+func (s *Session) sessionCloseErr() error {
+	s.closeMx.Lock()
+	defer s.closeMx.Unlock()
+	return s.closeErr
 }
 
 func (s *Session) readFromConnectStream() {
@@ -395,8 +415,20 @@ func closeSessionStream(str http3Stream, closeCapsule closeSessionCapsule) error
 		str.CancelWrite(WTSessionGoneErrorCode)
 	}
 
-	str.CancelRead(WTSessionGoneErrorCode)
-	return str.Close()
+	// LASA patch (2026-08-21): do NOT CancelRead in the same flight as
+	// the capsule. quic-go packs control frames (STOP_SENDING) ahead of
+	// stream data within a packet, and Chrome treats STOP_SENDING on
+	// the CONNECT stream as an abrupt session abort — it processes the
+	// abort before the capsule and the close code is destroyed, every
+	// time. FIN the stream now (the clean-close signal per the
+	// WebTransport draft) and cancel the read side only as a delayed
+	// backstop against peers that never close their half.
+	err := str.Close()
+	go func() {
+		time.Sleep(closeReadCancelDelay)
+		str.CancelRead(WTSessionGoneErrorCode)
+	}()
+	return err
 }
 
 func (s *Session) SendDatagram(b []byte) error {
