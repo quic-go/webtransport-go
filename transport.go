@@ -104,8 +104,7 @@ func (d *Transport) Dial(ctx context.Context, urlStr string, reqHdr http.Header)
 	if err != nil {
 		var msg string
 		code := quic.ApplicationErrorCode(http3.ErrCodeNoError)
-		var reqErr *RequirementsNotMetError
-		if errors.As(err, &reqErr) {
+		if reqErr, ok := errors.AsType[*RequirementsNotMetError](err); ok {
 			code = WTRequirementsNotMetErrorCode
 			msg = reqErr.Message
 		}

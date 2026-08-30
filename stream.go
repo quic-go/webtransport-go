@@ -124,8 +124,7 @@ func maybeConvertStreamError(err error) error {
 	if err == nil {
 		return nil
 	}
-	var streamErr *quic.StreamError
-	if errors.As(err, &streamErr) {
+	if streamErr, ok := errors.AsType[*quic.StreamError](err); ok {
 		errorCode, cerr := httpCodeToWebtransportCode(streamErr.ErrorCode)
 		if cerr != nil {
 			return fmt.Errorf("stream reset, but failed to convert stream error %d: %w", streamErr.ErrorCode, cerr)

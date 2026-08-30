@@ -442,11 +442,9 @@ func (s *Session) closeWithError(closeErr error, closeCapsule *closeSessionCapsu
 	s.capsuleQueueMx.Unlock()
 
 	code := WTSessionGoneErrorCode
-	var h3Err *http3.Error
-	var strErr *quic.StreamError
-	if errors.As(closeErr, &h3Err) {
+	if h3Err, ok := errors.AsType[*http3.Error](closeErr); ok {
 		code = quic.StreamErrorCode(h3Err.ErrorCode)
-	} else if errors.As(closeErr, &strErr) {
+	} else if strErr, ok := errors.AsType[*quic.StreamError](closeErr); ok {
 		code = strErr.ErrorCode
 	}
 	s.str.CancelRead(code)
