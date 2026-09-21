@@ -243,6 +243,8 @@ func (s *Server) ServeQUICConn(conn *quic.Conn) error {
 			wg.Go(func() {
 				typ, err := quicvarint.Peek(str)
 				if err != nil {
+					str.CancelRead(quic.StreamErrorCode(http3.ErrCodeGeneralProtocolError))
+					str.CancelWrite(quic.StreamErrorCode(http3.ErrCodeGeneralProtocolError))
 					return
 				}
 				if typ != webTransportFrameType {
@@ -252,6 +254,8 @@ func (s *Server) ServeQUICConn(conn *quic.Conn) error {
 				r := &byteCountingReader{ByteReader: quicvarint.NewReader(str)}
 				// read the frame type (already peeked)
 				if _, err := quicvarint.Read(r); err != nil {
+					str.CancelRead(quic.StreamErrorCode(http3.ErrCodeGeneralProtocolError))
+					str.CancelWrite(quic.StreamErrorCode(http3.ErrCodeGeneralProtocolError))
 					return
 				}
 				// read the session ID

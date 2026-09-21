@@ -155,6 +155,101 @@ func TestServerClosesConnectionForInvalidSessionID(t *testing.T) {
 	}
 }
 
+// openTruncatedStream opens a bidirectional stream and ends it before the session ID.
+func openTruncatedStream(t *testing.T, conn *quic.Conn, i int) *quic.Stream {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(t.Context(), scaleDuration(time.Second))
+	defer cancel()
+	str, err := conn.OpenStreamSync(ctx)
+	require.NoError(t, err)
+
+	switch i % 3 {
+	case 0: // empty
+		require.NoError(t, str.Close())
+	case 1: // reset
+		str.CancelWrite(0)
+	case 2: // frame type only
+		_, err := str.Write(quicvarint.Append(nil, webTransportFrameType))
+		require.NoError(t, err)
+		require.NoError(t, str.Close())
+	}
+	return str
+}
+
+func TestTruncatedStreamHeader(t *testing.T) {
+	serverConnChan := make(chan *quic.Conn, 1)
+	s := webtransport.Server{H3: &http3.Server{
+		TLSConfig: webtransport.TLSConf,
+		// one stream for the CONNECT request, one for the truncated stream
+		QUICConfig: &quic.Config{MaxIncomingStreams: 2},
+		ConnContext: func(ctx context.Context, conn *quic.Conn) context.Context {
+			serverConnChan <- conn
+			return ctx
+		},
+	}}
+	defer s.Close()
+	addHandler(t, &s, func(sess *webtransport.Session) { <-sess.Context().Done() })
+
+	udpConn, err := net.ListenUDP("udp", nil)
+	require.NoError(t, err)
+	defer udpConn.Close()
+	webtransport.ConfigureHTTP3Server(s.H3)
+	go s.Serve(udpConn)
+	port := udpConn.LocalAddr().(*net.UDPAddr).Port
+
+	clientConn, err := quic.DialAddr(
+		t.Context(),
+		fmt.Sprintf("localhost:%d", port),
+		&tls.Config{RootCAs: webtransport.CertPool, ServerName: "localhost", NextProtos: []string{http3.NextProtoH3}},
+		&quic.Config{MaxIncomingStreams: 1, EnableDatagrams: true, EnableStreamResetPartialDelivery: true},
+	)
+	require.NoError(t, err)
+	defer clientConn.CloseWithError(0, "")
+	tr := &webtransport.Transport{}
+	defer tr.Close()
+	cc, err := tr.NewClientConn(clientConn)
+	require.NoError(t, err)
+	rsp, _, err := cc.Dial(t.Context(), fmt.Sprintf("https://localhost:%d/webtransport", port), nil)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, rsp.StatusCode)
+
+	var serverConn *quic.Conn
+	select {
+	case serverConn = <-serverConnChan:
+	case <-time.After(scaleDuration(time.Second)):
+		t.Fatal("timeout waiting for server connection")
+	}
+
+	// the server resets truncated streams and keeps the connection open
+	for i := range 6 {
+		str := openTruncatedStream(t, clientConn, i)
+		str.SetReadDeadline(time.Now().Add(scaleDuration(time.Second)))
+		_, err := str.Read([]byte{0})
+		require.ErrorIs(t, err, &quic.StreamError{
+			StreamID:  str.StreamID(),
+			ErrorCode: quic.StreamErrorCode(http3.ErrCodeGeneralProtocolError),
+			Remote:    true,
+		}, "stream %d", i)
+	}
+	select {
+	case <-clientConn.Context().Done():
+		t.Fatal("connection closed")
+	default:
+	}
+
+	// the client closes the connection on the first truncated stream
+	openTruncatedStream(t, serverConn, 0)
+	select {
+	case <-serverConn.Context().Done():
+	case <-time.After(scaleDuration(time.Second)):
+		t.Fatal("timeout waiting for connection close")
+	}
+	require.ErrorIs(t, context.Cause(serverConn.Context()), &quic.ApplicationError{
+		ErrorCode: quic.ApplicationErrorCode(http3.ErrCodeGeneralProtocolError),
+		Remote:    true,
+	})
+}
+
 func TestServerReorderedUpgradeRequest(t *testing.T) {
 	s := webtransport.Server{
 		H3: &http3.Server{TLSConfig: webtransport.TLSConf},
