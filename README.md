@@ -17,6 +17,7 @@ A runnable client and server example is available in [`example`](./example).
 | Project | Description | Stars |
 | --- | --- | --- |
 | [any-sync](https://github.com/anyproto/any-sync) | Local-first, peer-to-peer synchronization protocol for encrypted collaborative apps | ![GitHub Repo stars](https://img.shields.io/github/stars/anyproto/any-sync?style=flat-square) |
+| [Caddy](https://github.com/caddyserver/caddy) | Fast and extensible multi-platform HTTP/1-2-3 web server with automatic HTTPS | ![GitHub Repo stars](https://img.shields.io/github/stars/caddyserver/caddy?style=flat-square) |
 | [Centrifugo](https://github.com/centrifugal/centrifugo) | Scalable real-time messaging server in a language-agnostic way. Self-hosted alternative to Pubnub, Pusher, Ably, socket.io, Phoenix.PubSub, SignalR. | ![GitHub Repo stars](https://img.shields.io/github/stars/centrifugal/centrifugo?style=flat-square) |
 | [go-libp2p](https://github.com/libp2p/go-libp2p) | libp2p implementation in Go, powering [Kubo](https://github.com/ipfs/kubo) (IPFS) and [Lotus](https://github.com/filecoin-project/lotus) (Filecoin), among others | ![GitHub Repo stars](https://img.shields.io/github/stars/libp2p/go-libp2p?style=flat-square) |
 | [MediaMTX](https://github.com/bluenviron/mediamtx) | Ready-to-use live media server and media proxy supporting Media-over-QUIC, SRT, WebRTC, RTSP, RTMP, HLS, and more | ![GitHub Repo stars](https://img.shields.io/github/stars/bluenviron/mediamtx?style=flat-square) |
