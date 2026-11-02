@@ -1,6 +1,7 @@
 package webtransport
 
 import (
+	"context"
 	"errors"
 	"io"
 	"os"
@@ -39,6 +40,9 @@ type ReceiveStream struct {
 	closed    chan struct{}
 	closeErr  error
 
+	cancelCtx context.Context // canceled when CancelRead is called
+	cancel    context.CancelCauseFunc
+
 	deadlineMu       sync.Mutex
 	readDeadline     time.Time
 	deadlineNotifyCh chan struct{} // receives a value when deadline changes
@@ -51,12 +55,15 @@ func newReceiveStream(
 	fc *incomingDataFlowController,
 	onFlowControlError func(error),
 ) *ReceiveStream {
+	cancelCtx, cancel := context.WithCancelCause(context.Background())
 	s := &ReceiveStream{
 		str:                str,
 		fc:                 fc,
 		bytesRead:          streamHeaderLen,
 		onFlowControlError: onFlowControlError,
 		closed:             make(chan struct{}),
+		cancelCtx:          cancelCtx,
+		cancel:             cancel,
 		onClose:            onClose,
 	}
 	if fc != nil {
@@ -143,6 +150,8 @@ func (s *ReceiveStream) handleSessionGoneError() error {
 		select {
 		case <-s.closed:
 			return s.closeErr
+		case <-s.cancelCtx.Done():
+			return context.Cause(s.cancelCtx)
 		case <-timerCh:
 			return os.ErrDeadlineExceeded
 		case <-s.deadlineNotifyCh:
@@ -156,6 +165,7 @@ func (s *ReceiveStream) handleSessionGoneError() error {
 // When called multiple times it is a no-op.
 func (s *ReceiveStream) CancelRead(e StreamErrorCode) {
 	s.str.CancelRead(webtransportCodeToHTTPCode(e))
+	s.cancel(&StreamError{ErrorCode: e})
 	s.onClose()
 }
 

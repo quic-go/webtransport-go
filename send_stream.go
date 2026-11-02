@@ -47,6 +47,9 @@ type SendStream struct {
 	closed    chan struct{}
 	closeErr  error
 
+	cancelCtx context.Context // canceled when CancelWrite is called
+	cancel    context.CancelCauseFunc
+
 	deadlineMu       sync.Mutex
 	writeDeadline    time.Time
 	deadlineNotifyCh chan struct{} // receives a value when deadline changes
@@ -59,11 +62,14 @@ func newSendStream(
 	queueCapsule func(capsule),
 	onClose func(),
 ) *SendStream {
+	cancelCtx, cancel := context.WithCancelCause(context.Background())
 	return &SendStream{
 		str:          str,
 		fc:           fc,
 		queueCapsule: queueCapsule,
 		closed:       make(chan struct{}),
+		cancelCtx:    cancelCtx,
+		cancel:       cancel,
 		streamHdr:    hdr,
 		onClose:      onClose,
 	}
@@ -117,6 +123,8 @@ func (s *SendStream) handleSessionGoneError() error {
 		select {
 		case <-s.closed:
 			return s.closeErr
+		case <-s.cancelCtx.Done():
+			return context.Cause(s.cancelCtx)
 		case <-timerCh:
 			return os.ErrDeadlineExceeded
 		case <-s.deadlineNotifyCh:
@@ -222,6 +230,8 @@ func (s *SendStream) maybeSendStreamHeader() error {
 // Write will unblock immediately, and future calls to Write will fail.
 // When called multiple times it is a no-op.
 func (s *SendStream) CancelWrite(e StreamErrorCode) {
+	s.cancel(&StreamError{ErrorCode: e})
+
 	// if a Goroutine is already sending the header, return immediately
 	s.streamHdrMu.Lock()
 	if s.writeErr != nil {

@@ -77,6 +77,45 @@ func TestReceiveStreamReadDuringSessionGoneAndCloseSession(t *testing.T) {
 	}
 }
 
+func TestReceiveStreamCancelReadDuringSessionGone(t *testing.T) {
+	sendStr, recvStr := newUniStreamPair(t)
+
+	sm := newIncomingStreamsMap[*ReceiveStream](maxStreamsLimit, nil)
+	str := newReceiveStream(recvStr, 0, func() { sm.RemoveStream(recvStr.StreamID()) }, nil, nil)
+	require.NoError(t, sm.AddStream(recvStr.StreamID(), str))
+
+	// the remote peer sends a WT_SESSION_GONE
+	sendStr.CancelWrite(WTSessionGoneErrorCode)
+
+	errChan := make(chan error, 1)
+	go func() {
+		_, err := str.Read(make([]byte, 100))
+		errChan <- err
+	}()
+
+	// Read() should block, waiting for the session to be closed
+	select {
+	case <-errChan:
+		t.Fatal("Read should be blocking")
+	case <-time.After(scaleDuration(10 * time.Millisecond)):
+	}
+
+	// CancelRead removes the stream from the streams map,
+	// so closing the session wouldn't unblock Read() anymore
+	str.CancelRead(1337)
+
+	select {
+	case err := <-errChan:
+		require.ErrorIs(t, err, &StreamError{ErrorCode: 1337})
+	case <-time.After(scaleDuration(time.Second)):
+		t.Fatal("Read() should not hang after CancelRead()")
+	}
+
+	// subsequent calls to Read() return immediately
+	_, err := str.Read(make([]byte, 100))
+	require.ErrorIs(t, err, &StreamError{ErrorCode: 1337})
+}
+
 func TestReceiveStreamSessionGoneDeadline(t *testing.T) {
 	t.Run("deadline expires while waiting", func(t *testing.T) {
 		sendStr, recvStr := newUniStreamPair(t)
