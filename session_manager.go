@@ -35,6 +35,8 @@ type sessionManager struct {
 	mx                     sync.Mutex
 	sessions               map[sessionID]sessionEntry
 	recentlyClosedSessions []sessionID
+	// sessionReserved is set between reserveSingleSession and releaseSingleSession.
+	sessionReserved bool
 }
 
 func newSessionManager(timeout time.Duration) *sessionManager {
@@ -135,6 +137,34 @@ func (m *sessionManager) onTimer(id sessionID) {
 		uniStr.Stream.CancelRead(WTBufferedStreamRejectedErrorCode)
 	}
 	delete(m.sessions, id)
+}
+
+// reserveSingleSession reserves the slot for a session on a connection that doesn't use
+// WebTransport flow control. Such a connection can carry only one session at a time,
+// so the reservation fails if a session is already established or reserved.
+// A successful reservation must be released with releaseSingleSession,
+// after the session was added with AddSession (or after adding it failed).
+func (m *sessionManager) reserveSingleSession() bool {
+	m.mx.Lock()
+	defer m.mx.Unlock()
+
+	if m.sessionReserved {
+		return false
+	}
+	for _, entry := range m.sessions {
+		if entry.Session != nil {
+			return false
+		}
+	}
+	m.sessionReserved = true
+	return true
+}
+
+func (m *sessionManager) releaseSingleSession() {
+	m.mx.Lock()
+	defer m.mx.Unlock()
+
+	m.sessionReserved = false
 }
 
 // AddSession adds a new WebTransport session.

@@ -10,6 +10,8 @@ import (
 	"net/http/httptest"
 	"slices"
 	"strconv"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -393,4 +395,54 @@ func TestSessionManagerSessionClose(t *testing.T) {
 		require.ErrorIs(t, err, &quic.StreamError{Remote: false, StreamID: clientUniStr.StreamID(), ErrorCode: WTBufferedStreamRejectedErrorCode})
 		require.Equal(t, rtt/2, time.Since(start))
 	})
+}
+
+func TestSessionManagerSingleSessionReservation(t *testing.T) {
+	m := newSessionManager(time.Hour)
+
+	// only one reservation at a time
+	require.True(t, m.reserveSingleSession())
+	require.False(t, m.reserveSingleSession())
+	m.releaseSingleSession()
+	require.True(t, m.reserveSingleSession())
+	m.releaseSingleSession()
+
+	// streams buffered for a session that is not yet established don't block the reservation
+	m.mx.Lock()
+	m.sessions[sessionID(4)] = sessionEntry{Unestablished: &unestablishedSession{}}
+	m.mx.Unlock()
+	require.True(t, m.reserveSingleSession())
+	m.releaseSingleSession()
+
+	// an established session blocks the reservation until it is closed
+	m.AddSession(sessionID(4), &Session{ctx: context.Background()})
+	require.False(t, m.reserveSingleSession())
+	m.deleteSession(sessionID(4))
+	require.True(t, m.reserveSingleSession())
+	m.releaseSingleSession()
+}
+
+func TestSessionManagerSingleSessionReservationConcurrent(t *testing.T) {
+	m := newSessionManager(time.Hour)
+
+	const numGoroutines = 32
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	var reserved atomic.Int32
+	for range numGoroutines {
+		wg.Go(func() {
+			<-start
+			if m.reserveSingleSession() {
+				reserved.Add(1)
+			}
+		})
+	}
+	close(start)
+	wg.Wait()
+	// exactly one goroutine gets the reservation
+	require.EqualValues(t, 1, reserved.Load())
+
+	m.releaseSingleSession()
+	require.True(t, m.reserveSingleSession())
+	m.releaseSingleSession()
 }
