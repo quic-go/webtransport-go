@@ -386,10 +386,13 @@ func (s *Server) Close() error {
 // The handler must not call WriteHeader on w afterwards.
 //
 // If Upgrade returns an error, the handler can usually respond with an HTTP status code.
-// The exception is a session that is rejected because the connection already has a
-// session and WebTransport flow control is not enabled: in that case, the request stream
-// has already been reset with H3_REQUEST_REJECTED (as required by the specification),
-// and w must not be used anymore.
+// There are two exceptions:
+//   - If the connection already has a session and WebTransport flow control is not
+//     enabled, the request stream has already been reset with H3_REQUEST_REJECTED
+//     (as required by the specification), and w must not be used anymore.
+//   - If sending the 200 response fails, the status code can't be changed anymore,
+//     since the response header was already written. The request stream was not
+//     taken over in this case.
 func (s *Server) Upgrade(w http.ResponseWriter, r *http.Request) (*Session, error) {
 	if err := s.initialize(); err != nil {
 		return nil, err
