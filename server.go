@@ -380,6 +380,19 @@ func (s *Server) Close() error {
 	return err
 }
 
+// Upgrade upgrades an Extended CONNECT request to a WebTransport session.
+//
+// On success, Upgrade has taken over the request stream and sent a 200 response.
+// The handler must not call WriteHeader on w afterwards.
+//
+// If Upgrade returns an error, the handler can usually respond with an HTTP status code.
+// There are two exceptions:
+//   - If the connection already has a session and WebTransport flow control is not
+//     enabled, the request stream has already been reset with H3_REQUEST_REJECTED
+//     (as required by the specification), and w must not be used anymore.
+//   - If sending the 200 response fails, the status code can't be changed anymore,
+//     since the response header was already written. The request stream was not
+//     taken over in this case.
 func (s *Server) Upgrade(w http.ResponseWriter, r *http.Request) (*Session, error) {
 	if err := s.initialize(); err != nil {
 		return nil, err
@@ -426,33 +439,46 @@ func (s *Server) Upgrade(w http.ResponseWriter, r *http.Request) (*Session, erro
 		w.Header().Add(wtProtocolHeader, v)
 	}
 
-	str := w.(http3.HTTPStreamer).HTTPStream()
-	sessID := sessionID(str.StreamID())
 	fc := s.config.sessionFlowControl(settings)
 
 	// The session manager should already exist because ServeQUICConn creates it
 	// before any HTTP requests can be processed on this connection.
 	s.connsMx.Lock()
 	sessMgr, ok := s.conns[conn]
+	s.connsMx.Unlock()
 	if !ok {
-		s.connsMx.Unlock()
 		return nil, errors.New("webtransport: connection session manager not found")
 	}
+
 	// Multiple sessions on one HTTP/3 connection require WebTransport flow control.
+	// The reservation makes this check atomic with the registration of the session
+	// below, without holding a lock while the response is sent.
 	if !fc.Enabled {
-		sessMgr.mx.Lock()
-		for _, entry := range sessMgr.sessions {
-			if entry.Session != nil {
-				sessMgr.mx.Unlock()
-				s.connsMx.Unlock()
-				str.CancelRead(quic.StreamErrorCode(http3.ErrCodeRequestRejected))
-				str.CancelWrite(quic.StreamErrorCode(http3.ErrCodeRequestRejected))
-				return nil, errors.New("webtransport: multiple sessions require flow control")
+		if !sessMgr.reserveSingleSession() {
+			// The specification requires excessive CONNECT streams to be reset with
+			// H3_REQUEST_REJECTED. Taking over the stream before WriteHeader was called
+			// makes sure that no response is sent.
+			str, err := w.(http3.HTTPStreamer).HTTPStream()
+			if err != nil {
+				return nil, err
 			}
+			str.CancelRead(quic.StreamErrorCode(http3.ErrCodeRequestRejected))
+			str.CancelWrite(quic.StreamErrorCode(http3.ErrCodeRequestRejected))
+			return nil, errors.New("webtransport: multiple sessions require flow control")
 		}
-		sessMgr.mx.Unlock()
+		defer sessMgr.releaseSingleSession()
 	}
 
+	// HTTPStream doesn't send an implicit 200 response, and WriteHeader must not be
+	// called after taking over the stream. HTTPStream sends the response header.
+	// Streams the client opens for this session before AddSession is called are
+	// buffered by the session manager.
+	w.WriteHeader(http.StatusOK)
+	str, err := w.(http3.HTTPStreamer).HTTPStream()
+	if err != nil {
+		return nil, err
+	}
+	sessID := sessionID(str.StreamID())
 	sess := newSession(
 		context.WithoutCancel(r.Context()),
 		sessID,
@@ -462,10 +488,6 @@ func (s *Server) Upgrade(w http.ResponseWriter, r *http.Request) (*Session, erro
 		fc,
 	)
 	sessMgr.AddSession(sessID, sess)
-	s.connsMx.Unlock()
-
-	w.WriteHeader(http.StatusOK)
-	w.(http.Flusher).Flush()
 	return sess, nil
 }
 
