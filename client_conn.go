@@ -75,8 +75,11 @@ func (d *Transport) NewClientConn(qconn *quic.Conn) (*ClientConn, error) {
 			}
 
 			go func() {
+				// The server must send the webtransport header when opening bidi streams
+				// Not doing so is a protocol violation.
 				typ, err := quicvarint.Peek(str)
 				if err != nil {
+					qconn.CloseWithError(quic.ApplicationErrorCode(http3.ErrCodeGeneralProtocolError), "")
 					return
 				}
 				if typ != webTransportFrameType {
@@ -86,11 +89,13 @@ func (d *Transport) NewClientConn(qconn *quic.Conn) (*ClientConn, error) {
 				r := &byteCountingReader{ByteReader: quicvarint.NewReader(str)}
 				// read the frame type (already peeked above)
 				if _, err := quicvarint.Read(r); err != nil {
+					qconn.CloseWithError(quic.ApplicationErrorCode(http3.ErrCodeGeneralProtocolError), "")
 					return
 				}
 				// read the session ID
 				id, err := quicvarint.Read(r)
 				if err != nil {
+					qconn.CloseWithError(quic.ApplicationErrorCode(http3.ErrCodeGeneralProtocolError), "")
 					return
 				}
 				if !isValidSessionID(id) {
