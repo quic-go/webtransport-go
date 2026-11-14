@@ -426,6 +426,10 @@ func (s *Server) Upgrade(w http.ResponseWriter, r *http.Request) (*Session, erro
 		w.Header().Add(wtProtocolHeader, v)
 	}
 
+	w.WriteHeader(http.StatusOK)
+	if err := http.NewResponseController(w).Flush(); err != nil {
+		return nil, err
+	}
 	str := w.(http3.HTTPStreamer).HTTPStream()
 	sessID := sessionID(str.StreamID())
 	fc := s.config.sessionFlowControl(settings)
@@ -463,9 +467,6 @@ func (s *Server) Upgrade(w http.ResponseWriter, r *http.Request) (*Session, erro
 	)
 	sessMgr.AddSession(sessID, sess)
 	s.connsMx.Unlock()
-
-	w.WriteHeader(http.StatusOK)
-	w.(http.Flusher).Flush()
 	return sess, nil
 }
 
