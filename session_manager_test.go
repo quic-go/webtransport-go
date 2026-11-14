@@ -36,8 +36,6 @@ func newSimnetLink(t *testing.T, rtt time.Duration) (client, server *simnet.SimC
 	clientPacketConn := n.NewEndpoint(&net.UDPAddr{IP: net.ParseIP("1.0.0.1"), Port: 9001}, settings)
 	serverPacketConn := n.NewEndpoint(&net.UDPAddr{IP: net.ParseIP("1.0.0.2"), Port: 9002}, settings)
 
-	require.NoError(t, n.Start())
-
 	return clientPacketConn, serverPacketConn, func(t *testing.T) {
 		require.NoError(t, clientPacketConn.Close())
 		require.NoError(t, serverPacketConn.Close())
