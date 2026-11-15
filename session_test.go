@@ -184,6 +184,7 @@ func TestCloseWithErrorTruncatesSendMessage(t *testing.T) {
 	require.Equal(t, http.StatusOK, rsp.StatusCode)
 
 	sess := newSession(context.Background(), 42, clientConn, reqStr, "", sessionFlowControl{})
+	go sess.writeToConnectStream()
 	require.NoError(t, sess.CloseWithError(42, strings.Repeat("a", maxCloseCapsuleErrorMsgLen+500)))
 
 	select {
@@ -304,6 +305,7 @@ func TestSessionSendsQueuedCapsules(t *testing.T) {
 	clientStr, err := clientConn.OpenStreamSync(ctx)
 	require.NoError(t, err)
 	sess := newSession(context.Background(), 42, clientConn, quicHTTP3Stream{clientStr}, "", sessionFlowControl{})
+	go sess.writeToConnectStream()
 	sess.queueCapsule(streamsBlockedBidiCapsule{MaximumStreams: 42})
 	sess.queueCapsule(streamsBlockedUniCapsule{MaximumStreams: 1337})
 
@@ -363,6 +365,7 @@ func TestSessionClosesWhenOutgoingCapsuleQueueFull(t *testing.T) {
 		"",
 		sessionFlowControl{},
 	)
+	go sess.writeToConnectStream()
 	for range maxQueuedOutgoingCapsules {
 		sess.queueCapsule(streamsBlockedBidiCapsule{})
 	}
@@ -426,6 +429,7 @@ func TestCloseWithErrorDropsQueuedCapsulesWhenConnectStreamBlocked(t *testing.T)
 		"",
 		sessionFlowControl{},
 	)
+	go sess.writeToConnectStream()
 	sess.queueCapsule(streamsBlockedBidiCapsule{})
 
 	done := make(chan error, 1)

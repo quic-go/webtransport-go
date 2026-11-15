@@ -46,9 +46,10 @@ type Session struct {
 	applicationProtocol string
 	flowControlEnabled  bool
 
-	ctx      context.Context
-	closeMx  sync.Mutex
-	closeErr error // not nil once the session is closed
+	ctx       context.Context
+	ctxCancel context.CancelFunc
+	closeMx   sync.Mutex
+	closeErr  error // not nil once the session is closed
 
 	capsuleQueueMx      sync.Mutex
 	capsuleQueue        []capsule
@@ -71,6 +72,8 @@ const (
 	closeSessionTimeout       = 10 * time.Millisecond
 )
 
+// newSession creates a session and starts reading capsules.
+// Capsules are only sent once writeToConnectStream runs.
 func newSession(
 	ctx context.Context,
 	sessionID sessionID,
@@ -87,6 +90,7 @@ func newSession(
 		applicationProtocol: applicationProtocol,
 		flowControlEnabled:  fc.Enabled,
 		ctx:                 ctx,
+		ctxCancel:           ctxCancel,
 		capsuleQueueUpdated: make(chan struct{}, 1),
 	}
 	if fc.Enabled {
@@ -123,18 +127,13 @@ func newSession(
 		c.queueCapsule,
 	)
 
-	go func() {
-		defer ctxCancel()
-		c.readFromConnectStream()
-	}()
-	go func() {
-		defer ctxCancel()
-		c.writeToConnectStream()
-	}()
+	go c.readFromConnectStream()
 	return c
 }
 
 func (s *Session) readFromConnectStream() {
+	defer s.ctxCancel()
+
 	parser := http3.NewCapsuleParser(s.str)
 	for {
 		c, err := parseNextCapsule(parser)
@@ -186,7 +185,11 @@ func (s *Session) closeWithFlowControlError(err error) {
 	}, nil)
 }
 
+// writeToConnectStream sends capsules.
+// On the server, it must only run once the response header was sent.
 func (s *Session) writeToConnectStream() {
+	defer s.ctxCancel()
+
 	// This goroutine owns all writes to the CONNECT stream.
 	// WT_CLOSE_SESSION is sent from here so it doesn't race with capsule writes.
 	for {
