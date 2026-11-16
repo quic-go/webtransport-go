@@ -439,18 +439,11 @@ func (s *Server) Upgrade(w http.ResponseWriter, r *http.Request) (*Session, erro
 		return nil, errors.New("webtransport: connection session manager not found")
 	}
 	// Multiple sessions on one HTTP/3 connection require WebTransport flow control.
-	if !fc.Enabled {
-		sessMgr.mx.Lock()
-		for _, entry := range sessMgr.sessions {
-			if entry.Session != nil {
-				sessMgr.mx.Unlock()
-				s.connsMx.Unlock()
-				str.CancelRead(quic.StreamErrorCode(http3.ErrCodeRequestRejected))
-				str.CancelWrite(quic.StreamErrorCode(http3.ErrCodeRequestRejected))
-				return nil, errors.New("webtransport: multiple sessions require flow control")
-			}
-		}
-		sessMgr.mx.Unlock()
+	if !fc.Enabled && sessMgr.HasSession() {
+		s.connsMx.Unlock()
+		str.CancelRead(quic.StreamErrorCode(http3.ErrCodeRequestRejected))
+		str.CancelWrite(quic.StreamErrorCode(http3.ErrCodeRequestRejected))
+		return nil, errors.New("webtransport: multiple sessions require flow control")
 	}
 
 	sess := newSession(
@@ -465,7 +458,12 @@ func (s *Server) Upgrade(w http.ResponseWriter, r *http.Request) (*Session, erro
 	s.connsMx.Unlock()
 
 	w.WriteHeader(http.StatusOK)
-	w.(http.Flusher).Flush()
+	if err := http.NewResponseController(w).Flush(); err != nil {
+		sess.closeWithError(err, nil)
+		return nil, err
+	}
+	// Capsules can't be written before the response header was sent.
+	go sess.writeToConnectStream()
 	return sess, nil
 }
 

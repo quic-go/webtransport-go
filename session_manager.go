@@ -166,6 +166,19 @@ func (m *sessionManager) AddSession(id sessionID, s *Session) {
 	})
 }
 
+// HasSession says whether a session was established.
+func (m *sessionManager) HasSession() bool {
+	m.mx.Lock()
+	defer m.mx.Unlock()
+
+	for _, entry := range m.sessions {
+		if entry.Session != nil {
+			return true
+		}
+	}
+	return false
+}
+
 func (m *sessionManager) deleteSession(id sessionID) {
 	m.mx.Lock()
 	defer m.mx.Unlock()

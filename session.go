@@ -71,6 +71,8 @@ const (
 	closeSessionTimeout       = 10 * time.Millisecond
 )
 
+// newSession creates a session and starts reading capsules.
+// Capsules are only sent once writeToConnectStream runs.
 func newSession(
 	ctx context.Context,
 	sessionID sessionID,
@@ -123,13 +125,11 @@ func newSession(
 		c.queueCapsule,
 	)
 
+	// Cancelling ctx when the reader exits is enough:
+	// whenever the writer exits, the read side was canceled as well.
 	go func() {
 		defer ctxCancel()
 		c.readFromConnectStream()
-	}()
-	go func() {
-		defer ctxCancel()
-		c.writeToConnectStream()
 	}()
 	return c
 }
@@ -186,6 +186,8 @@ func (s *Session) closeWithFlowControlError(err error) {
 	}, nil)
 }
 
+// writeToConnectStream sends capsules.
+// On the server, it must only run once the response header was sent.
 func (s *Session) writeToConnectStream() {
 	// This goroutine owns all writes to the CONNECT stream.
 	// WT_CLOSE_SESSION is sent from here so it doesn't race with capsule writes.

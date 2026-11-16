@@ -370,6 +370,56 @@ func TestServerRejectsPooledSessionWithoutFlowControl(t *testing.T) {
 	require.Equal(t, quic.StreamErrorCode(http3.ErrCodeRequestRejected), streamErr.ErrorCode)
 }
 
+func TestServerUpgradeResponseWriteError(t *testing.T) {
+	s := webtransport.Server{H3: &http3.Server{TLSConfig: webtransport.TLSConf}}
+	defer s.Close()
+
+	errChan := make(chan error, 1)
+	s.H3.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done() // the client stopped reading the response
+		_, err := s.Upgrade(w, r)
+		errChan <- err
+	})
+
+	udpConn, err := net.ListenUDP("udp", nil)
+	require.NoError(t, err)
+	defer udpConn.Close()
+	webtransport.ConfigureHTTP3Server(s.H3)
+	go s.Serve(udpConn)
+
+	ctx, cancel := context.WithTimeout(context.Background(), scaleDuration(time.Second))
+	defer cancel()
+	addr := fmt.Sprintf("localhost:%d", udpConn.LocalAddr().(*net.UDPAddr).Port)
+	cconn, err := quic.DialAddr(
+		ctx,
+		addr,
+		&tls.Config{RootCAs: webtransport.CertPool, NextProtos: []string{http3.NextProtoH3}},
+		&quic.Config{EnableDatagrams: true, EnableStreamResetPartialDelivery: true},
+	)
+	require.NoError(t, err)
+	defer cconn.CloseWithError(0, "")
+
+	tr := &http3.Transport{EnableDatagrams: true}
+	str, err := tr.NewClientConn(cconn).OpenRequestStream(ctx)
+	require.NoError(t, err)
+	require.NoError(t, str.SendRequestHeader(webtransport.NewWebTransportRequest(t, "https://"+addr+"/webtransport")))
+	str.CancelRead(1337)
+
+	expected := &quic.StreamError{StreamID: str.StreamID(), ErrorCode: 1337, Remote: true}
+	select {
+	case err := <-errChan:
+		require.ErrorIs(t, err, expected)
+	case <-ctx.Done():
+		t.Fatal("timeout")
+	}
+	// the session is closed
+	require.NoError(t, str.SetWriteDeadline(time.Now().Add(scaleDuration(time.Second))))
+	for err == nil {
+		_, err = str.Write([]byte("foobar"))
+	}
+	require.ErrorIs(t, err, expected)
+}
+
 func TestImmediateClose(t *testing.T) {
 	s := webtransport.Server{H3: &http3.Server{}}
 	require.NoError(t, s.Close())
