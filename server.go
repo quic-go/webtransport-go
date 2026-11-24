@@ -148,6 +148,7 @@ func (s *Server) serve(conn net.PacketConn) error {
 	}
 	quicConf.EnableDatagrams = true
 	quicConf.EnableStreamResetPartialDelivery = true
+	quicConf.RequireStreamCreditRelease = true
 	ln, err := quic.ListenEarly(conn, s.H3.TLSConfig, quicConf)
 	if err != nil {
 		return err
