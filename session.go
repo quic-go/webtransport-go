@@ -194,6 +194,13 @@ func (s *Session) writeToConnectStream() {
 	for {
 		select {
 		case <-s.ctx.Done():
+			// The reader might have exited before this goroutine picked up the close capsule.
+			s.capsuleQueueMx.Lock()
+			closeCapsule := s.pendingCloseCapsule
+			s.capsuleQueueMx.Unlock()
+			if closeCapsule != nil {
+				_ = closeSessionStream(s.str, *closeCapsule)
+			}
 			return
 		case <-s.capsuleQueueUpdated:
 		}
@@ -414,6 +421,13 @@ func (s *Session) closeWithError(closeErr error, closeCapsule *closeSessionCapsu
 		return false
 	}
 	s.closeErr = closeErr
+	// Set the close capsule before releasing closeMx:
+	// The reader cancels the context after calling closeWithError,
+	// and the writer then needs to find the close capsule.
+	s.capsuleQueueMx.Lock()
+	s.capsuleQueue = nil
+	s.pendingCloseCapsule = closeCapsule
+	s.capsuleQueueMx.Unlock()
 	s.closeMx.Unlock()
 
 	s.outgoingStreams.CloseSession(closeErr)
@@ -422,11 +436,6 @@ func (s *Session) closeWithError(closeErr error, closeCapsule *closeSessionCapsu
 	s.incomingUniStreams.CloseSession(closeErr)
 
 	if closeCapsule != nil {
-		s.capsuleQueueMx.Lock()
-		s.capsuleQueue = nil
-		s.pendingCloseCapsule = closeCapsule
-		s.capsuleQueueMx.Unlock()
-
 		s.str.SetWriteDeadline(time.Now().Add(closeSessionTimeout))
 		select {
 		case s.capsuleQueueUpdated <- struct{}{}:
@@ -434,11 +443,6 @@ func (s *Session) closeWithError(closeErr error, closeCapsule *closeSessionCapsu
 		}
 		return true
 	}
-
-	s.capsuleQueueMx.Lock()
-	s.capsuleQueue = nil
-	s.pendingCloseCapsule = nil
-	s.capsuleQueueMx.Unlock()
 
 	code := WTSessionGoneErrorCode
 	if h3Err, ok := errors.AsType[*http3.Error](closeErr); ok {

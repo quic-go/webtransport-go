@@ -322,6 +322,38 @@ func TestSessionSendsQueuedCapsules(t *testing.T) {
 	require.Equal(t, streamsBlockedUniCapsule{MaximumStreams: 1337}, c)
 }
 
+func TestSessionSendsCloseCapsuleAfterReaderExited(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), scaleDuration(time.Second))
+	defer cancel()
+	clientConn, serverConn := newConnPair(t, newUDPConnLocalhost(t), newUDPConnLocalhost(t))
+
+	clientStr, err := clientConn.OpenStreamSync(ctx)
+	require.NoError(t, err)
+	sess := newSession(context.Background(), 42, clientConn, quicHTTP3Stream{clientStr}, "", sessionFlowControl{})
+	closeCapsule := closeSessionCapsule{ErrorCode: 1337, Message: "foobar"}
+	require.True(t, sess.closeWithError(&SessionError{ErrorCode: 1337, Message: "foobar"}, &closeCapsule))
+	// make the reader exit
+	require.NoError(t, clientStr.SetReadDeadline(time.Now()))
+	select {
+	case <-sess.Context().Done():
+	case <-ctx.Done():
+		t.Fatal("timeout")
+	}
+	// consume the wakeup, so the writer only sees the canceled context
+	<-sess.capsuleQueueUpdated
+	go sess.writeToConnectStream()
+
+	serverStr, err := serverConn.AcceptStream(ctx)
+	require.NoError(t, err)
+	require.NoError(t, serverStr.SetReadDeadline(time.Now().Add(scaleDuration(time.Second))))
+	parser := http3.NewCapsuleParser(serverStr)
+	c, err := parseNextCapsule(parser)
+	require.NoError(t, err)
+	require.Equal(t, closeCapsule, c)
+	_, _, err = parser.Next()
+	require.ErrorIs(t, err, io.EOF)
+}
+
 func TestSessionClosesWhenOutgoingCapsuleQueueFull(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
