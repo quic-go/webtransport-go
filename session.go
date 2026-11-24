@@ -194,13 +194,6 @@ func (s *Session) writeToConnectStream() {
 		select {
 		case <-s.ctx.Done():
 			// The reader might have exited before this goroutine picked up the close capsule.
-			s.capsuleQueueMx.Lock()
-			closeCapsule := s.pendingCloseCapsule
-			s.capsuleQueueMx.Unlock()
-			if closeCapsule != nil {
-				_ = closeSessionStream(s.str, *closeCapsule)
-			}
-			return
 		case <-s.capsuleQueueUpdated:
 		}
 
@@ -242,6 +235,9 @@ func (s *Session) writeToConnectStream() {
 				s.capsuleQueue = s.capsuleQueue[1:]
 			}
 			s.capsuleQueueMx.Unlock()
+		}
+		if s.ctx.Err() != nil {
+			return
 		}
 	}
 }

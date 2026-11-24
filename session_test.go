@@ -331,7 +331,7 @@ func TestSessionSendsCloseCapsuleAfterReaderExited(t *testing.T) {
 	require.NoError(t, err)
 	sess := newSession(context.Background(), 42, clientConn, quicHTTP3Stream{clientStr}, "", sessionFlowControl{})
 	closeCapsule := closeSessionCapsule{ErrorCode: 1337, Message: "foobar"}
-	require.True(t, sess.closeWithError(&SessionError{ErrorCode: 1337, Message: "foobar"}, &closeCapsule))
+	require.True(t, sess.closeWithError(closeCapsule.ToSessionError(), &closeCapsule))
 	// make the reader exit
 	require.NoError(t, clientStr.SetReadDeadline(time.Now()))
 	select {
@@ -346,12 +346,9 @@ func TestSessionSendsCloseCapsuleAfterReaderExited(t *testing.T) {
 	serverStr, err := serverConn.AcceptStream(ctx)
 	require.NoError(t, err)
 	require.NoError(t, serverStr.SetReadDeadline(time.Now().Add(scaleDuration(time.Second))))
-	parser := http3.NewCapsuleParser(serverStr)
-	c, err := parseNextCapsule(parser)
+	data, err := io.ReadAll(serverStr)
 	require.NoError(t, err)
-	require.Equal(t, closeCapsule, c)
-	_, _, err = parser.Next()
-	require.ErrorIs(t, err, io.EOF)
+	require.Equal(t, closeCapsule.Append(nil), data)
 }
 
 func TestSessionClosesWhenOutgoingCapsuleQueueFull(t *testing.T) {
