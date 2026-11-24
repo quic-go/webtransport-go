@@ -187,7 +187,6 @@ func (s *Session) closeWithFlowControlError(err error) {
 }
 
 // writeToConnectStream sends capsules.
-// On the server, it must only run once the response header was sent.
 func (s *Session) writeToConnectStream() {
 	// This goroutine owns all writes to the CONNECT stream.
 	// WT_CLOSE_SESSION is sent from here so it doesn't race with capsule writes.
