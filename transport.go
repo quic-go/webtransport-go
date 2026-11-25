@@ -61,6 +61,7 @@ func (d *Transport) Dial(ctx context.Context, urlStr string, reqHdr http.Header)
 		quicConf = &quic.Config{
 			EnableDatagrams:                  true,
 			EnableStreamResetPartialDelivery: true,
+			RequireStreamCreditRelease:       true,
 		}
 	} else {
 		if !d.QUICConfig.EnableDatagrams {

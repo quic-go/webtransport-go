@@ -471,3 +471,60 @@ func TestCloseWithErrorDropsQueuedCapsulesWhenConnectStreamBlocked(t *testing.T)
 		t.Fatal("timeout")
 	}
 }
+
+func TestSessionGoneStreamsKeepStreamCredit(t *testing.T) {
+	const maxStreams = 5
+	clientConn, serverConn := newConnPairWithServerConfig(t, newUDPConnLocalhost(t), newUDPConnLocalhost(t), &quic.Config{
+		MaxIncomingUniStreams:            maxStreams,
+		EnableDatagrams:                  true,
+		EnableStreamResetPartialDelivery: true,
+		RequireStreamCreditRelease:       true,
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), scaleDuration(2*time.Second))
+	defer cancel()
+
+	connectStr, err := serverConn.OpenStreamSync(ctx)
+	require.NoError(t, err)
+	sess := newSession(context.Background(), 0, serverConn, quicHTTP3Stream{connectStr}, "", sessionFlowControl{})
+	strs := make(chan *ReceiveStream, maxStreams)
+	go func() {
+		for {
+			qstr, err := serverConn.AcceptUniStream(context.Background())
+			if err != nil {
+				return
+			}
+			sess.addIncomingUniStream(qstr, 0)
+			str, err := sess.AcceptUniStream(context.Background())
+			if err != nil {
+				return
+			}
+			strs <- str
+			go func() { _, _ = str.Read([]byte{0}) }()
+		}
+	}()
+
+	for range maxStreams {
+		str, err := clientConn.OpenUniStreamSync(ctx)
+		require.NoError(t, err)
+		str.CancelWrite(WTSessionGoneErrorCode)
+	}
+	for range maxStreams {
+		str := <-strs
+		require.Eventually(t, func() bool {
+			str.deadlineMu.Lock()
+			defer str.deadlineMu.Unlock()
+			return str.deadlineNotifyCh != nil // Read is waiting for the session to be closed
+		}, scaleDuration(time.Second), time.Millisecond)
+	}
+
+	// The streams have completed on the QUIC layer, but we're still holding on to them.
+	shortCtx, shortCancel := context.WithTimeout(ctx, scaleDuration(200*time.Millisecond))
+	defer shortCancel()
+	_, err = clientConn.OpenUniStreamSync(shortCtx)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+
+	// closing the session releases the stream credit
+	sess.closeWithError(assert.AnError, nil)
+	_, err = clientConn.OpenUniStreamSync(ctx)
+	require.NoError(t, err)
+}

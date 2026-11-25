@@ -59,6 +59,7 @@ func (m *sessionManager) AddStream(str *quic.Stream, id sessionID, headerLen uin
 		if slices.Contains(m.recentlyClosedSessions, id) {
 			str.CancelRead(WTBufferedStreamRejectedErrorCode)
 			str.CancelWrite(WTBufferedStreamRejectedErrorCode)
+			str.ReleaseStreamCredit()
 			return
 		}
 		entry = sessionEntry{Unestablished: &unestablishedSession{}}
@@ -90,6 +91,7 @@ func (m *sessionManager) AddUniStream(str *quic.ReceiveStream, id sessionID, hea
 		// so the performance impact of searching through the slice is negligible.
 		if slices.Contains(m.recentlyClosedSessions, id) {
 			str.CancelRead(WTBufferedStreamRejectedErrorCode)
+			str.ReleaseStreamCredit()
 			return
 		}
 		entry = sessionEntry{Unestablished: &unestablishedSession{}}
@@ -130,9 +132,11 @@ func (m *sessionManager) onTimer(id sessionID) {
 	for _, str := range sessionEntry.Unestablished.Streams {
 		str.Stream.CancelRead(WTBufferedStreamRejectedErrorCode)
 		str.Stream.CancelWrite(WTBufferedStreamRejectedErrorCode)
+		str.Stream.ReleaseStreamCredit()
 	}
 	for _, uniStr := range sessionEntry.Unestablished.UniStreams {
 		uniStr.Stream.CancelRead(WTBufferedStreamRejectedErrorCode)
+		uniStr.Stream.ReleaseStreamCredit()
 	}
 	delete(m.sessions, id)
 }

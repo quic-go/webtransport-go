@@ -277,7 +277,7 @@ func (s *Session) addIncomingStream(qstr *quic.Stream, streamHeaderLen uint64) {
 		s.incomingDataFC,
 		s.queueCapsule,
 		s.closeWithFlowControlError,
-		func() { s.incomingStreams.RemoveStream(id) },
+		func() { s.incomingStreams.RemoveStream(id); qstr.ReleaseStreamCredit() },
 		int64(streamHeaderLen),
 	)
 	if err := s.incomingStreams.AddStream(id, str); err != nil {
@@ -292,7 +292,7 @@ func (s *Session) addIncomingUniStream(qstr *quic.ReceiveStream, streamHeaderLen
 	str := newReceiveStream(
 		qstr,
 		int64(streamHeaderLen),
-		func() { s.incomingUniStreams.RemoveStream(id) },
+		func() { s.incomingUniStreams.RemoveStream(id); qstr.ReleaseStreamCredit() },
 		s.incomingDataFC,
 		s.closeWithFlowControlError,
 	)

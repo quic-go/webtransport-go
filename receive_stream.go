@@ -16,6 +16,7 @@ type quicReceiveStream interface {
 	CancelRead(quic.StreamErrorCode)
 	SetReceiveFinalSizeCallback(func(int64))
 	SetReadDeadline(time.Time) error
+	ReleaseStreamCredit()
 }
 
 var (
@@ -163,6 +164,7 @@ func (s *ReceiveStream) closeWithSession(err error) {
 	s.closeOnce.Do(func() {
 		s.closeErr = err
 		s.str.CancelRead(WTSessionGoneErrorCode)
+		s.str.ReleaseStreamCredit()
 		close(s.closed)
 	})
 }
