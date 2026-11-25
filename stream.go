@@ -70,6 +70,7 @@ func (s *Stream) CancelRead(e StreamErrorCode) {
 
 // Close closes the send-direction of the stream.
 // It does not close the receive-direction of the stream.
+// It must not be called concurrently with [Stream.Write].
 func (s *Stream) Close() error {
 	return s.sendStr.Close()
 }
