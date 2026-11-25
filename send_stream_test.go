@@ -231,6 +231,65 @@ func TestSendStreamWriteDuringSessionGoneAndCloseSession(t *testing.T) {
 	}
 }
 
+func TestSendStreamCancelWriteDuringSessionGone(t *testing.T) {
+	t.Run("without Close", func(t *testing.T) { testSendStreamCancelWriteDuringSessionGone(t, false) })
+	t.Run("after Close", func(t *testing.T) { testSendStreamCancelWriteDuringSessionGone(t, true) })
+}
+
+func testSendStreamCancelWriteDuringSessionGone(t *testing.T, closeStream bool) {
+	sendStr, recvStr := newUniStreamPair(t)
+
+	sm := newOutgoingUniStreamsMap(nil, 0, maxOutgoingStreams, nil, func(c capsule) {
+		t.Fatalf("unexpected capsule: %#v", c)
+	})
+	var hdr []byte
+	if closeStream {
+		hdr = []byte("hdr")
+	}
+	str := newSendStream(sendStr, hdr, nil, nil, func() { sm.removeStream(sendStr.StreamID()) })
+	sm.mx.Lock()
+	sm.m[sendStr.StreamID()] = str
+	sm.mx.Unlock()
+
+	// the remote peer sends a WT_SESSION_GONE
+	recvStr.CancelRead(WTSessionGoneErrorCode)
+	<-sendStr.Context().Done()
+
+	errChan := make(chan error, 1)
+	go func() {
+		_, err := str.Write([]byte("foo"))
+		errChan <- err
+	}()
+
+	// Write() should block, waiting for the session to be closed
+	select {
+	case <-errChan:
+		t.Fatal("Write should be blocking")
+	case <-time.After(scaleDuration(10 * time.Millisecond)):
+	}
+
+	if closeStream {
+		// the stream header couldn't be sent, so Close sends it asynchronously
+		require.NoError(t, str.Close())
+	}
+	// CancelWrite removes the stream from the streams map,
+	// so closing the session wouldn't unblock Write() anymore
+	str.CancelWrite(1337)
+
+	select {
+	case err := <-errChan:
+		require.ErrorIs(t, err, &StreamError{ErrorCode: 1337})
+	case <-time.After(scaleDuration(time.Second)):
+		t.Fatal("Write() should not hang after CancelWrite()")
+	}
+
+	if !closeStream {
+		// subsequent calls to Write() return immediately
+		_, err := str.Write([]byte("foo"))
+		require.ErrorIs(t, err, &StreamError{ErrorCode: 1337})
+	}
+}
+
 type blockingHeaderStream struct {
 	unblock chan struct{}
 }
