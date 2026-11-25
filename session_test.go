@@ -184,6 +184,7 @@ func TestCloseWithErrorTruncatesSendMessage(t *testing.T) {
 	require.Equal(t, http.StatusOK, rsp.StatusCode)
 
 	sess := newSession(context.Background(), 42, clientConn, reqStr, "", sessionFlowControl{})
+	go sess.writeToConnectStream()
 	require.NoError(t, sess.CloseWithError(42, strings.Repeat("a", maxCloseCapsuleErrorMsgLen+500)))
 
 	select {
@@ -304,6 +305,7 @@ func TestSessionSendsQueuedCapsules(t *testing.T) {
 	clientStr, err := clientConn.OpenStreamSync(ctx)
 	require.NoError(t, err)
 	sess := newSession(context.Background(), 42, clientConn, quicHTTP3Stream{clientStr}, "", sessionFlowControl{})
+	go sess.writeToConnectStream()
 	sess.queueCapsule(streamsBlockedBidiCapsule{MaximumStreams: 42})
 	sess.queueCapsule(streamsBlockedUniCapsule{MaximumStreams: 1337})
 
@@ -318,6 +320,35 @@ func TestSessionSendsQueuedCapsules(t *testing.T) {
 	c, err = parseNextCapsule(parser)
 	require.NoError(t, err)
 	require.Equal(t, streamsBlockedUniCapsule{MaximumStreams: 1337}, c)
+}
+
+func TestSessionSendsCloseCapsuleAfterReaderExited(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), scaleDuration(time.Second))
+	defer cancel()
+	clientConn, serverConn := newConnPair(t, newUDPConnLocalhost(t), newUDPConnLocalhost(t))
+
+	clientStr, err := clientConn.OpenStreamSync(ctx)
+	require.NoError(t, err)
+	sess := newSession(context.Background(), 42, clientConn, quicHTTP3Stream{clientStr}, "", sessionFlowControl{})
+	closeCapsule := closeSessionCapsule{ErrorCode: 1337, Message: "foobar"}
+	require.True(t, sess.closeWithError(closeCapsule.ToSessionError(), &closeCapsule))
+	// make the reader exit
+	require.NoError(t, clientStr.SetReadDeadline(time.Now()))
+	select {
+	case <-sess.Context().Done():
+	case <-ctx.Done():
+		t.Fatal("timeout")
+	}
+	// consume the wakeup, so the writer only sees the canceled context
+	<-sess.capsuleQueueUpdated
+	go sess.writeToConnectStream()
+
+	serverStr, err := serverConn.AcceptStream(ctx)
+	require.NoError(t, err)
+	require.NoError(t, serverStr.SetReadDeadline(time.Now().Add(scaleDuration(time.Second))))
+	data, err := io.ReadAll(serverStr)
+	require.NoError(t, err)
+	require.Equal(t, closeCapsule.Append(nil), data)
 }
 
 func TestSessionClosesWhenOutgoingCapsuleQueueFull(t *testing.T) {
@@ -363,6 +394,7 @@ func TestSessionClosesWhenOutgoingCapsuleQueueFull(t *testing.T) {
 		"",
 		sessionFlowControl{},
 	)
+	go sess.writeToConnectStream()
 	for range maxQueuedOutgoingCapsules {
 		sess.queueCapsule(streamsBlockedBidiCapsule{})
 	}
@@ -426,6 +458,7 @@ func TestCloseWithErrorDropsQueuedCapsulesWhenConnectStreamBlocked(t *testing.T)
 		"",
 		sessionFlowControl{},
 	)
+	go sess.writeToConnectStream()
 	sess.queueCapsule(streamsBlockedBidiCapsule{})
 
 	done := make(chan error, 1)

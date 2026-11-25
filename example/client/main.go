@@ -14,7 +14,7 @@ import (
 	"github.com/quic-go/webtransport-go"
 
 	"github.com/quic-go/quic-go"
-	"github.com/quic-go/quic-go/http3/qlog"
+	"github.com/quic-go/quic-go/qlog"
 )
 
 func main() {

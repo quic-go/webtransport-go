@@ -264,6 +264,7 @@ func (c *ClientConn) dial(ctx context.Context, u *url.URL, reqHdr http.Header) (
 		protocol,
 		c.config.sessionFlowControl(settings),
 	)
+	go sess.writeToConnectStream()
 	c.sessMgr.AddSession(sessID, sess)
 	return rsp, sess, nil
 }

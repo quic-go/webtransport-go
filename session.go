@@ -71,6 +71,8 @@ const (
 	closeSessionTimeout       = 10 * time.Millisecond
 )
 
+// newSession creates a session and starts reading capsules.
+// Capsules are only sent once writeToConnectStream runs.
 func newSession(
 	ctx context.Context,
 	sessionID sessionID,
@@ -123,13 +125,11 @@ func newSession(
 		c.queueCapsule,
 	)
 
+	// Cancelling ctx when the reader exits is enough:
+	// whenever the writer exits, the read side was canceled as well.
 	go func() {
 		defer ctxCancel()
 		c.readFromConnectStream()
-	}()
-	go func() {
-		defer ctxCancel()
-		c.writeToConnectStream()
 	}()
 	return c
 }
@@ -186,13 +186,14 @@ func (s *Session) closeWithFlowControlError(err error) {
 	}, nil)
 }
 
+// writeToConnectStream sends capsules.
 func (s *Session) writeToConnectStream() {
 	// This goroutine owns all writes to the CONNECT stream.
 	// WT_CLOSE_SESSION is sent from here so it doesn't race with capsule writes.
 	for {
 		select {
 		case <-s.ctx.Done():
-			return
+			// The reader might have exited before this goroutine picked up the close capsule.
 		case <-s.capsuleQueueUpdated:
 		}
 
@@ -234,6 +235,9 @@ func (s *Session) writeToConnectStream() {
 				s.capsuleQueue = s.capsuleQueue[1:]
 			}
 			s.capsuleQueueMx.Unlock()
+		}
+		if s.ctx.Err() != nil {
+			return
 		}
 	}
 }
@@ -412,6 +416,13 @@ func (s *Session) closeWithError(closeErr error, closeCapsule *closeSessionCapsu
 		return false
 	}
 	s.closeErr = closeErr
+	// Set the close capsule before releasing closeMx:
+	// The reader cancels the context after calling closeWithError,
+	// and the writer then needs to find the close capsule.
+	s.capsuleQueueMx.Lock()
+	s.capsuleQueue = nil
+	s.pendingCloseCapsule = closeCapsule
+	s.capsuleQueueMx.Unlock()
 	s.closeMx.Unlock()
 
 	s.outgoingStreams.CloseSession(closeErr)
@@ -420,11 +431,6 @@ func (s *Session) closeWithError(closeErr error, closeCapsule *closeSessionCapsu
 	s.incomingUniStreams.CloseSession(closeErr)
 
 	if closeCapsule != nil {
-		s.capsuleQueueMx.Lock()
-		s.capsuleQueue = nil
-		s.pendingCloseCapsule = closeCapsule
-		s.capsuleQueueMx.Unlock()
-
 		s.str.SetWriteDeadline(time.Now().Add(closeSessionTimeout))
 		select {
 		case s.capsuleQueueUpdated <- struct{}{}:
@@ -432,11 +438,6 @@ func (s *Session) closeWithError(closeErr error, closeCapsule *closeSessionCapsu
 		}
 		return true
 	}
-
-	s.capsuleQueueMx.Lock()
-	s.capsuleQueue = nil
-	s.pendingCloseCapsule = nil
-	s.capsuleQueueMx.Unlock()
 
 	code := WTSessionGoneErrorCode
 	if h3Err, ok := errors.AsType[*http3.Error](closeErr); ok {
