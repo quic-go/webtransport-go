@@ -262,6 +262,7 @@ func (s *SendStream) closeWithSession(err error) {
 
 // Close closes the write-direction of the stream.
 // Future calls to Write are not permitted after calling Close.
+// It must not be called concurrently with [SendStream.Write].
 func (s *SendStream) Close() error {
 	// if a Goroutine is already sending the header, return immediately
 	s.streamHdrMu.Lock()
